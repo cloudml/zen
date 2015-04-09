@@ -17,6 +17,7 @@
 
 package com.github.cloudml.zen.ml.regression
 
+import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.Utils
 import org.apache.spark.graphx._
@@ -426,7 +427,7 @@ object LogisticRegression {
     val dataSet = GraphImpl(degrees, edges, 0, storageLevel, storageLevel)
     dataSet.persist(storageLevel)
     val numPartitions = edges.partitions.size
-    val partitionStrategy = new DBHPartitioner(numPartitions)
+    val partitionStrategy = new DBHPartitioner[ED](numPartitions)
     val newEdges = dataSet.triplets.mapPartitions { itr =>
       itr.map { e =>
         (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
@@ -451,70 +452,3 @@ object LogisticRegression {
     -(id + 1L)
   }
 }
-
-
-/**
- * Degree-Based Hashing, the paper:
- * Distributed Power-law Graph Computing: Theoretical and Empirical Analysis
- */
-private class DBHPartitioner(val partitions: Int, val threshold: Int = 70) extends Partitioner {
-  val mixingPrime: Long = 1125899906842597L
-
-  def numPartitions = partitions
-
-  /*
-   * default Degree Based Hashing,
-     "Distributed Power-law Graph Computing: Theoretical and Empirical Analysis"
-    def getPartition(key: Any): Int = {
-      val edge = key.asInstanceOf[EdgeTriplet[Int, ED]]
-      val srcDeg = edge.srcAttr
-      val dstDeg = edge.dstAttr
-      val srcId = edge.srcId
-      val dstId = edge.dstId
-      if (srcDeg < dstDeg) {
-        getPartition(srcId)
-      } else {
-        getPartition(dstId)
-      }
-    }
-   */
-
-
-  /**
-   * Default DBH doesn't consider the situation where both the degree of src and
-   * dst vertices are both small than a given threshold value
-   */
-  def getPartition(key: Any): Int = {
-    val edge = key.asInstanceOf[EdgeTriplet[Int, ED]]
-    val srcDeg = edge.srcAttr
-    val dstDeg = edge.dstAttr
-    val srcId = edge.srcId
-    val dstId = edge.dstId
-    val minId = if (srcDeg < dstDeg) srcId else dstId
-    val maxId = if (srcDeg < dstDeg) dstId else srcId
-    val maxDeg = if (srcDeg < dstDeg) dstDeg else srcDeg
-    if (maxDeg < threshold) {
-      getPartition(maxId)
-    } else {
-      getPartition(minId)
-    }
-  }
-
-  def getPartition(idx: Int): PartitionID = {
-    getPartition(idx.toLong)
-  }
-
-  def getPartition(idx: Long): PartitionID = {
-    (abs(idx * mixingPrime) % partitions).toInt
-  }
-
-  override def equals(other: Any): Boolean = other match {
-    case h: DBHPartitioner =>
-      h.numPartitions == numPartitions
-    case _ =>
-      false
-  }
-
-  override def hashCode: Int = numPartitions
-}
-
