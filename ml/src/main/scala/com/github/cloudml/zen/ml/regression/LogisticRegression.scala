@@ -354,6 +354,16 @@ object LogisticRegression {
   private[ml] type ED = Double
   private[ml] type VD = Double
 
+  /**
+   * 使用 SGD训练
+   * @param input 训练数据
+   * @param dir   模型储存目录
+   * @param numIterations 最大迭代次数
+   * @param stepSize  学习步长 推荐 0.1 - 1.0
+   * @param regParam  L1 Regularization
+   * @param useAdaGrad  自适应步长 推荐设置为true
+   * @param storageLevel 缓存级别  中小型训练集推荐设置为MEMORY_AND_DISK,大型数据集推荐设置为DISK_ONLY
+   */
   def trainSGD(
     input: RDD[LabeledPoint],
     dir: String,
@@ -371,6 +381,20 @@ object LogisticRegression {
     lr.saveModel(dir)
   }
 
+
+  /**
+   * 使用 Modified Iterative Scaling 训练 相关论文
+   * A comparison of numerical optimizers for logistic regression
+   * http://research.microsoft.com/en-us/um/people/minka/papers/logreg/minka-logreg.pdf
+   * @param input 训练数据
+   * @param dir   模型储存目录
+   * @param numIterations 最大迭代次数
+   * @param stepSize  学习步长 推荐 0.1 - 1.0
+   * @param regParam  L1 Regularization
+   * @param epsilon   平滑参数 推荐 1e-4 - 1e-6
+   * @param useAdaGrad  自适应步长 推荐设置为true
+   * @param storageLevel 缓存级别  中小型训练集推荐设置为MEMORY_AND_DISK,大型数据集推荐设置为DISK_ONLY
+   */
   def trainMIS(
     input: RDD[LabeledPoint],
     dir: String,
