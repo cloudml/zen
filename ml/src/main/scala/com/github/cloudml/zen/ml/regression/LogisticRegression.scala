@@ -28,7 +28,6 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{HashPartitioner, Logging, Partitioner}
 
-
 import scala.math._
 import LogisticRegression._
 
@@ -260,7 +259,6 @@ class LogisticRegression(
       }
     }.map(_._2).reduce(_ + _) / numSamples
   }
-
 
   def saveModel(dir: String): Unit = {
     features.map(t => s"${t._1}:${t._2}").saveAsTextFile(dir)
