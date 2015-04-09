@@ -130,30 +130,6 @@
     <pluginManagement>
       <plugins>
         <plugin>
-          <groupId>org.scalastyle</groupId>
-          <artifactId>scalastyle-maven-plugin</artifactId>
-          <version>0.4.0</version>
-          <configuration>
-            <verbose>false</verbose>
-            <failOnViolation>true</failOnViolation>
-            <includeTestSourceDirectory>false</includeTestSourceDirectory>
-            <failOnWarning>false</failOnWarning>
-            <sourceDirectory>${basedir}/src/main/scala</sourceDirectory>
-            <testSourceDirectory>${basedir}/src/test/scala</testSourceDirectory>
-            <configLocation>scalastyle-config.xml</configLocation>
-            <outputFile>scalastyle-output.xml</outputFile>
-            <outputEncoding>UTF-8</outputEncoding>
-          </configuration>
-          <executions>
-            <execution>
-              <phase>package</phase>
-              <goals>
-                <goal>check</goal>
-              </goals>
-            </execution>
-          </executions>
-        </plugin>
-        <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-enforcer-plugin</artifactId>
           <version>1.1.1</version>
@@ -309,6 +285,30 @@
     </pluginManagement>
 
     <plugins>
+      <plugin>
+        <groupId>org.scalastyle</groupId>
+        <artifactId>scalastyle-maven-plugin</artifactId>
+        <version>0.4.0</version>
+        <configuration>
+          <verbose>false</verbose>
+          <failOnViolation>true</failOnViolation>
+          <includeTestSourceDirectory>false</includeTestSourceDirectory>
+          <failOnWarning>false</failOnWarning>
+          <sourceDirectory>${basedir}/src/main/scala</sourceDirectory>
+          <testSourceDirectory>${basedir}/src/test/scala</testSourceDirectory>
+          <configLocation>scalastyle-config.xml</configLocation>
+          <outputFile>scalastyle-output.xml</outputFile>
+          <outputEncoding>UTF-8</outputEncoding>
+        </configuration>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-enforcer-plugin</artifactId>
