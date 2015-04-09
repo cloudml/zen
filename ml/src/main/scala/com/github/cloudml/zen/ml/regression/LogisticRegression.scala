@@ -481,6 +481,9 @@ private class DBHPartitioner(val partitions: Int) extends Partitioner {
 
   def numPartitions = partitions
 
+/*
+ * default Degree Based Hashing, 
+   "Distributed Power-law Graph Computing: Theoretical and Empirical Analysis" 
   def getPartition(key: Any): Int = {
     val edge = key.asInstanceOf[EdgeTriplet[Int, ED]]
     val srcDeg = edge.srcAttr
@@ -491,6 +494,24 @@ private class DBHPartitioner(val partitions: Int) extends Partitioner {
       getPartition(srcId)
     } else {
       getPartition(dstId)
+    }
+  }
+ */
+
+ /* Default DBH doesn't consider the situation where both the degree of src and dst vertices are both small than a given threshold value */
+  def getPartition(key: Any): Int = {
+    val edge = key.asInstanceOf[EdgeTriplet[Int, ED]]
+    val srcDeg = edge.srcAttr
+    val dstDeg = edge.dstAttr
+    val srcId = edge.srcId
+    val dstId = edge.dstId
+    val minId = if (srcDeg < dstDeg) srcId else dstId
+    val maxId = if (srcDeg < dstDeg) dstId else srcId
+    val maxDeg = if (srcDeg < dstDeg) dstDeg else srcDeg
+    if (maxDeg < threshold) {
+      getPartition(maxId)
+    } else {
+      getPartition(minId)
     }
   }
 
