@@ -17,11 +17,10 @@
 
 package com.github.cloudml.zen.ml.regression
 
-import breeze.linalg.{Vector => BV, SparseVector => BSV, DenseVector => BDV}
+import com.github.cloudml.zen.ml.util.SparkUtils._
+import com.github.cloudml.zen.ml.util.Utils
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.{EdgeRDDImpl, GraphImpl}
-import org.apache.spark.ml.classification.LogisticRegressionModel
-import org.apache.spark.mllib.linalg.{DenseVector => SDV, Vector => SV, SparseVector => SSV}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.mllib.util.MLUtils
 import org.apache.spark.rdd.RDD
@@ -42,7 +41,7 @@ class LogisticRegression(
     input: RDD[(VertexId, LabeledPoint)],
     stepSize: Double = 1e-4,
     regParam: Double = 0.0,
-    useAdaGrad: Boolean,
+    useAdaGrad: Boolean = false,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
     this(initializeDataSet(input, storageLevel), stepSize, regParam, useAdaGrad, storageLevel)
   }
@@ -59,7 +58,7 @@ class LogisticRegression(
   // MIS
   @transient private var q: VertexRDD[Double] = null
   @transient private var qWithLabel: VertexRDD[(Double, Double)] = null
-  protected var epsilon = 1e-3
+  protected var epsilon = 1e-4
 
   // ALL
   @transient private var gradient: VertexRDD[Double] = null
@@ -68,9 +67,8 @@ class LogisticRegression(
   @transient private val edges = dataSet.edges.asInstanceOf[EdgeRDDImpl[ED, _]]
     .mapEdgePartitions((pid, part) => part.withoutVertexAttributes[VD]).setName("edges")
 
-  lazy val numFeatures: Long = features.count()
-  lazy val numSamples: Long = samples.count()
-
+  val numFeatures: Long = features.count()
+  val numSamples: Long = samples.count()
 
   if (edges.getStorageLevel == StorageLevel.NONE) {
     edges.persist(storageLevel)
@@ -95,7 +93,7 @@ class LogisticRegression(
       logInfo(s"Start SGD train (Iteration $iter/$iterations)")
       previousVertices = dataSet.vertices
       margin = forwardSGD(iter)
-      println(s"train SGD (Iteration $iter/$iterations) cost : ${errorSGD(margin)}")
+      // println(s"train SGD (Iteration $iter/$iterations) cost : ${errorSGD(margin)}")
       gradient = backwardSGD(margin, iter)
       gradient = updateDeltaSum(gradient, iter)
 
@@ -116,7 +114,7 @@ class LogisticRegression(
     }
   }
 
-  private def forwardSGD(iter: Int): VertexRDD[VD] = {
+  private[ml] def forwardSGD(iter: Int): VertexRDD[VD] = {
     dataSet.aggregateMessages[Double](ctx => {
       // val sampleId = ctx.dstId
       // val featureId = ctx.srcId
@@ -128,7 +126,7 @@ class LogisticRegression(
     }, _ + _, TripletFields.Src).setName(s"margin-$iter").persist(storageLevel)
   }
 
-  private def backwardSGD(q: VertexRDD[VD], iter: Int): VertexRDD[Double] = {
+  private[ml] def backwardSGD(q: VertexRDD[VD], iter: Int): VertexRDD[Double] = {
     multiplier = dataSet.vertices.leftJoin(q) { (_, y, margin) =>
       margin match {
         case Some(z) =>
@@ -149,27 +147,32 @@ class LogisticRegression(
     }.setName(s"gradient-$iter").persist(storageLevel)
   }
 
-
-  private def errorSGD(q: VertexRDD[VD]): Double = {
+  private[ml] def errorSGD(q: VertexRDD[VD]): Double = {
     dataSet.vertices.leftJoin(q) { case (_, y, margin) =>
       margin match {
         case Some(z) =>
           if (y > 0.0) {
-            log1pExp(z)
+            Utils.log1pExp(z)
           } else {
-            log1pExp(z) - z
+            Utils.log1pExp(z) - z
           }
         case _ => 0.0
       }
     }.map(_._2).reduce(_ + _) / numSamples
   }
 
-  private def log1pExp(x: Double): Double = {
-    if (x > 0) {
-      x + math.log1p(math.exp(-x))
-    } else {
-      math.log1p(math.exp(x))
-    }
+  private[ml] def errorMIS(q: VertexRDD[VD]): Double = {
+    dataSet.vertices.leftJoin(q) { case (_, y, margin) =>
+      margin match {
+        case Some(z) =>
+          if (y > 0.0) {
+            Utils.log1pExp(-z)
+          } else {
+            Utils.log1pExp(z) - z
+          }
+        case _ => 0.0
+      }
+    }.map(_._2).reduce(_ + _) / numSamples
   }
 
   // Modified Iterative Scaling, the paper:
@@ -180,7 +183,7 @@ class LogisticRegression(
       logInfo(s"Start MIS train (Iteration $iter/$iterations)")
       previousVertices = dataSet.vertices
       q = forwardMIS(iter)
-      println(s"train MIS (Iteration $iter/$iterations) cast : ${errorMIS(q)}")
+      // println(s"train MIS (Iteration $iter/$iterations) cast : ${errorMIS(q)}")
       gradient = backwardMIS(q, iter)
       gradient = updateDeltaSum(gradient, iter)
 
@@ -201,7 +204,7 @@ class LogisticRegression(
     }
   }
 
-  def backwardMIS(q: VertexRDD[VD], iter: Int): VertexRDD[Double] = {
+  private[ml] def backwardMIS(q: VertexRDD[VD], iter: Int): VertexRDD[Double] = {
     qWithLabel = dataSet.vertices.leftJoin(q.mapValues { z =>
       val q = 1.0 / (1.0 + exp(z))
       // if (q.isInfinite || q.isNaN || q == 0.0) println(z)
@@ -233,7 +236,7 @@ class LogisticRegression(
     }.setName(s"gradient-$iter").persist(storageLevel)
   }
 
-  def forwardMIS(iter: Int): VertexRDD[VD] = {
+  private[ml] def forwardMIS(iter: Int): VertexRDD[VD] = {
     dataSet.aggregateMessages[Double](ctx => {
       // val sampleId = ctx.dstId
       // val featureId = ctx.srcId
@@ -244,20 +247,6 @@ class LogisticRegression(
       assert(!z.isNaN)
       ctx.sendToDst(z)
     }, _ + _, TripletFields.All).setName(s"q-$iter").persist(storageLevel)
-  }
-
-  private def errorMIS(q: VertexRDD[VD]): Double = {
-    dataSet.vertices.leftJoin(q) { case (_, y, margin) =>
-      margin match {
-        case Some(z) =>
-          if (y > 0.0) {
-            log1pExp(-z)
-          } else {
-            log1pExp(z) - z
-          }
-        case _ => 0.0
-      }
-    }.map(_._2).reduce(_ + _) / numSamples
   }
 
   def saveModel(dir: String): Unit = {
@@ -426,19 +415,20 @@ object LogisticRegression {
 
     val edges = input.flatMap { case (sampleId, labelPoint) =>
       val newId = newSampleId(sampleId)
-      sv2bv(labelPoint.features).activeIterator.map { case (index, value) =>
+      labelPoint.features.activeIterator.map { case (index, value) =>
         Edge(index, newId, value)
       }
     }.persist(storageLevel)
-    val dataSet = Graph.fromEdges(edges, null, storageLevel, storageLevel)
 
     // degree-based hashing
+    val degrees = edges.flatMap(t => {
+      Seq((t.dstId, 1), (t.srcId, 1))
+    }).reduceByKey(_ + _).persist(storageLevel)
+    val dataSet = GraphImpl(degrees, edges, 0, storageLevel, storageLevel)
     dataSet.persist(storageLevel)
     val numPartitions = edges.partitions.size
     val partitionStrategy = new DBHPartitioner(numPartitions)
-    val newEdges = dataSet.outerJoinVertices(dataSet.degrees) { (vid, data, deg) =>
-      deg.getOrElse(0)
-    }.triplets.mapPartitions { itr =>
+    val newEdges = dataSet.triplets.mapPartitions { itr =>
       itr.map { e =>
         (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
       }
@@ -451,19 +441,11 @@ object LogisticRegression {
     newDataSet.persist(storageLevel)
     newDataSet.vertices.count()
     newDataSet.edges.count()
+    degrees.unpersist(blocking = false)
     dataSet.unpersist(blocking = false)
     edges.unpersist(blocking = false)
     vertices.unpersist(blocking = false)
     newDataSet
-  }
-
-  private def sv2bv(sv: SV): BV[Double] = {
-    sv match {
-      case SDV(data) =>
-        new BDV(data)
-      case SSV(size, indices, values) =>
-        new BSV(indices, values, size)
-    }
   }
 
   private def newSampleId(id: Long): VertexId = {
