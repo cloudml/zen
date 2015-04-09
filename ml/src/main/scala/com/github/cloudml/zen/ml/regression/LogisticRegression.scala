@@ -161,20 +161,6 @@ class LogisticRegression(
     }.map(_._2).reduce(_ + _) / numSamples
   }
 
-  private[ml] def errorMIS(q: VertexRDD[VD]): Double = {
-    dataSet.vertices.leftJoin(q) { case (_, y, margin) =>
-      margin match {
-        case Some(z) =>
-          if (y > 0.0) {
-            Utils.log1pExp(-z)
-          } else {
-            Utils.log1pExp(z) - z
-          }
-        case _ => 0.0
-      }
-    }.map(_._2).reduce(_ + _) / numSamples
-  }
-
   // Modified Iterative Scaling, the paper:
   // A comparison of numerical optimizers for logistic regression
   // http://research.microsoft.com/en-us/um/people/minka/papers/logreg/minka-logreg.pdf
@@ -247,6 +233,20 @@ class LogisticRegression(
       assert(!z.isNaN)
       ctx.sendToDst(z)
     }, _ + _, TripletFields.All).setName(s"q-$iter").persist(storageLevel)
+  }
+
+  private[ml] def errorMIS(q: VertexRDD[VD]): Double = {
+    dataSet.vertices.leftJoin(q) { case (_, y, margin) =>
+      margin match {
+        case Some(z) =>
+          if (y > 0.0) {
+            Utils.log1pExp(-z)
+          } else {
+            Utils.log1pExp(z) - z
+          }
+        case _ => 0.0
+      }
+    }.map(_._2).reduce(_ + _) / numSamples
   }
 
   def saveModel(dir: String): Unit = {
@@ -421,9 +421,8 @@ object LogisticRegression {
     }.persist(storageLevel)
 
     // degree-based hashing
-    val degrees = edges.flatMap(t => {
-      Seq((t.dstId, 1), (t.srcId, 1))
-    }).reduceByKey(_ + _).persist(storageLevel)
+    val degrees = edges.flatMap(t => Seq((t.dstId, 1), (t.srcId, 1))).
+      reduceByKey(_ + _).persist(storageLevel)
     val dataSet = GraphImpl(degrees, edges, 0, storageLevel, storageLevel)
     dataSet.persist(storageLevel)
     val numPartitions = edges.partitions.size
@@ -458,29 +457,33 @@ object LogisticRegression {
  * Degree-Based Hashing, the paper:
  * Distributed Power-law Graph Computing: Theoretical and Empirical Analysis
  */
-private class DBHPartitioner(val partitions: Int) extends Partitioner {
+private class DBHPartitioner(val partitions: Int, val threshold: Int = 70) extends Partitioner {
   val mixingPrime: Long = 1125899906842597L
 
   def numPartitions = partitions
 
-/*
- * default Degree Based Hashing, 
-   "Distributed Power-law Graph Computing: Theoretical and Empirical Analysis" 
-  def getPartition(key: Any): Int = {
-    val edge = key.asInstanceOf[EdgeTriplet[Int, ED]]
-    val srcDeg = edge.srcAttr
-    val dstDeg = edge.dstAttr
-    val srcId = edge.srcId
-    val dstId = edge.dstId
-    if (srcDeg < dstDeg) {
-      getPartition(srcId)
-    } else {
-      getPartition(dstId)
+  /*
+   * default Degree Based Hashing,
+     "Distributed Power-law Graph Computing: Theoretical and Empirical Analysis"
+    def getPartition(key: Any): Int = {
+      val edge = key.asInstanceOf[EdgeTriplet[Int, ED]]
+      val srcDeg = edge.srcAttr
+      val dstDeg = edge.dstAttr
+      val srcId = edge.srcId
+      val dstId = edge.dstId
+      if (srcDeg < dstDeg) {
+        getPartition(srcId)
+      } else {
+        getPartition(dstId)
+      }
     }
-  }
- */
+   */
 
- /* Default DBH doesn't consider the situation where both the degree of src and dst vertices are both small than a given threshold value */
+
+  /**
+   * Default DBH doesn't consider the situation where both the degree of src and
+   * dst vertices are both small than a given threshold value
+   */
   def getPartition(key: Any): Int = {
     val edge = key.asInstanceOf[EdgeTriplet[Int, ED]]
     val srcDeg = edge.srcAttr

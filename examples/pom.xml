@@ -26,14 +26,11 @@
     <relativePath>../pom.xml</relativePath>
   </parent>
   <groupId>com.github.cloudml.zen</groupId>
-  <artifactId>zen-assembly</artifactId>
-  <name>zen-assembly</name>
+  <artifactId>zen-examples</artifactId>
+  <name>zen-examples</name>
   <url>http://maven.apache.org</url>
-  <packaging>pom</packaging>
   <properties>
-    <zen.jar.dir>scala-${scala.binary.version}</zen.jar.dir>
-    <zen.jar.basename>zen-assembly-${project.version}-spark${spark.version}.jar</zen.jar.basename>
-    <zen.jar>${project.build.directory}/${zen.jar.dir}/${zen.jar.basename}</zen.jar>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
   <dependencies>
     <dependency>
@@ -41,15 +38,62 @@
       <artifactId>zen-ml</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <dependency>
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-graphx_${scala.binary.version}</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-mllib_${scala.binary.version}</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.github.scopt</groupId>
+      <artifactId>scopt_${scala.binary.version}</artifactId>
+      <version>3.2.0</version>
+    </dependency>
+    <!-- test -->
+    <dependency>
+      <groupId>junit</groupId>
+      <artifactId>junit</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.novocode</groupId>
+      <artifactId>junit-interface</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.scalatest</groupId>
+      <artifactId>scalatest_${scala.binary.version}</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
   <build>
+    <outputDirectory>target/scala-${scala.binary.version}/classes</outputDirectory>
+    <testOutputDirectory>target/scala-${scala.binary.version}/test-classes</testOutputDirectory>
     <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-deploy-plugin</artifactId>
+        <configuration>
+          <skip>true</skip>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-install-plugin</artifactId>
+        <configuration>
+          <skip>true</skip>
+        </configuration>
+      </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
         <configuration>
           <shadedArtifactAttached>false</shadedArtifactAttached>
-          <outputFile>${zen.jar}</outputFile>
+          <outputFile>
+            ${project.build.directory}/scala-${scala.binary.version}/zen-examples-${project.version}-spark${spark.version}.jar
+          </outputFile>
           <artifactSet>
             <includes>
               <include>*:*</include>
@@ -96,6 +140,12 @@
             </excludes>
           </artifactSet>
           <filters>
+            <filter>
+              <artifact>com.google.guava:guava</artifact>
+              <excludes>
+                <exclude>com/google/common/base/Optional*</exclude>
+              </excludes>
+            </filter>
             <filter>
               <artifact>*:*</artifact>
               <excludes>
