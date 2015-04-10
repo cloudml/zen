@@ -15,17 +15,18 @@
  * limitations under the License.
  */
 
-package com.github.cloudml.zen.ml.util
+package com.github.cloudml.zen.ml.neuralNetwork
 
-import java.util.Random
+import com.github.cloudml.zen.ml.util.MnistDatasetSuite
+import org.scalatest.{FunSuite, Matchers}
 
-object Utils {
-  val random = new Random()
-  def log1pExp(x: Double): Double = {
-    if (x > 0) {
-      x + math.log1p(math.exp(-x))
-    } else {
-      math.log1p(math.exp(x))
-    }
+class StackedRBMSuite extends FunSuite with MnistDatasetSuite with Matchers {
+
+  ignore("StackedRBM") {
+    val (data, numVisible) = mnistTrainDataset(5000)
+    data.cache()
+    val topology = Array(numVisible, 300, 300, 500)
+    val stackedRBM = StackedRBM.train(data.map(_._1), 1200, topology, 0.01, 0.1, 0.0)
   }
+
 }

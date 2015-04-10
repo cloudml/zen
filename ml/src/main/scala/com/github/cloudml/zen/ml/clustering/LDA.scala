@@ -183,12 +183,13 @@ abstract class LDA private[ml](
 
   def runGibbsSampling(iterations: Int): Unit = {
     for (iter <- 1 to iterations) {
-      // logInfo(s"Gibbs sampling perplexity (Iteration $iter/$iterations): ${perplexity}")
       logInfo(s"Start Gibbs sampling (Iteration $iter/$iterations)")
       val startedAt = System.nanoTime()
       gibbsSampling(iter)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      logInfo(s"Gibbs sampling  (Iteration $iter/$iterations): $elapsedSeconds")
+      logInfo(s"Gibbs sampling (Iteration $iter/$iterations) docLikelihood:      ${docLikelihood()}")
+      logInfo(s"Gibbs sampling (Iteration $iter/$iterations) wordLikelihood:      ${wordLikelihood()}")
+      logInfo(s"End Gibbs sampling  (Iteration $iter/$iterations) takes:      $elapsedSeconds seconds")
     }
   }
 
@@ -281,6 +282,65 @@ abstract class LDA private[ml](
 
     math.exp(-1 * termProb / totalSize)
   }
+
+  def docLikelihood(): Double = {
+    val alphaSum = alpha * numTopics
+    val zeroLLH = logGamma(alpha)
+    docVertices.map { case (_, docTopicCounter) =>
+      var probSum = logGamma(alphaSum) - numTopics * logGamma(alpha)
+      var numNoZeros = 0
+      docTopicCounter.activeIterator.filter(_._2 > 0).foreach { case (topic, cn) =>
+        numNoZeros += 1
+        probSum += logGamma(cn + alpha)
+      }
+      probSum + (numTopics - numNoZeros) * zeroLLH - logGamma(brzSum(docTopicCounter) + alphaSum)
+    }.sum()
+  }
+
+  def wordLikelihood(): Double = {
+    val zeroLLH = logGamma(beta)
+    termVertices.map { case (_, termTopicCounter) =>
+      var probSum = 0D
+      var numNoZeros = 0
+      termTopicCounter.activeIterator.filter(_._2 > 0).foreach { case (topic, cn) =>
+        numNoZeros += 1
+        probSum += logGamma(cn + beta)
+      }
+      probSum + (numTopics - numNoZeros) * zeroLLH
+    }.sum() + wordLikelihoodSummary()
+  }
+
+  private def wordLikelihoodSummary(): Double = {
+    val betaSum = beta * numTerms
+    var probSum = numTopics * (logGamma(betaSum) - numTerms * logGamma(beta))
+    for (topic <- 0 until numTopics) {
+      probSum -= logGamma(totalTopicCounter(topic) + betaSum)
+    }
+    probSum
+  }
+
+  private def logGamma(xx: Double): Double = {
+    val cof = Array(
+      76.18009172947146, -86.50532032941677,
+      24.01409824083091, -1.231739572450155,
+      0.1208650973866179e-2, -0.5395239384953e-5)
+    var j = 0
+    var x = 0.0
+    var y = 0.0
+    var tmp1 = 0.0
+    var ser = 0.0
+    y = xx
+    x = xx
+    tmp1 = x + 5.5
+    tmp1 -= (x + 0.5) * Math.log(tmp1)
+    ser = 1.000000000190015
+    while (j < 6) {
+      y += 1
+      ser += cof(j) / y
+      j += 1
+    }
+    -tmp1 + Math.log(2.5066282746310005 * ser / x)
+  }
 }
 
 object LDA {
@@ -334,7 +394,7 @@ object LDA {
         (topic, sv)
       }
     }.reduceByKey { (a, b) => a + b }.map { case (topic, sv) =>
-      LabeledPoint(topic.toDouble, breezeVector2SparkVector(sv))
+      LabeledPoint(topic.toDouble, fromBreeze(sv))
     }
     MLUtils.saveAsLibSVMFile(rdd, dir)
   }
