@@ -304,7 +304,7 @@ object LDA {
     val lda = if (useLightLDA) {
       new LightLDA(docs, numTopics, alpha, beta, alphaAS)
     } else {
-      new AliasLDA(docs, numTopics, alpha, beta, alphaAS)
+      new FastLDA(docs, numTopics, alpha, beta, alphaAS)
     }
     lda.runGibbsSampling(totalIter - 1)
     lda.saveModel(1)
@@ -325,7 +325,7 @@ object LDA {
     val lda = if (useLightLDA) {
       new LightLDA(docs, numTopics, alpha, beta, alphaAS)
     } else {
-      new AliasLDA(docs, numTopics, alpha, beta, alphaAS)
+      new FastLDA(docs, numTopics, alpha, beta, alphaAS)
     }
     val numTerms = lda.numTerms
     lda.runGibbsSampling(totalIter)
@@ -355,7 +355,7 @@ object LDA {
     val lda = if (useLightLDA) {
       new LightLDA(docs, numTopics, alpha, beta, alphaAS, computedModel = broadcastModel)
     } else {
-      new AliasLDA(docs, numTopics, alpha, beta, alphaAS, computedModel = broadcastModel)
+      new FastLDA(docs, numTopics, alpha, beta, alphaAS, computedModel = broadcastModel)
     }
     broadcastModel.unpersist()
     lda.runGibbsSampling(totalIter - 1)
@@ -381,12 +381,14 @@ object LDA {
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
     // degree-based hashing
     val numPartitions = edges.partitions.size
-    val partitionStrategy = new DBHPartitioner[ED](numPartitions)
+    val partitionStrategy = new DBHPartitioner(numPartitions)
     val degrees = edges.flatMap(t => Seq((t.dstId, 1), (t.srcId, 1))).
       reduceByKey(_ + _).persist(storageLevel)
     val dataSet = GraphImpl(degrees, edges, 0, storageLevel, storageLevel)
-    val newEdges = dataSet.triplets.map { e =>
-      (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
+    val newEdges = dataSet.triplets.mapPartitions { iter =>
+      iter.map { e =>
+        (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
+      }
     }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
     corpus = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
     // end degree-based hashing
@@ -453,7 +455,7 @@ object LDA {
     docTopic
   }
 
-  private def updateCounter(graph: Graph[VD, ED], numTopics: Int): Graph[VD, ED] = {
+  private def updateCounter(graph: Graph[_, ED], numTopics: Int): Graph[VD, ED] = {
     val newCounter = graph.aggregateMessages[VD](ctx => {
       val topics = ctx.attr
       val vector = BSV.zeros[Count](numTopics)
@@ -503,7 +505,7 @@ private[ml] class LDAKryoRegistrator extends KryoRegistrator {
   }
 }
 
-private[ml] class AliasLDA(
+class FastLDA(
   corpus: Graph[VD, ED],
   numTopics: Int,
   numTerms: Int,
@@ -550,37 +552,23 @@ private[ml] class AliasLDA(
             val topics = triplet.attr
             for (i <- 0 until topics.length) {
               val currentTopic = topics(i)
-              docTopicCounter.synchronized {
-                termTopicCounter.synchronized {
-                  dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, dData,
-                    currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
-                  val (wSum, w) = wordTable(x => x == null || x.get() == null || gen.nextDouble() < 1e-4,
-                    wordTableCache, totalTopicCounter, termTopicCounter,
-                    termId, numTokens, numTerms, alpha, alphaAS, beta)
-                  val newTopic = tokenSampling(gen, t, tSum, w, termTopicCounter, wSum,
-                    docTopicCounter, dData, currentTopic)
+              dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, dData,
+                currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
+              val (wSum, w) = wordTable(x => x == null || x.get() == null,
+                wordTableCache, totalTopicCounter, termTopicCounter,
+                termId, numTokens, numTerms, alpha, alphaAS, beta)
+              val newTopic = tokenSampling(gen, t, tSum, w, termTopicCounter, wSum,
+                docTopicCounter, dData, currentTopic)
 
-                  if (newTopic != currentTopic) {
-                    topics(i) = newTopic
-                    docTopicCounter(currentTopic) -= 1
-                    docTopicCounter(newTopic) += 1
-                    // if (docTopicCounter(currentTopic) == 0) docTopicCounter.compact()
-
-                    termTopicCounter(currentTopic) -= 1
-                    termTopicCounter(newTopic) += 1
-                    // if (termTopicCounter(currentTopic) == 0) termTopicCounter.compact()
-
-                    totalTopicCounter(currentTopic) -= 1
-                    totalTopicCounter(newTopic) += 1
-                  }
-                }
+              if (newTopic != currentTopic) {
+                topics(i) = newTopic
               }
             }
 
             topics
         }
       }, TripletFields.All)
-    nweGraph
+    GraphImpl(nweGraph.vertices.mapValues(t => null), nweGraph.edges)
   }
 
   private def tokenSampling(
@@ -699,7 +687,6 @@ private[ml] class AliasLDA(
         (totalTopicCounter(topic) + adjustment + betaSum)
       // val lastD = (count + adjustment) * termSum * (termTopicCounter(topic) + adjustment + beta) /
       //  ((totalTopicCounter(topic) + adjustment + betaSum) * termSum)
-
       sum += last
       d(i) = sum
     }
@@ -745,7 +732,7 @@ private[ml] class AliasLDA(
   }
 }
 
-private[ml] class LightLDA(
+class LightLDA(
   corpus: Graph[VD, ED],
   numTopics: Int,
   numTerms: Int,
@@ -860,13 +847,12 @@ private[ml] class LightLDA(
                   totalTopicCounter(currentTopic) -= 1
                   totalTopicCounter(newTopic) += 1
                 }
-
               }
             }
             topics
         }
       }, TripletFields.All)
-    nweGraph
+    GraphImpl(nweGraph.vertices.mapValues(t => null), nweGraph.edges)
   }
 
   /**

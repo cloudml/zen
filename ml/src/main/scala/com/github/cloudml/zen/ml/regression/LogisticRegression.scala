@@ -427,7 +427,7 @@ object LogisticRegression {
     val dataSet = GraphImpl(degrees, edges, 0, storageLevel, storageLevel)
     dataSet.persist(storageLevel)
     val numPartitions = edges.partitions.size
-    val partitionStrategy = new DBHPartitioner[ED](numPartitions)
+    val partitionStrategy = new DBHPartitioner(numPartitions)
     val newEdges = dataSet.triplets.mapPartitions { itr =>
       itr.map { e =>
         (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
