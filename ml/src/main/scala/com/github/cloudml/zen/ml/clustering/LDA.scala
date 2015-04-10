@@ -105,7 +105,8 @@ abstract class LDA private[ml](
   private def docVertices = corpus.vertices.filter(t => t._1 < 0)
 
   private def checkpoint(corpus: Graph[VD, ED]): Unit = {
-    if (innerIter % 10 == 0 && corpus.edges.sparkContext.getCheckpointDir.isDefined) {
+    val sc = corpus.edges.sparkContext
+    if (innerIter % 10 == 0 && sc.getCheckpointDir.isDefined) {
       corpus.checkpoint()
     }
   }
@@ -116,31 +117,29 @@ abstract class LDA private[ml](
     globalTopicCounter
   }
 
-  private def gibbsSampling(): Unit = {
+  private def gibbsSampling(iter: Int): Unit = {
+    val previousCorpus = corpus
     val sampledCorpus = sampleTokens(corpus, totalTopicCounter, innerIter + seed,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
     sampledCorpus.persist(storageLevel)
+    sampledCorpus.edges.setName(s"sampledEdges-$iter")
+    sampledCorpus.vertices.setName(s"sampledVertices-$iter")
 
-    val counterCorpus = updateCounter(sampledCorpus, numTopics)
-    checkpoint(counterCorpus)
-    counterCorpus.persist(storageLevel)
-    // counterCorpus.vertices.count()
-    counterCorpus.edges.count()
-    totalTopicCounter = collectTotalTopicCounter(counterCorpus)
+    corpus = updateCounter(sampledCorpus, numTopics)
+    checkpoint(corpus)
+    corpus.persist(storageLevel)
+    corpus.edges.setName(s"edges-$iter").count()
+    corpus.vertices.setName(s"vertices-$iter")
+    // completeCorpus.vertices.count()
+    totalTopicCounter = collectTotalTopicCounter(corpus)
 
-    corpus.edges.unpersist(false)
-    corpus.vertices.unpersist(false)
-    sampledCorpus.edges.unpersist(false)
-    sampledCorpus.vertices.unpersist(false)
-    corpus = counterCorpus
+    sampledCorpus.unpersist(blocking = false)
+    previousCorpus.unpersist(blocking = false)
     innerIter += 1
   }
 
   private def collectGlobalCounter(graph: Graph[VD, ED], numTopics: Int): BDV[Count] = {
-    graph.vertices.filter(t => t._1 >= 0).map(_._2).
-      aggregate(BDV.zeros[Count](numTopics))((a, b) => {
-      a :+= b
-    }, _ :+= _)
+    graph.vertices.filter(t => t._1 >= 0).map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
   }
 
   protected def sampleTokens(
@@ -159,7 +158,7 @@ abstract class LDA private[ml](
     for (iter <- 1 to iter) {
       logInfo(s"Save TopicModel (Iteration $iter/$iter)")
       var previousTermTopicCounter = termTopicCounter
-      gibbsSampling()
+      gibbsSampling(iter)
       val newTermTopicCounter = termVertices
       termTopicCounter = Option(termTopicCounter).map(_.join(newTermTopicCounter).map {
         case (term, (a, b)) =>
@@ -167,7 +166,7 @@ abstract class LDA private[ml](
       }).getOrElse(newTermTopicCounter)
 
       termTopicCounter.persist(storageLevel).count()
-      Option(previousTermTopicCounter).foreach(_.unpersist())
+      Option(previousTermTopicCounter).foreach(_.unpersist(blocking = false))
       previousTermTopicCounter = termTopicCounter
     }
     val model = LDAModel(numTopics, numTerms, alpha, beta)
@@ -184,13 +183,12 @@ abstract class LDA private[ml](
 
   def runGibbsSampling(iterations: Int): Unit = {
     for (iter <- 1 to iterations) {
-      // logInfo(s"Gibbs sampling perplexity $iter:                 ${perplexity}")
-      // logInfo(s"Gibbs sampling (Iteration $iter/$iterations)")
-      // val startedAt = System.nanoTime()
-      gibbsSampling()
-      // val endAt = System.nanoTime()
-      // val useTime = (endAt - startedAt) / 1e9
-      // logInfo(s"Gibbs sampling use time  $iter:              $useTime")
+      // logInfo(s"Gibbs sampling perplexity (Iteration $iter/$iterations): ${perplexity}")
+      logInfo(s"Start Gibbs sampling (Iteration $iter/$iterations)")
+      val startedAt = System.nanoTime()
+      gibbsSampling(iter)
+      val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
+      logInfo(s"Gibbs sampling  (Iteration $iter/$iterations): $elapsedSeconds")
     }
   }
 
@@ -357,7 +355,7 @@ object LDA {
     } else {
       new FastLDA(docs, numTopics, alpha, beta, alphaAS, computedModel = broadcastModel)
     }
-    broadcastModel.unpersist()
+    broadcastModel.unpersist(blocking = false)
     lda.runGibbsSampling(totalIter - 1)
     lda.saveModel(1)
   }
@@ -368,9 +366,8 @@ object LDA {
     storageLevel: StorageLevel,
     computedModel: Broadcast[LDAModel] = null): Graph[VD, ED] = {
     val edges = docs.mapPartitionsWithIndex((pid, iter) => {
-      val gen = new Random(pid)
-      var model: LDAModel = null
-      if (computedModel != null) model = computedModel.value
+      val gen = new Random(pid + 117)
+      val model: LDAModel = if (computedModel == null) null else computedModel.value
       iter.flatMap {
         case (docId, doc) =>
           val bsv = new BSV[Int](doc.indices, doc.values.map(_.toInt), doc.size)
@@ -378,27 +375,25 @@ object LDA {
       }
     })
     edges.persist(storageLevel)
-    var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
     // degree-based hashing
     val numPartitions = edges.partitions.size
     val partitionStrategy = new DBHPartitioner(numPartitions)
-    val degrees = edges.flatMap(t => Seq((t.dstId, 1), (t.srcId, 1))).
-      reduceByKey(_ + _).persist(storageLevel)
+    val degrees = edges.flatMap(t => Seq((t.dstId, 1), (t.srcId, 1))).reduceByKey(_ + _).persist(storageLevel)
     val dataSet = GraphImpl(degrees, edges, 0, storageLevel, storageLevel)
     val newEdges = dataSet.triplets.mapPartitions { iter =>
       iter.map { e =>
         (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
       }
     }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
-    corpus = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
+    var corpus: Graph[VD, ED] = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
     // end degree-based hashing
     // corpus = corpus.partitionBy(PartitionStrategy.EdgePartition2D)
     corpus = updateCounter(corpus, numTopics).cache()
     corpus.vertices.count()
     corpus.edges.count()
-    edges.unpersist()
-    degrees.unpersist()
-    dataSet.unpersist()
+    edges.unpersist(blocking = false)
+    degrees.unpersist(blocking = false)
+    dataSet.unpersist(blocking = false)
     corpus
   }
 
@@ -597,7 +592,6 @@ class FastLDA(
     }
   }
 
-
   /**
    * 分解后的公式为
    * t = \frac{{\beta }_{w} \bar{\alpha} ( {n}_{k}^{-di} + \acute{\alpha} ) } {({n}_{k}^{-di}+\bar{\beta})
@@ -713,22 +707,6 @@ class FastLDA(
       cacheMap.update(termId, new SoftReference(w))
       w
     }
-  }
-
-  private def sampleSV(gen: Random, table: Table, sv: VD, currentTopic: Int): Int = {
-    val docTopic = sampleAlias(gen, table)
-    if (docTopic == currentTopic) {
-      val svCounter = sv(currentTopic)
-      // 这里的处理方法不太对.
-      // 如果采样到当前token的Topic这丢弃掉
-      // svCounter == 1 && table.length > 1 采样到token的Topic 但包含其他token
-      // svCounter > 1 && gen.nextDouble() < 1.0 / svCounter 采样的Topic 有1/svCounter 概率属于当前token
-      if ((svCounter == 1 && table._1.length > 1) ||
-        (svCounter > 1 && gen.nextDouble() < 1.0 / svCounter)) {
-        return sampleSV(gen, table, sv, currentTopic)
-      }
-    }
-    docTopic
   }
 }
 
@@ -1066,5 +1044,4 @@ class LightLDA(
       }
     }
   }
-
 }
