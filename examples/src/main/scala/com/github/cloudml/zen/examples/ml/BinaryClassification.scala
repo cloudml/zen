@@ -20,14 +20,9 @@ package com.github.cloudml.zen.examples.ml
 import com.github.cloudml.zen.ml.regression.LogisticRegression
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.graphx.GraphXUtils
-import org.apache.spark.mllib.recommendation.Rating
 import org.apache.spark.mllib.util.MLUtils
-import scopt.OptionParser
-
 import org.apache.spark.{SparkConf, SparkContext}
-import org.apache.spark.SparkContext._
-
-import scala.collection.mutable
+import scopt.OptionParser
 
 object BinaryClassification {
 

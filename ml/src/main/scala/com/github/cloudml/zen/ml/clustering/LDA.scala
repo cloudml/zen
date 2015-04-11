@@ -45,19 +45,7 @@ abstract class LDA private[ml](
   private var alpha: Double,
   private var beta: Double,
   private var alphaAS: Double,
-  private var storageLevel: StorageLevel)
-  extends Serializable with Logging {
-
-  def this(docs: RDD[(DocId, SSV)],
-    numTopics: Int,
-    alpha: Double,
-    beta: Double,
-    alphaAS: Double,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK,
-    computedModel: Broadcast[LDAModel] = null) {
-    this(initializeCorpus(docs, numTopics, storageLevel, computedModel),
-      numTopics, docs.first()._2.size, alpha, beta, alphaAS, storageLevel)
-  }
+  private var storageLevel: StorageLevel) extends Serializable with Logging {
 
   /**
    * 语料库文档数
@@ -292,21 +280,19 @@ abstract class LDA private[ml](
     // Doc vertex: Compute theta_{kj}.  Use to compute prior log probability.
     val N_k = totalTopicCounter
     val smoothed_N_k = N_k.map(_.toDouble) + (numTerms * beta)
-    val seqOp: (Double, (VertexId, VD)) => Double = {
-      case (sumPrior: Double, vertex: (VertexId, VD)) =>
-        if (vertex._1 >= 0) {
-          val N_wk = vertex._2.map(_.toDouble)
-          val smoothed_N_wk: BV[Double] = N_wk + beta
-          val phi_wk: BV[Double] = smoothed_N_wk :/ smoothed_N_k
-          beta * brzSum(phi_wk.map(math.log))
-        } else {
-          val N_kj = vertex._2.map(_.toDouble)
-          val smoothed_N_kj: BV[Double] = N_kj + alpha
-          val theta_kj: BV[Double] = brzNormalize(smoothed_N_kj, 1.0)
-          alpha * brzSum(theta_kj.map(math.log))
-        }
-    }
-    getCorpus.vertices.aggregate(0.0)(seqOp, _ + _)
+    getCorpus.vertices.map { vertex =>
+      if (vertex._1 >= 0) {
+        val N_wk = vertex._2.map(_.toDouble)
+        val smoothed_N_wk: BV[Double] = N_wk + beta
+        val phi_wk: BV[Double] = smoothed_N_wk :/ smoothed_N_k
+        beta * brzSum(phi_wk.map(math.log))
+      } else {
+        val N_kj = vertex._2.map(_.toDouble)
+        val smoothed_N_kj: BV[Double] = N_kj + alpha
+        val theta_kj: BV[Double] = brzNormalize(smoothed_N_kj, 1.0)
+        alpha * brzSum(theta_kj.map(math.log))
+      }
+    }.sum
   }
 }
 
@@ -318,7 +304,8 @@ object LDA {
   private[ml] type ED = Array[Count]
   private[ml] type VD = BSV[Count]
 
-  def train(docs: RDD[(DocId, SSV)],
+  def train(
+    docs: RDD[(Long, SV)],
     numTopics: Int = 2048,
     totalIter: Int = 150,
     alpha: Double = 0.01,
@@ -339,7 +326,7 @@ object LDA {
    * topicID termID+1:counter termID+1:counter ..
    */
   def trainAndSaveModel(
-    docs: RDD[(DocId, SSV)],
+    docs: RDD[(Long, SV)],
     dir: String,
     numTopics: Int = 2048,
     totalIter: Int = 150,
@@ -367,7 +354,7 @@ object LDA {
   }
 
   def incrementalTrain(
-    docs: RDD[(DocId, SSV)],
+    docs: RDD[(Long, SV)],
     computedModel: LDAModel,
     alphaAS: Double = 0.1,
     totalIter: Int = 150,
@@ -388,17 +375,15 @@ object LDA {
   }
 
   private[ml] def initializeCorpus(
-    docs: RDD[(LDA.DocId, SSV)],
+    docs: RDD[(LDA.DocId, SV)],
     numTopics: Int,
     storageLevel: StorageLevel,
     computedModel: Broadcast[LDAModel] = null): Graph[VD, ED] = {
     val edges = docs.mapPartitionsWithIndex((pid, iter) => {
       val gen = new Random(pid + 117)
       val model: LDAModel = if (computedModel == null) null else computedModel.value
-      iter.flatMap {
-        case (docId, doc) =>
-          val bsv = new BSV[Int](doc.indices, doc.values.map(_.toInt), doc.size)
-          initializeEdges(gen, bsv, docId, numTopics, model)
+      iter.flatMap { case (docId, doc) =>
+        initializeEdges(gen, toBreeze(doc).map(_.toInt), docId, numTopics, model)
       }
     })
     edges.persist(storageLevel)
@@ -426,7 +411,7 @@ object LDA {
 
   private def initializeEdges(
     gen: Random,
-    doc: BSV[Int],
+    doc: BV[Int],
     docId: DocId,
     numTopics: Int,
     computedModel: LDAModel = null): Array[Edge[ED]] = {
@@ -535,7 +520,7 @@ class FastLDA(
   beta: Double,
   alphaAS: Double,
   storageLevel: StorageLevel) extends LDA(corpus, numTopics, numTerms, alpha, beta, alphaAS, storageLevel) {
-  def this(docs: RDD[(DocId, SSV)],
+  def this(docs: RDD[(DocId, SV)],
     numTopics: Int,
     alpha: Double,
     beta: Double,
@@ -745,7 +730,7 @@ class LightLDA(
   beta: Double,
   alphaAS: Double,
   storageLevel: StorageLevel) extends LDA(corpus, numTopics, numTerms, alpha, beta, alphaAS, storageLevel) {
-  def this(docs: RDD[(DocId, SSV)],
+  def this(docs: RDD[(Long, SV)],
     numTopics: Int,
     alpha: Double,
     beta: Double,
