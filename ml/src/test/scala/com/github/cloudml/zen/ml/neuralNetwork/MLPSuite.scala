@@ -15,17 +15,21 @@
  * limitations under the License.
  */
 
-package com.github.cloudml.zen.ml.util
+package com.github.cloudml.zen.ml.neuralNetwork
 
-import java.util.Random
+import com.github.cloudml.zen.ml.util.MnistDatasetSuite
+import org.scalatest.{FunSuite, Matchers}
 
-object Utils {
-  val random = new Random()
-  def log1pExp(x: Double): Double = {
-    if (x > 0) {
-      x + math.log1p(math.exp(-x))
-    } else {
-      math.log1p(math.exp(x))
-    }
+class MLPSuite extends FunSuite with MnistDatasetSuite with Matchers {
+  ignore("MLP") {
+    val (data, numVisible) = mnistTrainDataset(5000)
+    val topology = Array(numVisible, 500, 10)
+    val nn = MLP.train(data, 1000, topology, fraction = 0.02, learningRate = 0.1, weightCost = 0.0)
+
+    // val nn = MLP.runLBFGS(data, topology, 100, 4000, 1e-5, 0.001)
+    // MLP.runSGD(data, nn, 37, 6000, 0.1, 0.5, 0.0)
+
+    val (dataTest, _) = mnistTrainDataset(10000, 5000)
+    println("Error: " + MLP.error(dataTest, nn, 100))
   }
 }

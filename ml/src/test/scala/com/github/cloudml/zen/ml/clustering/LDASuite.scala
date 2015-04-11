@@ -130,7 +130,7 @@ object LDASuite {
       }
       val sv = BSV.zeros[Double](numTerms)
       ldaSampler(model, topicDist, numTermsPerDoc).foreach { term => sv(term) += 1 }
-      (i.toLong, breezeVector2SparkVector(sv).asInstanceOf[SSV])
+      (i.toLong, fromBreeze(sv).asInstanceOf[SSV])
     }.toArray
   }
 

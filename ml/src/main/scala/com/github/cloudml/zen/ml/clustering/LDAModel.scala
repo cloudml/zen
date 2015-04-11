@@ -59,9 +59,9 @@ class LDAModel private[ml](
     rand.setSeed(seed)
   }
 
-  def globalTopicCounter = breezeVector2SparkVector(gtc)
+  def globalTopicCounter = fromBreeze(gtc)
 
-  def topicTermCounter = ttc.map(t => breezeVector2SparkVector(t))
+  def topicTermCounter = ttc.map(t => fromBreeze(t))
 
   def inference(
     doc: SSV,
@@ -83,7 +83,7 @@ class LDAModel private[ml](
 
     topicDist.compact()
     topicDist :/= brzNorm(topicDist, 1)
-    breezeVector2SparkVector(topicDist).asInstanceOf[SSV]
+    fromBreeze(topicDist).asInstanceOf[SSV]
   }
 
   private[ml] def vector2Array(vec: BV[Int]): Array[Int] = {

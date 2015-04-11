@@ -79,7 +79,7 @@
               <exclude>org.apache.ant:*</exclude>
               <exclude>xmlenc:*</exclude>
               <exclude>hsqldb:*</exclude>
-              <exclude>org.scalanlp:*</exclude>
+              <!--<exclude>org.scalanlp:*</exclude>-->
               <exclude>org.apache.commons:*</exclude>
               <exclude>org.jblas:*</exclude>
               <exclude>com.google.code.findbugs:*</exclude>
@@ -93,6 +93,8 @@
               <exclude>com.ning:*</exclude>
               <exclude>org.scala-lang:*:*:*</exclude>
               <exclude>org.apache.hadoop.thirdparty.guava:*</exclude>
+              <exclude>net.sf.py4j:*</exclude>
+              <exclude>org.tachyonproject:*</exclude>
             </excludes>
           </artifactSet>
           <filters>
