@@ -20,7 +20,7 @@ package com.github.cloudml.zen.ml.clustering
 import java.lang.ref.SoftReference
 import java.util.Random
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, Vector => BV}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, Vector => BV, normalize => brzNormalize}
 import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.clustering.LDA._
 import com.github.cloudml.zen.ml.clustering.LDAUtils._
@@ -187,9 +187,8 @@ abstract class LDA private[ml](
       val startedAt = System.nanoTime()
       gibbsSampling(iter)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      logInfo(s"Gibbs sampling (Iteration $iter/$iterations) docLikelihood:      ${docLikelihood()}")
-      logInfo(s"Gibbs sampling (Iteration $iter/$iterations) wordLikelihood:      ${wordLikelihood()}")
-      logInfo(s"End Gibbs sampling  (Iteration $iter/$iterations) takes:      $elapsedSeconds seconds")
+      // logInfo(s"Gibbs sampling (Iteration $iter/$iterations) logPrior:      ${logPrior()}")
+      logInfo(s"End Gibbs sampling  (Iteration $iter/$iterations) takes:      $elapsedSeconds")
     }
   }
 
@@ -283,63 +282,31 @@ abstract class LDA private[ml](
     math.exp(-1 * termProb / totalSize)
   }
 
-  def docLikelihood(): Double = {
-    val alphaSum = alpha * numTopics
-    val zeroLLH = logGamma(alpha)
-    docVertices.map { case (_, docTopicCounter) =>
-      var probSum = logGamma(alphaSum) - numTopics * logGamma(alpha)
-      var numNoZeros = 0
-      docTopicCounter.activeIterator.filter(_._2 > 0).foreach { case (topic, cn) =>
-        numNoZeros += 1
-        probSum += logGamma(cn + alpha)
-      }
-      probSum + (numTopics - numNoZeros) * zeroLLH - logGamma(brzSum(docTopicCounter) + alphaSum)
-    }.sum()
-  }
-
-  def wordLikelihood(): Double = {
-    val zeroLLH = logGamma(beta)
-    termVertices.map { case (_, termTopicCounter) =>
-      var probSum = 0D
-      var numNoZeros = 0
-      termTopicCounter.activeIterator.filter(_._2 > 0).foreach { case (topic, cn) =>
-        numNoZeros += 1
-        probSum += logGamma(cn + beta)
-      }
-      probSum + (numTopics - numNoZeros) * zeroLLH
-    }.sum() + wordLikelihoodSummary()
-  }
-
-  private def wordLikelihoodSummary(): Double = {
-    val betaSum = beta * numTerms
-    var probSum = numTopics * (logGamma(betaSum) - numTerms * logGamma(beta))
-    for (topic <- 0 until numTopics) {
-      probSum -= logGamma(totalTopicCounter(topic) + betaSum)
+  /**
+   * Log probability of the current parameter estimate:
+   * log P(topics, topic distributions for docs | alpha, eta)
+   */
+  private[ml] def logPrior(): Double = {
+    // TODO: Optimizing Performance
+    // Term vertices: Compute phi_{wk}.  Use to compute prior log probability.
+    // Doc vertex: Compute theta_{kj}.  Use to compute prior log probability.
+    val N_k = totalTopicCounter
+    val smoothed_N_k = N_k.map(_.toDouble) + (numTerms * beta)
+    val seqOp: (Double, (VertexId, VD)) => Double = {
+      case (sumPrior: Double, vertex: (VertexId, VD)) =>
+        if (vertex._1 >= 0) {
+          val N_wk = vertex._2.map(_.toDouble)
+          val smoothed_N_wk: BV[Double] = N_wk + beta
+          val phi_wk: BV[Double] = smoothed_N_wk :/ smoothed_N_k
+          beta * brzSum(phi_wk.map(math.log))
+        } else {
+          val N_kj = vertex._2.map(_.toDouble)
+          val smoothed_N_kj: BV[Double] = N_kj + alpha
+          val theta_kj: BV[Double] = brzNormalize(smoothed_N_kj, 1.0)
+          alpha * brzSum(theta_kj.map(math.log))
+        }
     }
-    probSum
-  }
-
-  private def logGamma(xx: Double): Double = {
-    val cof = Array(
-      76.18009172947146, -86.50532032941677,
-      24.01409824083091, -1.231739572450155,
-      0.1208650973866179e-2, -0.5395239384953e-5)
-    var j = 0
-    var x = 0.0
-    var y = 0.0
-    var tmp1 = 0.0
-    var ser = 0.0
-    y = xx
-    x = xx
-    tmp1 = x + 5.5
-    tmp1 -= (x + 0.5) * Math.log(tmp1)
-    ser = 1.000000000190015
-    while (j < 6) {
-      y += 1
-      ser += cof(j) / y
-      j += 1
-    }
-    -tmp1 + Math.log(2.5066282746310005 * ser / x)
+    getCorpus.vertices.aggregate(0.0)(seqOp, _ + _)
   }
 }
 
