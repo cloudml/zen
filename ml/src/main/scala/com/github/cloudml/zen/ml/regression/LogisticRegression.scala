@@ -396,7 +396,7 @@ class LogisticRegressionMIS(
     if (useAdaGrad) {
       stepSize * min(iter / 11.0, 1.0)
     } else {
-      stepSize
+      stepSize / sqrt(10 + iter)
     }
   }
 }
