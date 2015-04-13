@@ -121,8 +121,10 @@ abstract class LDA private[ml](
     // completeCorpus.vertices.count()
     totalTopicCounter = collectTotalTopicCounter(corpus)
 
-    sampledCorpus.unpersist(blocking = false)
-    previousCorpus.unpersist(blocking = false)
+    previousCorpus.edges.unpersist(blocking = false)
+    previousCorpus.vertices.unpersist(blocking = false)
+    sampledCorpus.edges.unpersist(blocking = false)
+    sampledCorpus.vertices.unpersist(blocking = false)
     innerIter += 1
   }
 
