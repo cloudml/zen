@@ -18,14 +18,27 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-
   <groupId>com.github.cloudml.zen</groupId>
   <artifactId>zen-parent</artifactId>
   <version>0.01-SNAPSHOT</version>
   <packaging>pom</packaging>
-
-  <name>zen-parent</name>
-  <url>http://maven.apache.org</url>
+  <name>Zen Project Parent POM</name>
+  <url>https://github.com/cloudml/zen/</url>
+  <licenses>
+    <license>
+      <name>Apache 2.0 License</name>
+      <url>http://www.apache.org/licenses/LICENSE-2.0.html</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <id>witgo</id>
+      <name>GuoQiang Li</name>
+      <email>witgo@foxmail.com</email>
+      <url>https://github.com/witgo</url>
+    </developer>
+  </developers>
   <modules>
     <module>assembly</module>
     <module>ml</module>
@@ -45,7 +58,6 @@
     <CodeCacheSize>512m</CodeCacheSize>
     <zen.test.home>${session.executionRootDirectory}</zen.test.home>
   </properties>
-
   <dependencyManagement>
     <dependencies>
       <dependency>

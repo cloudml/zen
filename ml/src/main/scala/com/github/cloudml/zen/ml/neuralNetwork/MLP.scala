@@ -29,6 +29,7 @@ import org.apache.spark.mllib.optimization.{Gradient, LBFGS, Updater}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 
+@Experimental
 class MLP(
   val innerLayers: Array[Layer],
   val dropout: Array[Double]) extends Logging with Serializable {
@@ -170,6 +171,7 @@ class MLP(
   }
 }
 
+@Experimental
 object MLP extends Logging {
   def train(
     data: RDD[(SV, SV)],
@@ -237,7 +239,6 @@ object MLP extends Logging {
     mlp
   }
 
-  @Experimental
   def runLBFGS(
     trainingRDD: RDD[(SV, SV)],
     topology: Array[Int],
@@ -250,7 +251,6 @@ object MLP extends Logging {
       convergenceTol, weightCost)
   }
 
-  @Experimental
   def runLBFGS(
     data: RDD[(SV, SV)],
     mlp: MLP,

@@ -27,8 +27,8 @@
   </parent>
   <groupId>com.github.cloudml.zen</groupId>
   <artifactId>zen-examples</artifactId>
-  <name>zen-examples</name>
-  <url>http://maven.apache.org</url>
+  <name>Zen Project Examples</name>
+  <url>https://github.com/cloudml/zen/</url>
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>

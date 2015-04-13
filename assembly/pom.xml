@@ -27,8 +27,8 @@
   </parent>
   <groupId>com.github.cloudml.zen</groupId>
   <artifactId>zen-assembly</artifactId>
-  <name>zen-assembly</name>
-  <url>http://maven.apache.org</url>
+  <name>Zen Project Assembly</name>
+  <url>https://github.com/cloudml/zen/</url>
   <packaging>pom</packaging>
   <properties>
     <zen.jar.dir>scala-${scala.binary.version}</zen.jar.dir>

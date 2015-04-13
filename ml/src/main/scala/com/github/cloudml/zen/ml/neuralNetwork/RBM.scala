@@ -30,6 +30,7 @@ import org.apache.spark.mllib.optimization.Gradient
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 
+@Experimental
 class RBM(
   val weight: BDM[Double],
   val visibleBias: BDV[Double],
@@ -145,6 +146,7 @@ class RBM(
 
 }
 
+@Experimental
 object RBM extends Logging {
   def train(
     data: RDD[SV],
@@ -319,7 +321,6 @@ private[ml] class RBMGradient(
   }
 }
 
-@Experimental
 private[ml] class RBMAdaGradUpdater(
   val numIn: Int,
   val numOut: Int,

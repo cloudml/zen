@@ -18,9 +18,11 @@
 package com.github.cloudml.zen.ml.neuralNetwork
 
 import org.apache.spark.Logging
+import org.apache.spark.annotation.Experimental
 import org.apache.spark.mllib.linalg.{Vector => SV}
 import org.apache.spark.rdd.RDD
 
+@Experimental
 class DBN(val stackedRBM: StackedRBM)
   extends Logging with Serializable {
   lazy val mlp: MLP = {
@@ -36,6 +38,7 @@ class DBN(val stackedRBM: StackedRBM)
   }
 }
 
+@Experimental
 object DBN extends Logging {
   def train(
     data: RDD[(SV, SV)],

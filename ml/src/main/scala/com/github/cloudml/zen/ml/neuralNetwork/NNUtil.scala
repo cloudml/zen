@@ -26,10 +26,12 @@ import breeze.linalg.{DenseVector => BDV, DenseMatrix => BDM, Matrix => BM,
 max => brzMax, Axis => BrzAxis, sum => brzSum}
 
 import org.apache.spark.Logging
+import org.apache.spark.annotation.Experimental
 import org.apache.spark.mllib.linalg.{DenseMatrix => SDM, SparseMatrix => SSM, Matrix => SM,
 SparseVector => SSV, DenseVector => SDV, Vector => SV, Vectors, Matrices, BLAS}
 import com.github.cloudml.zen.ml.util.Utils
 
+@Experimental
 object NNUtil {
   def initializeBias(numOut: Int): BDV[Double] = {
     BDV.zeros[Double](numOut)

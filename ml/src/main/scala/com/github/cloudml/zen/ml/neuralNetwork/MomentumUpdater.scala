@@ -19,10 +19,12 @@ package com.github.cloudml.zen.ml.neuralNetwork
 
 import com.github.cloudml.zen.ml.linalg.BLAS
 import com.github.cloudml.zen.ml.util.SparkUtils
+import org.apache.spark.annotation.Experimental
 
 import org.apache.spark.mllib.linalg.{Vector => SV, DenseVector => SDV}
 import org.apache.spark.mllib.optimization.Updater
 
+@Experimental
 class MomentumUpdater(val momentum: Double) extends Updater {
 
   assert(momentum > 0 && momentum < 1)

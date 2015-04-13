@@ -20,10 +20,12 @@ package com.github.cloudml.zen.ml.neuralNetwork
 import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, sum => brzSum}
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import org.apache.spark.Logging
+import org.apache.spark.annotation.Experimental
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.mllib.linalg.{DenseMatrix => SDM, DenseVector => SDV, Matrix => SM, SparseMatrix => SSM, SparseVector => SSV, Vector => SV}
 import org.apache.spark.rdd.RDD
 
+@Experimental
 class StackedRBM(val innerRBMs: Array[RBM])
   extends Logging with Serializable {
   def this(topology: Array[Int]) {

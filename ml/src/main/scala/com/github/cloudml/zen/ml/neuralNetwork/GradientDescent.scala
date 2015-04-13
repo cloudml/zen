@@ -32,6 +32,7 @@ import scala.collection.mutable.ArrayBuffer
  * @param gradient Gradient function to be used.
  * @param updater Updater to be used to update weights after every iteration.
  */
+@Experimental
 class GradientDescent(private var gradient: Gradient, private var updater: Updater)
   extends Optimizer with Logging {
 
