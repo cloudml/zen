@@ -304,11 +304,22 @@ object LDA {
   private[ml] type ED = Array[Count]
   private[ml] type VD = BSV[Count]
 
+  /**
+   * 训练 LDA
+   * @param docs 训练数据 (docId, features) docId大于等于0
+   * @param numTopics 小数量推荐2048 大数据量推荐5000以上
+   * @param totalIter  迭代次数
+   * @param alpha      推荐设置为 (5.0 /numTopics)
+   * @param beta       推荐设置为 0.001 - 0.1
+   * @param alphaAS    推荐设置为 0.01 - 1.0
+   * @param useLightLDA 是否使用LightLDA 短文本推荐设置为 false
+   * @return LDAModel
+   */
   def train(
     docs: RDD[(Long, SV)],
     numTopics: Int = 2048,
     totalIter: Int = 150,
-    alpha: Double = 0.01,
+    alpha: Double = 0.001,
     beta: Double = 0.01,
     alphaAS: Double = 0.1,
     useLightLDA: Boolean = false): LDAModel = {
@@ -323,7 +334,17 @@ object LDA {
   }
 
   /**
+   * 训练并保存model 储存为LibSVM格式 每行是:
    * topicID termID+1:counter termID+1:counter ..
+   * @param docs 训练数据 (docId, features) docId大于等于0
+   * @param dir   model 保存的目录
+   * @param numTopics 小数量推荐2048 大数据量推荐5000以上
+   * @param totalIter  迭代次数
+   * @param alpha      推荐设置为 (5.0 /numTopics)
+   * @param beta       推荐设置为 0.001 - 0.1
+   * @param alphaAS    推荐设置为 0.01 - 1.0
+   * @param useLightLDA 是否使用LightLDA 短文本推荐设置为 false
+   * @return LDAModel
    */
   def trainAndSaveModel(
     docs: RDD[(Long, SV)],
@@ -353,6 +374,15 @@ object LDA {
     MLUtils.saveAsLibSVMFile(rdd, dir)
   }
 
+  /**
+   * 增量训练
+   * @param docs
+   * @param computedModel
+   * @param alphaAS
+   * @param totalIter
+   * @param useLightLDA
+   * @return
+   */
   def incrementalTrain(
     docs: RDD[(Long, SV)],
     computedModel: LDAModel,
