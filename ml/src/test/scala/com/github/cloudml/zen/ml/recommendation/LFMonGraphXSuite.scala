@@ -17,6 +17,7 @@
 
 package org.apache.spark.mllib.classification
 
+import org.apache.spark.graphx.VertexId
 import org.apache.spark.mllib.classification.LogisticRegressionSuite._
 import org.apache.spark.mllib.linalg.Vectors
 import org.apache.spark.mllib.regression.LabeledPoint
@@ -27,15 +28,23 @@ class LFMonGraphXSuite extends FunSuite with LocalClusterSparkContext with Match
   test("10M dataSet") {
 
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-    val dataSetFile = s"${sparkHome}/data/mllib/lr_data.txt"
+    val traindataSetFile = s"${sparkHome}/data/mllib/list_join_action_data_1130"
+    val testdataSetFile = s"${sparkHome}/data/mllib/m100r0.validate"
     // val dataSetFile = s"${sparkHome}/data/mllib/kdda.10m.txt"
     // val dataSetFile = s"${sparkHome}/data/mllib/url_combined.10m.txt"
     //val dataSet = sc.parallelize(generateLogisticInput(1.0, 1.0, nPoints = 100, seed = 42), 2)
     //println(dataSet.collect().mkString("\n"))
     //val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile)
-    val dataSet = sc.textFile(dataSetFile).map{line =>
-      val parts = line.split(" ")
-      LabeledPoint(parts(0).toDouble, Vectors.dense(parts.slice(1, parts.length).map(_.toDouble)))
+    val traindataSet = sc.textFile(traindataSetFile).map{line =>
+      val parts = line.split("\t")
+      //LabeledPoint(parts(3).toDouble, Vectors.dense(parts.slice(0, parts.length).map(_.toDouble)))
+      LabeledPoint(parts(3).toDouble, Vectors.sparse(2, Array(parts(0).toInt, 100000000 + parts(1).toInt), Array(1.0, 1.0)))
+    }
+
+
+    val validateSet = sc.textFile(testdataSetFile).map{ line =>
+      val parts = line.split("\t")
+      (parts(0), parts(1), Vectors.sparse(2, Array(parts(0).toInt, 100000000 + parts(1).toInt), Array(1.0, 1.0)))
     }
 
 
@@ -45,11 +54,17 @@ class LFMonGraphXSuite extends FunSuite with LocalClusterSparkContext with Match
     //    val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile).repartition(72)
 
 
-    val stepSize = 1e-1
-    val numIterations = 100
+    val stepSize = 0.1
+    val numIterations = 10
     val regParam = 1e-2
-    val trainSet = dataSet.cache()
-    LFMonGraphX.train(trainSet, numIterations, stepSize, 0.0, 0.00, 0)
+    val rank = 20
+    val trainSet = traindataSet.cache()
+    val model = LFMonGraphX.train(trainSet, numIterations, stepSize, 0.0, 0.00, rank)
+    val result = LFMonGraphX.predict(validateSet, model, rank)
+    println(result.count())
+    result.map{case (id:VertexId, (user_id, item_id, score)) => user_id + "\t" + item_id + "\t" + score}.saveAsTextFile(s"${sparkHome}/data/mllib/score")
+    //result.take(10).foreach{case (id:VertexId, (user_id:String, item_id:String, value: Double)) => println(id + ":" + user_id + ":" + item_id + ":" + value)}
+    //result.saveAsTextFile()
 
 
     //    val trainSet = dataSet.map(t => {
