@@ -74,8 +74,8 @@ abstract class LogisticRegression(
 
   // ALL
   @transient protected var margin: VertexRDD[Double] = null
-  @transient protected var delta: VertexRDD[(Double, Double)] = null
-  @transient protected var deltaSum: VertexRDD[Double] = null
+  @transient protected var gradientSum: VertexRDD[Double] = null
+  @transient protected var deltaSum: VertexRDD[Array[Double]] = null
   @transient protected var gradient: VertexRDD[Double] = null
   @transient protected var vertices = dataSet.vertices
   @transient protected var previousVertices = vertices
@@ -110,11 +110,12 @@ abstract class LogisticRegression(
       previousVertices = dataSet.vertices
       margin = forward(iter)
       gradient = backward(margin, iter)
-      gradient = updateDeltaSum(gradient, iter)
+      gradient = updateGradientSum(gradient, iter)
+      // gradient = updateDeltaSum(gradient, iter)
 
       val tis = thisIterStepSize(iter)
       vertices = updateWeight(gradient, iter, tis, stepSize / sqrt(iter))
-      checkpoint()
+      checkpointDataSet()
       vertices.count()
       dataSet = GraphImpl(vertices, edges)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
@@ -148,21 +149,41 @@ abstract class LogisticRegression(
     new LogisticRegressionModel(new SDV(featureData), 0.0, numFeatures, 2)
   }
 
+  protected def updateGradientSum(gradient: VertexRDD[Double], iter: Int): VertexRDD[Double] = {
+    if (gradient.getStorageLevel == StorageLevel.NONE) {
+      gradient.setName(s"gradient-$iter").persist(storageLevel)
+    }
+    if (useAdaGrad) {
+      val delta = adaGrad(gradientSum, gradient, 1e-4, 1.0)
+      delta.setName(s"delta-$iter").persist(storageLevel).count()
+
+      gradient.unpersist(blocking = false)
+      val newGradient = delta.mapValues(_.head).setName(s"gradient-$iter").persist(storageLevel)
+      newGradient.count()
+
+      if (gradientSum != null) gradientSum.unpersist(blocking = false)
+      gradientSum = delta.mapValues(_.last).setName(s"deltaSum-$iter").persist(storageLevel)
+      checkpointGradientSum()
+      gradientSum.count()
+      delta.unpersist(blocking = false)
+      newGradient
+    } else {
+      gradient
+    }
+  }
+
   protected def updateDeltaSum(gradient: VertexRDD[Double], iter: Int): VertexRDD[Double] = {
     if (gradient.getStorageLevel == StorageLevel.NONE) {
       gradient.setName(s"gradient-$iter").persist(storageLevel)
     }
     if (useAdaGrad) {
-      // delta = adaGrad(deltaSum, gradient, 1.0, 1e-2, 1 - 1e-2)
-      delta = adaGrad(deltaSum, gradient, 1.0, 1e-4, 1)
+      val delta = adaDelta(deltaSum, gradient, 1e-8, 0.9)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
-
       gradient.unpersist(blocking = false)
-      val newGradient = delta.mapValues(_._2).setName(s"gradient-$iter").persist(storageLevel)
+      val newGradient = delta.mapValues(_.head).setName(s"gradient-$iter").persist(storageLevel)
       newGradient.count()
-
       if (deltaSum != null) deltaSum.unpersist(blocking = false)
-      deltaSum = delta.mapValues(_._1).setName(s"deltaSum-$iter").persist(storageLevel)
+      deltaSum = delta.mapValues(_.tail).setName(s"deltaSum-$iter").persist(storageLevel)
       deltaSum.count()
       delta.unpersist(blocking = false)
       newGradient
@@ -195,29 +216,55 @@ abstract class LogisticRegression(
   }
 
   protected def adaGrad(
-    deltaSum: VertexRDD[Double],
+    gradientSum: VertexRDD[Double],
     gradient: VertexRDD[Double],
-    gamma: Double,
     epsilon: Double,
-    rho: Double): VertexRDD[(Double, Double)] = {
-    val delta = if (deltaSum == null) {
+    rho: Double): VertexRDD[Array[Double]] = {
+    val delta = if (gradientSum == null) {
       gradient.mapValues(t => 0.0)
+    }
+    else {
+      gradientSum
+    }
+    delta.innerJoin(gradient) { (_, gradSum, grad) =>
+      val newGradSum = gradSum * rho + pow(grad, 2)
+      val newGrad = grad / (epsilon + sqrt(newGradSum))
+      Array(newGrad, newGradSum)
+    }
+  }
+
+  protected def adaDelta(
+    deltaSum: VertexRDD[Array[Double]],
+    gradient: VertexRDD[Double],
+    epsilon: Double,
+    rho: Double): VertexRDD[Array[Double]] = {
+    val delta = if (deltaSum == null) {
+      gradient.mapValues(t => Array(0.0, 0.0))
     }
     else {
       deltaSum
     }
-    delta.innerJoin(gradient) { (_, gradSum, grad) =>
-      val newGradSum = gradSum * rho + pow(grad, 2)
-      val newGrad = grad * gamma / (epsilon + sqrt(newGradSum))
-      (newGradSum, newGrad)
+    delta.innerJoin(gradient) { case (_, Array(ds, gs), g) =>
+      val ngs = rho * gs + (1 - rho) * pow(g, 2)
+      val rms = sqrt(ds + epsilon) / sqrt(ngs + epsilon)
+      val ng = rms * g
+      val nds = rho * ds + (1 - rho) * pow(ng, 2)
+      Array(ng, nds, ngs)
     }
   }
 
-  protected def checkpoint(): Unit = {
+  protected def checkpointDataSet(): Unit = {
     val sc = vertices.sparkContext
     if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
       vertices.checkpoint()
       edges.checkpoint()
+    }
+  }
+
+  protected def checkpointGradientSum(): Unit = {
+    val sc = gradientSum.sparkContext
+    if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
+      if (gradientSum != null) gradientSum.checkpoint()
       if (deltaSum != null) deltaSum.checkpoint()
     }
   }
@@ -225,7 +272,6 @@ abstract class LogisticRegression(
   protected def unpersistVertices(): Unit = {
     if (previousVertices != null) previousVertices.unpersist(blocking = false)
     if (gradient != null) gradient.unpersist(blocking = false)
-    if (delta != null) delta.unpersist(blocking = false)
     if (margin != null) margin.unpersist(blocking = false)
   }
 }
@@ -320,7 +366,7 @@ class LogisticRegressionMIS(
     this(initializeDataSet(input, storageLevel), stepSize, regParam, useAdaGrad, storageLevel)
   }
 
-  @transient private var qWithLabel: VertexRDD[(Double, Double)] = null
+  @transient private var qWithLabel: VertexRDD[Double] = null
   private var epsilon = 1e-4
 
   def setEpsilon(eps: Double): this.type = {
@@ -328,25 +374,28 @@ class LogisticRegressionMIS(
     this
   }
 
-  override protected def backward(q: VertexRDD[VD], iter: Int): VertexRDD[Double] = {
-    qWithLabel = dataSet.vertices.leftJoin(q.mapValues { z =>
+  override protected def backward(z: VertexRDD[VD], iter: Int): VertexRDD[Double] = {
+    val q = z.mapValues { z =>
       val q = 1.0 / (1.0 + exp(z))
       // if (q.isInfinite || q.isNaN || q == 0.0) println(z)
       assert(q != 0.0)
       q
-    }) { (_, label, qv) => (label, qv.getOrElse(0.0)) }
+    }
+    qWithLabel = dataSet.vertices.leftJoin(q) { (_, label, qv) =>
+      qv.map(q => if (label > 0) q else -q).getOrElse(0)
+    }
     qWithLabel.setName(s"qWithLabel-$iter").persist(storageLevel)
     GraphImpl(qWithLabel, dataSet.edges).aggregateMessages[Array[Double]](ctx => {
       // val sampleId = ctx.dstId
       // val featureId = ctx.srcId
       val x = ctx.attr
-      val y = ctx.dstAttr._1
-      val q = ctx.dstAttr._2 * abs(x)
+      val qs = ctx.dstAttr
+      val q = qs * x
       assert(q != 0.0)
-      val mu = if (signum(x * y) > 0.0) {
+      val mu = if (q > 0.0) {
         Array(q, 0.0)
       } else {
-        Array(0.0, q)
+        Array(0.0, -q)
       }
       ctx.sendToSrc(mu)
     }, (a, b) => Array(a(0) + b(0), a(1) + b(1)), TripletFields.Dst).mapValues { mu =>
