@@ -421,7 +421,7 @@ object LDA {
     edges.persist(storageLevel)
     // degree-based hashing
     val numPartitions = edges.partitions.size
-    val partitionStrategy = new DBHPartitioner(numPartitions)
+    val partitionStrategy = new DBHPartitioner(numPartitions, 0)
     val degrees = edges.flatMap(t => Seq((t.dstId, 1), (t.srcId, 1))).reduceByKey(_ + _).persist(storageLevel)
     val dataSet = GraphImpl(degrees, edges, 0, storageLevel, storageLevel)
     val newEdges = dataSet.triplets.mapPartitions { iter =>
@@ -435,9 +435,11 @@ object LDA {
     corpus = updateCounter(corpus, numTopics).cache()
     corpus.vertices.count()
     corpus.edges.count()
+    newEdges.unpersist(blocking = false)
     edges.unpersist(blocking = false)
     degrees.unpersist(blocking = false)
-    dataSet.unpersist(blocking = false)
+    dataSet.edges.unpersist(blocking = false)
+    dataSet.vertices.unpersist(blocking = false)
     corpus
   }
 

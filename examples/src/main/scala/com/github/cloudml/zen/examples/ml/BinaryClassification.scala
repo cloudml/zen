@@ -97,7 +97,7 @@ object BinaryClassification {
     }
     Logger.getRootLogger.setLevel(Level.WARN)
     val sc = new SparkContext(conf)
-    val dataSet = MLUtils.loadLibSVMFile(sc, input)
+    val dataSet = MLUtils.loadLibSVMFile(sc, input).zipWithUniqueId().map(_.swap).cache()
     val model = LogisticRegression.trainMIS(dataSet, numIterations, stepSize, l1, epsilon, useAdaGrad)
     model.save(sc, out)
   }

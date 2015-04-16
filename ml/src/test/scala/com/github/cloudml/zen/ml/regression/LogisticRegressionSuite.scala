@@ -34,7 +34,7 @@ class LogisticRegressionSuite extends FunSuite with SharedSparkContext with Matc
 
     val maxIter = 10
     val stepSize = 1 / (2 * max)
-    val trainDataSet = dataSet.zipWithIndex().map { case (LabeledPoint(label, features), id) =>
+    val trainDataSet = dataSet.zipWithUniqueId().map { case (LabeledPoint(label, features), id) =>
       val newLabel = if (label > 0.0) 1.0 else -1.0
       (id, LabeledPoint(newLabel, features))
     }

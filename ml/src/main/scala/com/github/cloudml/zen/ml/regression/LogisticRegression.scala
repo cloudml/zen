@@ -79,7 +79,7 @@ abstract class LogisticRegression(
   @transient protected var gradient: VertexRDD[Double] = null
   @transient protected var vertices = dataSet.vertices
   @transient protected var previousVertices = vertices
-  @transient protected val edges = dataSet.edges.asInstanceOf[EdgeRDDImpl[ED, _]]
+  @transient protected var edges = dataSet.edges.asInstanceOf[EdgeRDDImpl[ED, _]]
     .mapEdgePartitions((pid, part) => part.withoutVertexAttributes[VD]).setName("edges")
 
   val numFeatures: Long = features.count()
@@ -257,7 +257,12 @@ abstract class LogisticRegression(
     val sc = vertices.sparkContext
     if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
       vertices.checkpoint()
-      edges.checkpoint()
+      if (!edges.isCheckpointed) {
+        edges = edges.mapValues(t => t.attr)
+        edges = edges.persist(storageLevel).setName("edges")
+        edges.checkpoint()
+        edges.count()
+      }
     }
   }
 
@@ -466,18 +471,18 @@ object LogisticRegression {
    */
   @Experimental
   def trainSGD(
-    input: RDD[LabeledPoint],
+    input: RDD[(Long, LabeledPoint)],
     numIterations: Int,
     stepSize: Double,
     regParam: Double,
     useAdaGrad: Boolean = false,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): LogisticRegressionModel = {
-    val data = input.zipWithIndex().map { case (LabeledPoint(label, features), id) =>
+    val data = input.map { case (id, LabeledPoint(label, features)) =>
+      assert(id >= 0.0, s"sampleId $id less than 0")
       val newLabel = if (label > 0.0) 1.0 else 0.0
       (id, LabeledPoint(newLabel, features))
-    }.persist(storageLevel)
+    }
     val lr = new LogisticRegressionSGD(data, stepSize, regParam, useAdaGrad, storageLevel)
-    data.unpersist()
     lr.run(numIterations)
     lr.saveModel
   }
@@ -495,20 +500,20 @@ object LogisticRegression {
    * @param storageLevel 缓存级别  中小型训练集推荐设置为MEMORY_AND_DISK,大型数据集推荐设置为DISK_ONLY
    */
   def trainMIS(
-    input: RDD[LabeledPoint],
+    input: RDD[(Long, LabeledPoint)],
     numIterations: Int,
     stepSize: Double,
     regParam: Double,
     epsilon: Double = 1e-3,
     useAdaGrad: Boolean = false,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): LogisticRegressionModel = {
-    val data = input.zipWithIndex().map { case (LabeledPoint(label, features), id) =>
+    val data = input.map { case (id, LabeledPoint(label, features)) =>
+      assert(id >= 0.0, s"sampleId $id less than 0")
       val newLabel = if (label > 0.0) 1.0 else -1.0
       features.activeValuesIterator.foreach(t => assert(t >= 0.0, s"feature $t less than 0"))
       (id, LabeledPoint(newLabel, features))
-    }.persist(storageLevel)
+    }
     val lr = new LogisticRegressionMIS(data, stepSize, regParam, useAdaGrad, storageLevel)
-    data.unpersist()
     lr.setEpsilon(epsilon).run(numIterations)
     lr.saveModel()
   }
@@ -533,9 +538,11 @@ object LogisticRegression {
     val degrees = edges.flatMap(t => Seq((t.dstId, 1), (t.srcId, 1))).
       reduceByKey(_ + _).persist(storageLevel)
     val dataSet = GraphImpl(degrees, edges, 0, storageLevel, storageLevel)
+    dataSet.vertices.setName("init-vertices")
+    dataSet.edges.setName("init-edges")
     dataSet.persist(storageLevel)
     val numPartitions = edges.partitions.size
-    val partitionStrategy = new DBHPartitioner(numPartitions)
+    val partitionStrategy = new DBHPartitioner(numPartitions, 0)
     val newEdges = dataSet.triplets.mapPartitions { itr =>
       itr.map { e =>
         (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
@@ -549,7 +556,9 @@ object LogisticRegression {
     newDataSet.vertices.count()
     newDataSet.edges.count()
     degrees.unpersist(blocking = false)
-    dataSet.unpersist(blocking = false)
+    dataSet.edges.unpersist(blocking = false)
+    dataSet.vertices.unpersist(blocking = false)
+    newEdges.unpersist(blocking = false)
     edges.unpersist(blocking = false)
     vertices.unpersist(blocking = false)
     newDataSet
