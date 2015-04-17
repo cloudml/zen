@@ -99,6 +99,19 @@ class LDAModel private[ml](
     sent
   }
 
+  private[ml] def vectorDouble2Array(vec: BV[Double]): Array[Int] = {
+    val docLen = brzSum(vec)
+    var offset = 0
+    val sent = new Array[Int](docLen.toInt)
+    vec.activeIterator.foreach { case (term, cn) =>
+      for (i <- 0 until cn.toInt) {
+        sent(offset) = term
+        offset += 1
+      }
+    }
+    sent
+  }
+
   private[ml] def uniformDistSampler(
     tokens: Array[Int],
     topics: Array[Int]): BSV[Double] = {

@@ -413,71 +413,91 @@ object LDA {
     computedModel: Broadcast[LDAModel] = null): Graph[VD, ED] = {
     val edges = docs.mapPartitionsWithIndex((pid, iter) => {
       val gen = new Random(pid + 117)
-      val model: LDAModel = if (computedModel == null) null else computedModel.value
       iter.flatMap { case (docId, doc) =>
-        initializeEdges(gen, toBreeze(doc).map(_.toInt), docId, numTopics, model)
+        if (computedModel == null) {
+          initializeEdges(gen, doc, docId, numTopics)
+        } else {
+          initEdgesWithComputedModel(gen, doc, docId, numTopics, computedModel.value)
+        }
       }
     })
     edges.persist(storageLevel)
-    // degree-based hashing
+    var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
+    corpus.persist(storageLevel)
+    corpus.vertices.count()
+    corpus.edges.count()
+    edges.unpersist(blocking = false)
+    corpus = partitionByDBH(corpus, storageLevel)
+    updateCounter(corpus, numTopics)
+  }
+
+  private def partitionByDBH(corpus: Graph[VD, ED], storageLevel: StorageLevel): Graph[VD, ED] = {
+    val edges = corpus.edges
+    val degrees = corpus.degrees.setName("degrees").persist(storageLevel)
+    val degreesGraph = GraphImpl(degrees, edges)
+    degreesGraph.persist(storageLevel)
     val numPartitions = edges.partitions.size
     val partitionStrategy = new DBHPartitioner(numPartitions, 0)
-    val degrees = edges.flatMap(t => Seq((t.dstId, 1), (t.srcId, 1))).reduceByKey(_ + _).persist(storageLevel)
-    val dataSet = GraphImpl(degrees, edges, 0, storageLevel, storageLevel)
-    val newEdges = dataSet.triplets.mapPartitions { iter =>
+    val newEdges = degreesGraph.triplets.mapPartitions { iter =>
       iter.map { e =>
         (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
       }
-    }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
-    var corpus: Graph[VD, ED] = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
-    // end degree-based hashing
-    // corpus = corpus.partitionBy(PartitionStrategy.EdgePartition2D)
-    corpus = updateCounter(corpus, numTopics).cache()
-    corpus.vertices.count()
-    corpus.edges.count()
-    newEdges.unpersist(blocking = false)
-    edges.unpersist(blocking = false)
+    }.partitionBy(new HashPartitioner(numPartitions)).map(_._2).persist(storageLevel)
+    val dataSet = Graph.fromEdges(newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
+    dataSet.persist(storageLevel)
+    dataSet.vertices.count()
+    dataSet.edges.count()
     degrees.unpersist(blocking = false)
-    dataSet.edges.unpersist(blocking = false)
-    dataSet.vertices.unpersist(blocking = false)
-    corpus
+    degreesGraph.vertices.unpersist(blocking = false)
+    degreesGraph.edges.unpersist(blocking = false)
+    corpus.vertices.unpersist(blocking = false)
+    corpus.edges.unpersist(blocking = false)
+    newEdges.unpersist(blocking = false)
+    dataSet
   }
 
   private def initializeEdges(
     gen: Random,
-    doc: BV[Int],
+    doc: SV,
+    docId: DocId,
+    numTopics: Int): Iterator[Edge[ED]] = {
+    assert(docId >= 0)
+    val newDocId: DocId = genNewDocId(docId)
+    doc.activeIterator.filter(_._2 > 0).map { case (termId, counter) =>
+      val topics = new Array[Int](counter.toInt)
+      for (i <- 0 until counter.toInt) {
+        topics(i) = gen.nextInt(numTopics)
+      }
+      Edge(termId, newDocId, topics)
+    }
+  }
+
+  private def initEdgesWithComputedModel(
+    gen: Random,
+    doc: SV,
     docId: DocId,
     numTopics: Int,
-    computedModel: LDAModel = null): Array[Edge[ED]] = {
+    computedModel: LDAModel = null): Iterator[Edge[ED]] = {
     assert(docId >= 0)
-    val newDocId: DocId = -(docId + 1L)
-    val edges = if (computedModel == null) {
-      doc.activeIterator.filter(_._2 > 0).map { case (termId, counter) =>
-        val topics = new Array[Int](counter)
-        for (i <- 0 until counter) {
-          topics(i) = gen.nextInt(numTopics)
-        }
-        Edge(termId, newDocId, topics)
-      }.toArray
+    val newDocId: DocId = genNewDocId(docId)
+    computedModel.setSeed(gen.nextInt())
+    val tokens = computedModel.vectorDouble2Array(doc)
+    val topics = new Array[Int](tokens.length)
+    var docTopicCounter = computedModel.uniformDistSampler(tokens, topics)
+    for (t <- 0 until 15) {
+      docTopicCounter = computedModel.sampleTokens(docTopicCounter,
+        tokens, topics)
     }
-    else {
-      computedModel.setSeed(gen.nextInt())
-      val tokens = computedModel.vector2Array(doc)
-      val topics = new Array[Int](tokens.length)
-      var docTopicCounter = computedModel.uniformDistSampler(tokens, topics)
-      for (t <- 0 until 15) {
-        docTopicCounter = computedModel.sampleTokens(docTopicCounter,
-          tokens, topics)
-      }
-      doc.activeIterator.filter(_._2 > 0).map { case (term, counter) =>
-        val ev = topics.zipWithIndex.filter { case (topic, offset) =>
-          term == tokens(offset)
-        }.map(_._1)
-        Edge(term, newDocId, ev)
-      }.toArray
+    doc.activeIterator.filter(_._2 > 0).map { case (term, counter) =>
+      val ev = topics.zipWithIndex.filter { case (topic, offset) =>
+        term == tokens(offset)
+      }.map(_._1)
+      Edge(term, newDocId, ev)
     }
-    assert(edges.length > 0)
-    edges
+  }
+
+  private def genNewDocId(docId: Long): Long = {
+    -(docId + 1L)
   }
 
   private[ml] def sampleSV(gen: Random, table: Table, sv: VD, currentTopic: Int): Int = {
