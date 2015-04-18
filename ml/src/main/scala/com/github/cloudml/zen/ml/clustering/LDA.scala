@@ -177,8 +177,8 @@ abstract class LDA private[ml](
       val startedAt = System.nanoTime()
       gibbsSampling(iter)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      // logInfo(s"Gibbs sampling (Iteration $iter/$iterations) logPrior:      ${logPrior()}")
-      logInfo(s"End Gibbs sampling  (Iteration $iter/$iterations) takes:      $elapsedSeconds")
+      // logInfo(s"Gibbs sampling (Iteration $iter/$iterations):  ${perplexity()}")
+      logInfo(s"End Gibbs sampling  (Iteration $iter/$iterations) takes:  $elapsedSeconds")
     }
   }
 
@@ -272,30 +272,6 @@ abstract class LDA private[ml](
     math.exp(-1 * termProb / totalSize)
   }
 
-  /**
-   * Log probability of the current parameter estimate:
-   * log P(topics, topic distributions for docs | alpha, eta)
-   */
-  private[ml] def logPrior(): Double = {
-    // TODO: Optimizing Performance
-    // Term vertices: Compute phi_{wk}.  Use to compute prior log probability.
-    // Doc vertex: Compute theta_{kj}.  Use to compute prior log probability.
-    val N_k = totalTopicCounter
-    val smoothed_N_k = N_k.map(_.toDouble) + (numTerms * beta)
-    getCorpus.vertices.map { vertex =>
-      if (vertex._1 >= 0) {
-        val N_wk = vertex._2.map(_.toDouble)
-        val smoothed_N_wk: BV[Double] = N_wk + beta
-        val phi_wk: BV[Double] = smoothed_N_wk :/ smoothed_N_k
-        beta * brzSum(phi_wk.map(math.log))
-      } else {
-        val N_kj = vertex._2.map(_.toDouble)
-        val smoothed_N_kj: BV[Double] = N_kj + alpha
-        val theta_kj: BV[Double] = brzNormalize(smoothed_N_kj, 1.0)
-        alpha * brzSum(theta_kj.map(math.log))
-      }
-    }.sum
-  }
 }
 
 object LDA {
