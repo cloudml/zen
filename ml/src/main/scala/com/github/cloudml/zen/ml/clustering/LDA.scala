@@ -20,7 +20,7 @@ package com.github.cloudml.zen.ml.clustering
 import java.lang.ref.SoftReference
 import java.util.Random
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, Vector => BV}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, Vector => BV, normalize => brzNormalize}
 import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.clustering.LDA._
 import com.github.cloudml.zen.ml.clustering.LDAUtils._
@@ -45,19 +45,7 @@ abstract class LDA private[ml](
   private var alpha: Double,
   private var beta: Double,
   private var alphaAS: Double,
-  private var storageLevel: StorageLevel)
-  extends Serializable with Logging {
-
-  def this(docs: RDD[(DocId, SSV)],
-    numTopics: Int,
-    alpha: Double,
-    beta: Double,
-    alphaAS: Double,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK,
-    computedModel: Broadcast[LDAModel] = null) {
-    this(initializeCorpus(docs, numTopics, storageLevel, computedModel),
-      numTopics, docs.first()._2.size, alpha, beta, alphaAS, storageLevel)
-  }
+  private var storageLevel: StorageLevel) extends Serializable with Logging {
 
   /**
    * 语料库文档数
@@ -133,8 +121,10 @@ abstract class LDA private[ml](
     // completeCorpus.vertices.count()
     totalTopicCounter = collectTotalTopicCounter(corpus)
 
-    sampledCorpus.unpersist(blocking = false)
-    previousCorpus.unpersist(blocking = false)
+    previousCorpus.edges.unpersist(blocking = false)
+    previousCorpus.vertices.unpersist(blocking = false)
+    sampledCorpus.edges.unpersist(blocking = false)
+    sampledCorpus.vertices.unpersist(blocking = false)
     innerIter += 1
   }
 
@@ -183,12 +173,12 @@ abstract class LDA private[ml](
 
   def runGibbsSampling(iterations: Int): Unit = {
     for (iter <- 1 to iterations) {
-      // logInfo(s"Gibbs sampling perplexity (Iteration $iter/$iterations): ${perplexity}")
       logInfo(s"Start Gibbs sampling (Iteration $iter/$iterations)")
       val startedAt = System.nanoTime()
       gibbsSampling(iter)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      logInfo(s"Gibbs sampling  (Iteration $iter/$iterations): $elapsedSeconds")
+      // logInfo(s"Gibbs sampling (Iteration $iter/$iterations):  ${perplexity()}")
+      logInfo(s"End Gibbs sampling  (Iteration $iter/$iterations) takes:  $elapsedSeconds")
     }
   }
 
@@ -281,6 +271,7 @@ abstract class LDA private[ml](
 
     math.exp(-1 * termProb / totalSize)
   }
+
 }
 
 object LDA {
@@ -291,10 +282,22 @@ object LDA {
   private[ml] type ED = Array[Count]
   private[ml] type VD = BSV[Count]
 
-  def train(docs: RDD[(DocId, SSV)],
+  /**
+   * 训练 LDA
+   * @param docs 训练数据 (docId, features) docId大于等于0
+   * @param numTopics 小数量推荐2048 大数据量推荐5000以上
+   * @param totalIter  迭代次数
+   * @param alpha      推荐设置为 (5.0 /numTopics)
+   * @param beta       推荐设置为 0.001 - 0.1
+   * @param alphaAS    推荐设置为 0.01 - 1.0
+   * @param useLightLDA 是否使用LightLDA 短文本推荐设置为 false
+   * @return LDAModel
+   */
+  def train(
+    docs: RDD[(Long, SV)],
     numTopics: Int = 2048,
     totalIter: Int = 150,
-    alpha: Double = 0.01,
+    alpha: Double = 0.001,
     beta: Double = 0.01,
     alphaAS: Double = 0.1,
     useLightLDA: Boolean = false): LDAModel = {
@@ -309,10 +312,20 @@ object LDA {
   }
 
   /**
+   * 训练并保存model 储存为LibSVM格式 每行是:
    * topicID termID+1:counter termID+1:counter ..
+   * @param docs 训练数据 (docId, features) docId大于等于0
+   * @param dir   model 保存的目录
+   * @param numTopics 小数量推荐2048 大数据量推荐5000以上
+   * @param totalIter  迭代次数
+   * @param alpha      推荐设置为 (5.0 /numTopics)
+   * @param beta       推荐设置为 0.001 - 0.1
+   * @param alphaAS    推荐设置为 0.01 - 1.0
+   * @param useLightLDA 是否使用LightLDA 短文本推荐设置为 false
+   * @return LDAModel
    */
   def trainAndSaveModel(
-    docs: RDD[(DocId, SSV)],
+    docs: RDD[(Long, SV)],
     dir: String,
     numTopics: Int = 2048,
     totalIter: Int = 150,
@@ -334,13 +347,22 @@ object LDA {
         (topic, sv)
       }
     }.reduceByKey { (a, b) => a + b }.map { case (topic, sv) =>
-      LabeledPoint(topic.toDouble, breezeVector2SparkVector(sv))
+      LabeledPoint(topic.toDouble, fromBreeze(sv))
     }
     MLUtils.saveAsLibSVMFile(rdd, dir)
   }
 
+  /**
+   * 增量训练
+   * @param docs
+   * @param computedModel
+   * @param alphaAS
+   * @param totalIter
+   * @param useLightLDA
+   * @return
+   */
   def incrementalTrain(
-    docs: RDD[(DocId, SSV)],
+    docs: RDD[(Long, SV)],
     computedModel: LDAModel,
     alphaAS: Double = 0.1,
     totalIter: Int = 150,
@@ -361,77 +383,97 @@ object LDA {
   }
 
   private[ml] def initializeCorpus(
-    docs: RDD[(LDA.DocId, SSV)],
+    docs: RDD[(LDA.DocId, SV)],
     numTopics: Int,
     storageLevel: StorageLevel,
     computedModel: Broadcast[LDAModel] = null): Graph[VD, ED] = {
     val edges = docs.mapPartitionsWithIndex((pid, iter) => {
       val gen = new Random(pid + 117)
-      val model: LDAModel = if (computedModel == null) null else computedModel.value
-      iter.flatMap {
-        case (docId, doc) =>
-          val bsv = new BSV[Int](doc.indices, doc.values.map(_.toInt), doc.size)
-          initializeEdges(gen, bsv, docId, numTopics, model)
+      iter.flatMap { case (docId, doc) =>
+        if (computedModel == null) {
+          initializeEdges(gen, doc, docId, numTopics)
+        } else {
+          initEdgesWithComputedModel(gen, doc, docId, numTopics, computedModel.value)
+        }
       }
     })
     edges.persist(storageLevel)
-    // degree-based hashing
-    val numPartitions = edges.partitions.size
-    val partitionStrategy = new DBHPartitioner(numPartitions)
-    val degrees = edges.flatMap(t => Seq((t.dstId, 1), (t.srcId, 1))).reduceByKey(_ + _).persist(storageLevel)
-    val dataSet = GraphImpl(degrees, edges, 0, storageLevel, storageLevel)
-    val newEdges = dataSet.triplets.mapPartitions { iter =>
-      iter.map { e =>
-        (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
-      }
-    }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
-    var corpus: Graph[VD, ED] = Graph.fromEdges(newEdges, null, storageLevel, storageLevel)
-    // end degree-based hashing
-    // corpus = corpus.partitionBy(PartitionStrategy.EdgePartition2D)
-    corpus = updateCounter(corpus, numTopics).cache()
+    var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
+    corpus.persist(storageLevel)
     corpus.vertices.count()
     corpus.edges.count()
     edges.unpersist(blocking = false)
+    corpus = partitionByDBH(corpus, storageLevel)
+    updateCounter(corpus, numTopics)
+  }
+
+  private def partitionByDBH(corpus: Graph[VD, ED], storageLevel: StorageLevel): Graph[VD, ED] = {
+    val edges = corpus.edges
+    val degrees = corpus.degrees.setName("degrees").persist(storageLevel)
+    val degreesGraph = GraphImpl(degrees, edges)
+    degreesGraph.persist(storageLevel)
+    val numPartitions = edges.partitions.size
+    val partitionStrategy = new DBHPartitioner(numPartitions, 0)
+    val newEdges = degreesGraph.triplets.mapPartitions { iter =>
+      iter.map { e =>
+        (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
+      }
+    }.partitionBy(new HashPartitioner(numPartitions)).map(_._2).persist(storageLevel)
+    val dataSet = Graph.fromEdges(newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
+    dataSet.persist(storageLevel)
+    dataSet.vertices.count()
+    dataSet.edges.count()
     degrees.unpersist(blocking = false)
-    dataSet.unpersist(blocking = false)
-    corpus
+    degreesGraph.vertices.unpersist(blocking = false)
+    degreesGraph.edges.unpersist(blocking = false)
+    corpus.vertices.unpersist(blocking = false)
+    corpus.edges.unpersist(blocking = false)
+    newEdges.unpersist(blocking = false)
+    dataSet
   }
 
   private def initializeEdges(
     gen: Random,
-    doc: BSV[Int],
+    doc: SV,
+    docId: DocId,
+    numTopics: Int): Iterator[Edge[ED]] = {
+    assert(docId >= 0)
+    val newDocId: DocId = genNewDocId(docId)
+    doc.activeIterator.filter(_._2 > 0).map { case (termId, counter) =>
+      val topics = new Array[Int](counter.toInt)
+      for (i <- 0 until counter.toInt) {
+        topics(i) = gen.nextInt(numTopics)
+      }
+      Edge(termId, newDocId, topics)
+    }
+  }
+
+  private def initEdgesWithComputedModel(
+    gen: Random,
+    doc: SV,
     docId: DocId,
     numTopics: Int,
-    computedModel: LDAModel = null): Array[Edge[ED]] = {
+    computedModel: LDAModel = null): Iterator[Edge[ED]] = {
     assert(docId >= 0)
-    val newDocId: DocId = -(docId + 1L)
-    val edges = if (computedModel == null) {
-      doc.activeIterator.filter(_._2 > 0).map { case (termId, counter) =>
-        val topics = new Array[Int](counter)
-        for (i <- 0 until counter) {
-          topics(i) = gen.nextInt(numTopics)
-        }
-        Edge(termId, newDocId, topics)
-      }.toArray
+    val newDocId: DocId = genNewDocId(docId)
+    computedModel.setSeed(gen.nextInt())
+    val tokens = computedModel.vectorDouble2Array(doc)
+    val topics = new Array[Int](tokens.length)
+    var docTopicCounter = computedModel.uniformDistSampler(tokens, topics)
+    for (t <- 0 until 15) {
+      docTopicCounter = computedModel.sampleTokens(docTopicCounter,
+        tokens, topics)
     }
-    else {
-      computedModel.setSeed(gen.nextInt())
-      val tokens = computedModel.vector2Array(doc)
-      val topics = new Array[Int](tokens.length)
-      var docTopicCounter = computedModel.uniformDistSampler(tokens, topics)
-      for (t <- 0 until 15) {
-        docTopicCounter = computedModel.sampleTokens(docTopicCounter,
-          tokens, topics)
-      }
-      doc.activeIterator.filter(_._2 > 0).map { case (term, counter) =>
-        val ev = topics.zipWithIndex.filter { case (topic, offset) =>
-          term == tokens(offset)
-        }.map(_._1)
-        Edge(term, newDocId, ev)
-      }.toArray
+    doc.activeIterator.filter(_._2 > 0).map { case (term, counter) =>
+      val ev = topics.zipWithIndex.filter { case (topic, offset) =>
+        term == tokens(offset)
+      }.map(_._1)
+      Edge(term, newDocId, ev)
     }
-    assert(edges.length > 0)
-    edges
+  }
+
+  private def genNewDocId(docId: Long): Long = {
+    -(docId + 1L)
   }
 
   private[ml] def sampleSV(gen: Random, table: Table, sv: VD, currentTopic: Int): Int = {
@@ -508,7 +550,7 @@ class FastLDA(
   beta: Double,
   alphaAS: Double,
   storageLevel: StorageLevel) extends LDA(corpus, numTopics, numTerms, alpha, beta, alphaAS, storageLevel) {
-  def this(docs: RDD[(DocId, SSV)],
+  def this(docs: RDD[(DocId, SV)],
     numTopics: Int,
     alpha: Double,
     beta: Double,
@@ -718,7 +760,7 @@ class LightLDA(
   beta: Double,
   alphaAS: Double,
   storageLevel: StorageLevel) extends LDA(corpus, numTopics, numTerms, alpha, beta, alphaAS, storageLevel) {
-  def this(docs: RDD[(DocId, SSV)],
+  def this(docs: RDD[(Long, SV)],
     numTopics: Int,
     alpha: Double,
     beta: Double,

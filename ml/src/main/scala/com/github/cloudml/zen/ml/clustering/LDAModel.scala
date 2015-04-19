@@ -59,9 +59,9 @@ class LDAModel private[ml](
     rand.setSeed(seed)
   }
 
-  def globalTopicCounter = breezeVector2SparkVector(gtc)
+  def globalTopicCounter = fromBreeze(gtc)
 
-  def topicTermCounter = ttc.map(t => breezeVector2SparkVector(t))
+  def topicTermCounter = ttc.map(t => fromBreeze(t))
 
   def inference(
     doc: SSV,
@@ -83,7 +83,7 @@ class LDAModel private[ml](
 
     topicDist.compact()
     topicDist :/= brzNorm(topicDist, 1)
-    breezeVector2SparkVector(topicDist).asInstanceOf[SSV]
+    fromBreeze(topicDist).asInstanceOf[SSV]
   }
 
   private[ml] def vector2Array(vec: BV[Int]): Array[Int] = {
@@ -92,6 +92,19 @@ class LDAModel private[ml](
     val sent = new Array[Int](docLen)
     vec.activeIterator.foreach { case (term, cn) =>
       for (i <- 0 until cn) {
+        sent(offset) = term
+        offset += 1
+      }
+    }
+    sent
+  }
+
+  private[ml] def vectorDouble2Array(vec: BV[Double]): Array[Int] = {
+    val docLen = brzSum(vec)
+    var offset = 0
+    val sent = new Array[Int](docLen.toInt)
+    vec.activeIterator.foreach { case (term, cn) =>
+      for (i <- 0 until cn.toInt) {
         sent(offset) = term
         offset += 1
       }

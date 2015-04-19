@@ -22,7 +22,7 @@ import org.apache.spark.mllib.linalg.{DenseVector => SDV, Vector => SV, SparseVe
 import scala.language.implicitConversions
 
 private[ml] object SparkUtils {
-  implicit def sparkVector2breezeVector(sv: SV): BV[Double] = {
+  implicit def toBreeze(sv: SV): BV[Double] = {
     sv match {
       case SDV(data) =>
         new BDV(data)
@@ -31,7 +31,7 @@ private[ml] object SparkUtils {
     }
   }
 
-  implicit def breezeVector2SparkVector(breezeVector: BV[Double]): SV = {
+  implicit def fromBreeze(breezeVector: BV[Double]): SV = {
     breezeVector match {
       case v: BDV[Double] =>
         if (v.offset == 0 && v.stride == 1 && v.length == v.data.length) {

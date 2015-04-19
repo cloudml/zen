@@ -18,16 +18,14 @@
 package com.github.cloudml.zen.examples.ml
 
 import com.github.cloudml.zen.ml.regression.LogisticRegression
+import org.apache.hadoop.fs.Path
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.graphx.GraphXUtils
-import org.apache.spark.mllib.recommendation.Rating
+import org.apache.spark.mllib.linalg.SparseVector
 import org.apache.spark.mllib.util.MLUtils
-import scopt.OptionParser
-
 import org.apache.spark.{SparkConf, SparkContext}
-import org.apache.spark.SparkContext._
 
-import scala.collection.mutable
+import scopt.OptionParser
 
 object BinaryClassification {
 
@@ -99,8 +97,9 @@ object BinaryClassification {
     }
     Logger.getRootLogger.setLevel(Level.WARN)
     val sc = new SparkContext(conf)
-    val dataSet = MLUtils.loadLibSVMFile(sc, input)
-    LogisticRegression.trainMIS(dataSet, out, numIterations, stepSize, l1, epsilon, useAdaGrad)
+    val dataSet = MLUtils.loadLibSVMFile(sc, input).zipWithUniqueId().map(_.swap).cache()
+    val model = LogisticRegression.trainMIS(dataSet, numIterations, stepSize, l1, epsilon, useAdaGrad)
+    model.save(sc, out)
   }
 
 }

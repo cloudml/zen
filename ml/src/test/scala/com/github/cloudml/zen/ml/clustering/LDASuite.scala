@@ -20,13 +20,12 @@ package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
 
-import com.github.cloudml.zen.ml.util.SharedSparkContext
-import com.github.cloudml.zen.ml.util.SparkUtils._
-import org.scalatest.FunSuite
-
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import breeze.stats.distributions.Poisson
-import org.apache.spark.mllib.linalg.{Vectors, SparseVector => SSV}
+import com.github.cloudml.zen.ml.util.SharedSparkContext
+import com.github.cloudml.zen.ml.util.SparkUtils._
+import org.apache.spark.mllib.linalg.{Vector => SV}
+import org.scalatest.FunSuite
 
 class LDASuite extends FunSuite with SharedSparkContext {
 
@@ -119,7 +118,7 @@ object LDASuite {
     model: Array[BDV[Double]],
     numDocs: Int,
     numTerms: Int,
-    numTopics: Int): Array[(Long, SSV)] = {
+    numTopics: Int): Array[(Long, SV)] = {
     (0 until numDocs).map { i =>
       val rand = new Random()
       val numTermsPerDoc = Poisson.distribution(expectedDocLength).sample()
@@ -130,7 +129,7 @@ object LDASuite {
       }
       val sv = BSV.zeros[Double](numTerms)
       ldaSampler(model, topicDist, numTermsPerDoc).foreach { term => sv(term) += 1 }
-      (i.toLong, breezeVector2SparkVector(sv).asInstanceOf[SSV])
+      (i.toLong, fromBreeze(sv))
     }.toArray
   }
 

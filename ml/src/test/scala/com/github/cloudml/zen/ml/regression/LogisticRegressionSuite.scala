@@ -26,7 +26,7 @@ import com.github.cloudml.zen.ml.util.SparkUtils._
 
 class LogisticRegressionSuite extends FunSuite with SharedSparkContext with Matchers {
 
-  test("LogisticRegression") {
+  test("LogisticRegression MIS") {
     val zenHome = sys.props.getOrElse("zen.test.home", fail("zen.test.home is not set!"))
     val dataSetFile = s"$zenHome/data/binary_classification_data.txt"
     val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile)
@@ -34,18 +34,46 @@ class LogisticRegressionSuite extends FunSuite with SharedSparkContext with Matc
 
     val maxIter = 10
     val stepSize = 1 / (2 * max)
-    val trainDataSet = dataSet.zipWithIndex().map { case (LabeledPoint(label, features), id) =>
+    val trainDataSet = dataSet.zipWithUniqueId().map { case (LabeledPoint(label, features), id) =>
       val newLabel = if (label > 0.0) 1.0 else -1.0
       (id, LabeledPoint(newLabel, features))
     }
-    val lr = new LogisticRegression(trainDataSet, stepSize)
+    val lr = new LogisticRegressionMIS(trainDataSet, stepSize)
     val pps = new Array[Double](maxIter)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < maxIter) {
-      lr.runSGD(1)
-      val q = lr.forwardMIS(i)
-      pps(i) = lr.errorMIS(q)
+      lr.run(1)
+      val q = lr.forward(i)
+      pps(i) = lr.loss(q)
+      i += 1
+    }
+    println((System.currentTimeMillis() - startedAt) / 1e3)
+    pps.foreach(println)
+
+    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
+    assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.size > 0.05)
+    assert(pps.head - pps.last > 0)
+  }
+
+  test("LogisticRegression SGD") {
+    val zenHome = sys.props.getOrElse("zen.test.home", fail("zen.test.home is not set!"))
+    val dataSetFile = s"$zenHome/data/binary_classification_data.txt"
+    val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile)
+    val maxIter = 10
+    val stepSize = 1
+    val trainDataSet = dataSet.zipWithIndex().map { case (LabeledPoint(label, features), id) =>
+      val newLabel = if (label > 0.0) 1.0 else 0
+      (id, LabeledPoint(newLabel, features))
+    }
+    val lr = new LogisticRegressionSGD(trainDataSet, stepSize)
+    val pps = new Array[Double](maxIter)
+    var i = 0
+    val startedAt = System.currentTimeMillis()
+    while (i < maxIter) {
+      lr.run(1)
+      val margin = lr.forward(i)
+      pps(i) = lr.loss(margin)
       i += 1
     }
     println((System.currentTimeMillis() - startedAt) / 1e3)

@@ -18,14 +18,27 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-
   <groupId>com.github.cloudml.zen</groupId>
   <artifactId>zen-parent</artifactId>
   <version>0.01-SNAPSHOT</version>
   <packaging>pom</packaging>
-
-  <name>zen-parent</name>
-  <url>http://maven.apache.org</url>
+  <name>Zen Project Parent POM</name>
+  <url>https://github.com/cloudml/zen/</url>
+  <licenses>
+    <license>
+      <name>Apache 2.0 License</name>
+      <url>http://www.apache.org/licenses/LICENSE-2.0.html</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <id>witgo</id>
+      <name>GuoQiang Li</name>
+      <email>witgo@foxmail.com</email>
+      <url>https://github.com/witgo</url>
+    </developer>
+  </developers>
   <modules>
     <module>assembly</module>
     <module>ml</module>
@@ -45,7 +58,6 @@
     <CodeCacheSize>512m</CodeCacheSize>
     <zen.test.home>${session.executionRootDirectory}</zen.test.home>
   </properties>
-
   <dependencyManagement>
     <dependencies>
       <dependency>
@@ -94,6 +106,24 @@
         <artifactId>hadoop-client</artifactId>
         <version>${hadoop.version}</version>
       </dependency>
+
+      <dependency>
+        <groupId>org.scalanlp</groupId>
+        <artifactId>breeze_${scala.binary.version}</artifactId>
+        <version>0.10</version>
+        <exclusions>
+          <!-- This is included as a compile-scoped dependency by jtransforms, which is
+               a dependency of breeze. -->
+          <exclusion>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+          </exclusion>
+          <exclusion>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-math3</artifactId>
+          </exclusion>
+        </exclusions>
+      </dependency>
       <!-- test -->
       <dependency>
         <groupId>org.scalatest</groupId>
@@ -131,6 +161,20 @@
   <build>
     <pluginManagement>
       <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-deploy-plugin</artifactId>
+          <configuration>
+            <skip>true</skip>
+          </configuration>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-install-plugin</artifactId>
+          <configuration>
+            <skip>true</skip>
+          </configuration>
+        </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-enforcer-plugin</artifactId>
@@ -318,11 +362,6 @@
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
-          <artifactId>maven-shade-plugin</artifactId>
-          <version>2.2</version>
-        </plugin>
-        <plugin>
-          <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-source-plugin</artifactId>
           <version>2.2.1</version>
           <configuration>
@@ -337,6 +376,36 @@
             </execution>
           </executions>
         </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-shade-plugin</artifactId>
+          <version>2.2</version>
+          <configuration>
+            <shadedArtifactAttached>false</shadedArtifactAttached>
+            <artifactSet>
+              <includes>
+                <include>org.scalanlp:breeze_${scala.binary.version}</include>
+              </includes>
+            </artifactSet>
+            <relocations>
+              <relocation>
+                <pattern>breeze</pattern>
+                <shadedPattern>com.github.cloudml.shaded.breeze</shadedPattern>
+                <includes>
+                  <include>breeze.**</include>
+                </includes>
+              </relocation>
+            </relocations>
+          </configuration>
+          <executions>
+            <execution>
+              <phase>package</phase>
+              <goals>
+                <goal>shade</goal>
+              </goals>
+            </execution>
+          </executions>
+        </plugin>
       </plugins>
     </pluginManagement>
 
@@ -344,7 +413,7 @@
       <plugin>
         <groupId>org.scalastyle</groupId>
         <artifactId>scalastyle-maven-plugin</artifactId>
-        <version>0.4.0</version>
+        <version>0.7.0</version>
         <configuration>
           <verbose>false</verbose>
           <failOnViolation>true</failOnViolation>
@@ -353,12 +422,12 @@
           <sourceDirectory>${basedir}/src/main/scala</sourceDirectory>
           <testSourceDirectory>${basedir}/src/test/scala</testSourceDirectory>
           <configLocation>scalastyle-config.xml</configLocation>
-          <outputFile>scalastyle-output.xml</outputFile>
+          <outputFile>${basedir}/target/scalastyle-output.xml</outputFile>
           <outputEncoding>UTF-8</outputEncoding>
         </configuration>
         <executions>
           <execution>
-            <phase>package</phase>
+            <!--<phase>package</phase>-->
             <goals>
               <goal>check</goal>
             </goals>

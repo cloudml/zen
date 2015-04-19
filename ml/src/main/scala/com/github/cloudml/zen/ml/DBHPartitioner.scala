@@ -26,27 +26,10 @@ import scala.math._
  * Degree-Based Hashing, the paper:
  * Distributed Power-law Graph Computing: Theoretical and Empirical Analysis
  */
-private[ml] class DBHPartitioner(val partitions: Int, val threshold: Int = 70) extends Partitioner {
+private[ml] class DBHPartitioner(val partitions: Int, val threshold: Int = 0) extends Partitioner {
   val mixingPrime: Long = 1125899906842597L
 
   def numPartitions = partitions
-
-  /*
-   * default Degree Based Hashing,
-     "Distributed Power-law Graph Computing: Theoretical and Empirical Analysis"
-    def getPartition(key: Any): Int = {
-      val edge = key.asInstanceOf[EdgeTriplet[Int, ED]]
-      val srcDeg = edge.srcAttr
-      val dstDeg = edge.dstAttr
-      val srcId = edge.srcId
-      val dstId = edge.dstId
-      if (srcDeg < dstDeg) {
-        getPartition(srcId)
-      } else {
-        getPartition(dstId)
-      }
-    }
-   */
 
   /**
    * Default DBH doesn't consider the situation where both the degree of src and
