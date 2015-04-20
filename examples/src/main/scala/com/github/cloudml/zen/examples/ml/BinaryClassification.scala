@@ -73,7 +73,7 @@ object BinaryClassification {
         """
           |For example, the following command runs this app on a synthetic dataset:
           |
-          | bin/spark-submit --class org.apache.spark.examples.mllib.LogisticRegression \
+          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.LogisticRegression \
           |  examples/target/scala-*/zen-examples-*.jar \
           |  --numIterations 200 --lambda 1.0 --kryo \
           |  data/mllib/kdda.txt

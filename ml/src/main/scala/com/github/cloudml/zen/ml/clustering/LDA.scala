@@ -210,7 +210,8 @@ abstract class LDA private[ml](
   }
 
   /**
-   * the multiplcation between word distribution among all topics and the corresponding doc distribution among all topics: 
+   * the multiplcation between word distribution among all topics and the corresponding doc
+   * distribution among all topics:
    * p(w)=\sum_{k}{p(k|d)*p(w|k)}=
    * \sum_{k}{\frac{{n}_{kw}+{\beta }_{w}} {{n}_{k}+\bar{\beta }} \frac{{n}_{kd}+{\alpha }_{k}}{\sum{{n}_{k}}+
    * \bar{\alpha }}}=
@@ -483,8 +484,10 @@ object LDA {
       val svCounter = sv(currentTopic)
       // TODO: not sure it is correct or not?
       // discard it if the newly sampled topic is current topic
-      if ((svCounter == 1 && table._1.length > 1) /* the sampled topic that contains current token and other tokens */ ||
-        (svCounter > 1 && gen.nextDouble() < 1.0 / svCounter) /* the sampled topic has 1/svCounter probability that belongs to current token */) {
+      if ((svCounter == 1 && table._1.length > 1) ||
+        /* the sampled topic that contains current token and other tokens */
+        (svCounter > 1 && gen.nextDouble() < 1.0 / svCounter)
+        /* the sampled topic has 1/svCounter probability that belongs to current token */) {
         return sampleSV(gen, table, sv, currentTopic)
       }
     }

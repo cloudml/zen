@@ -119,7 +119,7 @@ abstract class LogisticRegression(
       vertices.count()
       dataSet = GraphImpl(vertices, edges)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      logInfo(s"train (Iteration $iter/$iterations) loss:              ${loss(margin)}")
+      // logInfo(s"train (Iteration $iter/$iterations) loss:              ${loss(margin)}")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
       unpersistVertices()
       innerIter += 1
@@ -467,7 +467,8 @@ object LogisticRegression {
    * @param stepSize  learning step size, recommend to be 0.1 - 1.0
    * @param regParam  L1 Regularization
    * @param useAdaGrad  adaptive step size, recommend to be True
-   * @param storageLevel recommendation configuration: MEMORY_AND_DISK for small/middle-scale training data, and DISK_ONLY for super-large-scale data
+   * @param storageLevel recommendation configuration: MEMORY_AND_DISK for small/middle-scale training data,
+   *                     and DISK_ONLY for super-large-scale data
    */
   @Experimental
   def trainSGD(
@@ -498,7 +499,8 @@ object LogisticRegression {
    * @param regParam  L1 Regularization
    * @param epsilon   smoothing parameter, 1e-4 - 1e-6
    * @param useAdaGrad  adaptive step size, recommend to be true
-   * @param storageLevel recommendation configuration: MEMORY_AND_DISK for small/middle-scale training data, and DISK_ONLY for super-large-scale data
+   * @param storageLevel recommendation configuration: MEMORY_AND_DISK for small/middle-scale training data,
+   *                     and DISK_ONLY for super-large-scale data
    */
   def trainMIS(
     input: RDD[(Long, LabeledPoint)],

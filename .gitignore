@@ -62,6 +62,7 @@ ec2/lib/
 rat-results.txt
 scalastyle.txt
 scalastyle-output.xml
+tmp/
 
 # For Hive
 metastore_db/
