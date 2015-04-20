@@ -210,13 +210,14 @@ abstract class LDA private[ml](
   }
 
   /**
-   * 词在所有主题分布和该词所在文本的主题分布乘积: p(w)=\sum_{k}{p(k|d)*p(w|k)}=
+   * the multiplcation between word distribution among all topics and the corresponding doc distribution among all topics: 
+   * p(w)=\sum_{k}{p(k|d)*p(w|k)}=
    * \sum_{k}{\frac{{n}_{kw}+{\beta }_{w}} {{n}_{k}+\bar{\beta }} \frac{{n}_{kd}+{\alpha }_{k}}{\sum{{n}_{k}}+
    * \bar{\alpha }}}=
    * \sum_{k} \frac{{\alpha }_{k}{\beta }_{w}  + {n}_{kw}{\alpha }_{k} + {n}_{kd}{\beta }_{w} + {n}_{kw}{n}_{kd}}
    * {{n}_{k}+\bar{\beta }} \frac{1}{\sum{{n}_{k}}+\bar{\alpha }}}
    * \exp^{-(\sum{\log(p(w))})/N}
-   * N为语料库包含的token数
+   * N is the number of tokens in corpus
    */
   def perplexity(): Double = {
     val totalTopicCounter = this.totalTopicCounter
@@ -283,14 +284,14 @@ object LDA {
   private[ml] type VD = BSV[Count]
 
   /**
-   * 训练 LDA
-   * @param docs 训练数据 (docId, features) docId大于等于0
-   * @param numTopics 小数量推荐2048 大数据量推荐5000以上
-   * @param totalIter  迭代次数
-   * @param alpha      推荐设置为 (5.0 /numTopics)
-   * @param beta       推荐设置为 0.001 - 0.1
-   * @param alphaAS    推荐设置为 0.01 - 1.0
-   * @param useLightLDA 是否使用LightLDA 短文本推荐设置为 false
+   * LDA training
+   * @param docs training data (docId, wordId) docId >= 0, wordId < 0
+   * @param numTopics the number of topics (5000+ for large data) 
+   * @param totalIter  the number of iterations
+   * @param alpha      recommend to be (5.0 /numTopics)
+   * @param beta       recommend to be in range 0.001 - 0.1
+   * @param alphaAS    recommend to be in range 0.01 - 1.0
+   * @param useLightLDA use LightLDA sampling algorithm or not, recommend false for short doc
    * @return LDAModel
    */
   def train(
@@ -312,16 +313,16 @@ object LDA {
   }
 
   /**
-   * 训练并保存model 储存为LibSVM格式 每行是:
+   * Train and save the trained model. The training data is in LibSVM format where each line is represented in:
    * topicID termID+1:counter termID+1:counter ..
-   * @param docs 训练数据 (docId, features) docId大于等于0
-   * @param dir   model 保存的目录
-   * @param numTopics 小数量推荐2048 大数据量推荐5000以上
-   * @param totalIter  迭代次数
-   * @param alpha      推荐设置为 (5.0 /numTopics)
-   * @param beta       推荐设置为 0.001 - 0.1
-   * @param alphaAS    推荐设置为 0.01 - 1.0
-   * @param useLightLDA 是否使用LightLDA 短文本推荐设置为 false
+   * @param docs training data: (docId, wordId) docId >= 0 while wordId < 0
+   * @param dir   the directory where the model is saved
+   * @param numTopics  the number of topics (> 5000 for large data)
+   * @param totalIter  the number of iterations
+   * @param alpha      recommend to be (5.0 /numTopics)
+   * @param beta       recommend to be in range 0.001 - 0.1
+   * @param alphaAS    recommend to be in range 0.01 - 1.0
+   * @param useLightLDA use LightLDA or not? Recommend to be false for short length document
    * @return LDAModel
    */
   def trainAndSaveModel(
@@ -480,12 +481,10 @@ object LDA {
     val docTopic = sampleAlias(gen, table)
     if (docTopic == currentTopic) {
       val svCounter = sv(currentTopic)
-      // 这里的处理方法不太对.
-      // 如果采样到当前token的Topic这丢弃掉
-      // svCounter == 1 && table.length > 1 采样到token的Topic 但包含其他token
-      // svCounter > 1 && gen.nextDouble() < 1.0 / svCounter 采样的Topic 有1/svCounter 概率属于当前token
-      if ((svCounter == 1 && table._1.length > 1) ||
-        (svCounter > 1 && gen.nextDouble() < 1.0 / svCounter)) {
+      // TODO: not sure it is correct or not?
+      // discard it if the newly sampled topic is current topic
+      if ((svCounter == 1 && table._1.length > 1) /* the sampled topic that contains current token and other tokens */ ||
+        (svCounter > 1 && gen.nextDouble() < 1.0 / svCounter) /* the sampled topic has 1/svCounter probability that belongs to current token */) {
         return sampleSV(gen, table, sv, currentTopic)
       }
     }
@@ -635,7 +634,7 @@ class FastLDA(
   }
 
   /**
-   * 分解后的公式为
+   * dense part in the decomposed sampling formula:
    * t = \frac{{\beta }_{w} \bar{\alpha} ( {n}_{k}^{-di} + \acute{\alpha} ) } {({n}_{k}^{-di}+\bar{\beta})
    * ({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
    */
@@ -662,7 +661,7 @@ class FastLDA(
   }
 
   /**
-   * 分解后的公式为
+   * word related sparse part in the decomposed sampling formula:
    * w = \frac{ {n}_{kw}^{-di} \bar{\alpha} ( {n}_{k}^{-di} + \acute{\alpha} )}{({n}_{k}^{-di}+\bar{\beta})
    * ({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
    */
@@ -692,7 +691,7 @@ class FastLDA(
   }
 
   /**
-   * 分解后的公式为
+   * doc related sparse part in the decomposed sampling formula:
    * d =  \frac{{n}_{kd} ^{-di}({\sum{n}_{k}^{-di} + \bar{\acute{\alpha}}})({n}_{kw}^{-di}+{\beta}_{w})}
    * {({n}_{k}^{-di}+\bar{\beta})({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
    * =  \frac{{n}_{kd} ^{-di}({n}_{kw}^{-di}+{\beta}_{w})}{({n}_{k}^{-di}+\bar{\beta}) }
@@ -876,23 +875,23 @@ class LightLDA(
   }
 
   /**
-   * 这里组合使用 Gibbs sampler 和 Metropolis Hastings sampler
-   * 每次采样的复杂度为: O(1)
-   * 1. 使用 Gibbs sampler 采样标准LDA公式中词相关部分:
-   * 论文LightLDA: Big Topic Models on Modest Compute Clusters 公式(6):
+   * Composition of both Gibbs sampler and Metropolis Hastings sampler
+   * time complexity for each sampling is: O(1)
+   * 1. sampling word-related parts of standard LDA formula via Gibbs Sampler: 
+   * Formula (6) in Paper "LightLDA: Big Topic Models on Modest Compute Clusters":
    * ( \frac{{n}_{kd}^{-di}+{\beta }_{w}}{{n}_{k}^{-di}+\bar{\beta }} )
-   * 2. 把第一步采样得到的概率作为 Proposal q(·) 使用 Metropolis Hastings sampler 采样非对称先验公式
-   * 论文 Rethinking LDA: Why Priors Matter 公式(3)
+   * 2. given the computed probability in step 1 as proposal distribution q in Metropolis Hasting sampling, 
+   * and we use asymmetric dirichlet prior, presented formula (3) in Paper "Rethinking LDA: Why Priors Matter"
    * \frac{{n}_{kw}^{-di}+{\beta }_{w}}{{n}_{k}^{-di}+\bar{\beta}} \frac{{n}_{kd} ^{-di}+ \bar{\alpha}
    * \frac{{n}_{k}^{-di} + \acute{\alpha}}{\sum{n}_{k} +\bar{\acute{\alpha}}}}{\sum{n}_{kd}^{-di} +\bar{\alpha}}
    *
-   * 其中
+   * where
    * \bar{\beta}=\sum_{w}{\beta}_{w}
    * \bar{\alpha}=\sum_{k}{\alpha}_{k}
    * \bar{\acute{\alpha}}=\bar{\acute{\alpha}}=\sum_{k}\acute{\alpha}
-   * {n}_{kd} 是文档d中主题为k的tokens数
-   * {n}_{kw} 词中主题为k的tokens数
-   * {n}_{k} 是语料库中主题为k的tokens数
+   * {n}_{kd} is the number of tokens in doc d that belong to topic k
+   * {n}_{kw} is the number of occurrence for word w that belong to topic k
+   * {n}_{k} is the number of tokens in corpus that belong to topic k
    */
   def tokenSampling(
     gen: Random,
@@ -935,12 +934,12 @@ class LightLDA(
     val ratio = (totalTopicCounter(topic) + adjustment + alphaAS) /
       (numTokens - 1 + alphaAS * numTopics)
     val asPrior = ratio * (alpha * numTopics)
-    // 这里移除了常数项 (docLen - 1 + alpha * numTopics)
+    // constant part is removed: (docLen - 1 + alpha * numTopics)
     (termTopicCounter(topic) + adjustment + beta) *
       (docTopicCounter(topic) + adjustment + asPrior) /
       (totalTopicCounter(topic) + adjustment + (numTerms * beta))
 
-    // 原始公式: Rethinking LDA: Why Priors Matter 公式(3)
+    // original form is formula (3) in Paper: "Rethinking LDA: Why Priors Matter"
     // val docLen = brzSum(docTopicCounter)
     // (termTopicCounter(topic) + adjustment + beta) * (docTopicCounter(topic) + adjustment + asPrior) /
     //   ((totalTopicCounter(topic) + adjustment + (numTerms * beta)) * (docLen - 1 + alpha * numTopics))
