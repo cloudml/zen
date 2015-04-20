@@ -461,13 +461,13 @@ object LogisticRegression {
 
   /**
    * :: Experimental ::
-   * 使用 SGD训练
-   * @param input 训练数据 训练数据,label为{0,1} (binary classification)
-   * @param numIterations 最大迭代次数
-   * @param stepSize  学习步长 推荐 0.1 - 1.0
+   * SGD training
+   * @param input training data, with {0,1} label (binary classification)
+   * @param numIterations maximum number of iterations
+   * @param stepSize  learning step size, recommend to be 0.1 - 1.0
    * @param regParam  L1 Regularization
-   * @param useAdaGrad  自适应步长 推荐设置为true
-   * @param storageLevel 缓存级别  中小型训练集推荐设置为MEMORY_AND_DISK,大型数据集推荐设置为DISK_ONLY
+   * @param useAdaGrad  adaptive step size, recommend to be True
+   * @param storageLevel recommendation configuration: MEMORY_AND_DISK for small/middle-scale training data, and DISK_ONLY for super-large-scale data
    */
   @Experimental
   def trainSGD(
@@ -488,16 +488,17 @@ object LogisticRegression {
   }
 
   /**
-   * 使用 Modified Iterative Scaling 训练 相关论文
+   * Modified Iterative Scaling
+   * The referenced paper:
    * A comparison of numerical optimizers for logistic regression
    * http://research.microsoft.com/en-us/um/people/minka/papers/logreg/minka-logreg.pdf
-   * @param input 训练数据 每个features的值必须大于等于0,label为{0,1} (binary classification)
-   * @param numIterations 最大迭代次数
-   * @param stepSize  学习步长 推荐 0.1 - 1.0
+   * @param input training data, feature value must >= 0, label is either 0 or 1 (binary classification)
+   * @param numIterations maximum number of iterations
+   * @param stepSize  step size, recommend to be in value range 0.1 - 1.0
    * @param regParam  L1 Regularization
-   * @param epsilon   平滑参数 推荐 1e-4 - 1e-6
-   * @param useAdaGrad  自适应步长 推荐设置为true
-   * @param storageLevel 缓存级别  中小型训练集推荐设置为MEMORY_AND_DISK,大型数据集推荐设置为DISK_ONLY
+   * @param epsilon   smoothing parameter, 1e-4 - 1e-6
+   * @param useAdaGrad  adaptive step size, recommend to be true
+   * @param storageLevel recommendation configuration: MEMORY_AND_DISK for small/middle-scale training data, and DISK_ONLY for super-large-scale data
    */
   def trainMIS(
     input: RDD[(Long, LabeledPoint)],
