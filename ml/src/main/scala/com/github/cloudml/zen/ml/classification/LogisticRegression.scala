@@ -129,18 +129,20 @@ class LogisticRegressionMIS extends Logging with Serializable{
    * @param iter
    * @param grads
    */
-  protected[ml] def updateGradients(iter: Int, grads: Vector): Unit = {
+  protected[ml] def updateGradients(iter: Int, grads: Vector): Vector = {
     val thisIterStepSize = stepSize / math.sqrt(iter)
     scal(thisIterStepSize, grads)
+    grads
   }
 
   /**
    * Update weights
-   * @param initialWeights
+   * @param weights
    * @param delta
    */
-  protected[ml] def updateWeights(initialWeights: Vector, delta: Vector): Unit = {
-    axpy(1.0, delta, initialWeights)
+  protected[ml] def updateWeights(weights: Vector, delta: Vector): Vector = {
+    axpy(1.0, delta, weights)
+    weights
   }
   /**
    * @param weights
