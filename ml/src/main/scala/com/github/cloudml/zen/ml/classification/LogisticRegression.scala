@@ -17,12 +17,12 @@
 package com.github.cloudml.zen.ml.classification
 
 import breeze.numerics.exp
+import com.github.cloudml.zen.ml.util.Utils
 import org.apache.spark.Logging
 import org.apache.spark.mllib.linalg.{Vectors, Vector}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
 import com.github.cloudml.zen.ml.linalg.BLAS.dot
-import com.github.cloudml.zen.ml.linalg.BLAS.scal
 import com.github.cloudml.zen.ml.linalg.BLAS.axpy
 
 class LogisticRegressionMIS (
@@ -55,8 +55,8 @@ extends Logging with Serializable{
    */
   protected[ml] def forward(initialWeights: Vector, dataSet: RDD[LabeledPoint]): RDD[Double] = {
     dataSet.map{point =>
-      val ywx = point.label * dot(initialWeights, point.features)
-      1.0 / (1.0 + exp(ywx))
+      val z = point.label * dot(initialWeights, point.features)
+      1.0 / (1.0 + exp(z))
     }
   }
 
@@ -91,5 +91,24 @@ extends Logging with Serializable{
       i += 1
     }
     grads
+  }
+
+  /**
+   * @param weights
+   * @param dataSet
+   * @return Loss of given weights and dataSet in one iteration.
+   */
+  protected[ml] def loss(weights: Vector, dataSet: RDD[LabeledPoint]) : Double = {
+    // For Binary Logistic Regression
+    var lossSum = 0
+    dataSet.foreach {point =>
+      val margin = -1.0 * dot(point.features, weights)
+      if (point.label > 0) {
+        lossSum += Utils.log1pExp(margin)
+      } else {
+        lossSum += Utils.log1pExp(margin) - margin
+      }
+    }
+    lossSum
   }
 }
