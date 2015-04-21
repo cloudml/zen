@@ -18,10 +18,12 @@ package com.github.cloudml.zen.ml.classification
 
 import breeze.numerics.exp
 import org.apache.spark.Logging
-import org.apache.spark.mllib.linalg.Vector
+import org.apache.spark.mllib.linalg.{Vectors, Vector}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
 import com.github.cloudml.zen.ml.linalg.BLAS.dot
+import com.github.cloudml.zen.ml.linalg.BLAS.scal
+import com.github.cloudml.zen.ml.linalg.BLAS.axpy
 
 class LogisticRegressionMIS (
   private var stepSize: Double,
@@ -35,16 +37,26 @@ extends Logging with Serializable{
    */
   def this() = this(1.0, 100, 0.01, 1.0)
 
+  private var epsilon = 1e-4
+
+  /**
+   * Set smooth parameter.
+   * @param eps parameter for smooth, default 1e-4.
+   * @return
+   */
+  def setEpsilon(eps: Double): this.type = {
+    epsilon = eps
+    this
+  }
   /**
    * Calculate the mistake probability: q(i) = 1/(1+exp(yi*(w*xi))).
    * @param initialWeights weights of last iteration.
    * @param dataSet
    */
-  protected[ml] def forward(initialWeights: Vector, dataSet: RDD[LabeledPoint]): RDD[(Double,
-    Double)] = {
+  protected[ml] def forward(initialWeights: Vector, dataSet: RDD[LabeledPoint]): RDD[Double] = {
     dataSet.map{point =>
       val ywx = point.label * dot(initialWeights, point.features)
-      (point.label, 1.0 / (1.0 + exp(ywx)))
+      1.0 / (1.0 + exp(ywx))
     }
   }
 
@@ -53,7 +65,31 @@ extends Logging with Serializable{
    * @param misProb q(i) = 1/(1+exp(yi*(w*xi))).
    * @param dataSet
    */
-  protected[ml] def backward(misProb: RDD[(Double, Double)], dataSet: RDD[LabeledPoint]) = {
-
+  protected[ml] def backward(misProb: RDD[Double], dataSet: RDD[LabeledPoint], numFeatures: Int):
+  Array[Double] = {
+    def func(v1: Vector, v2: Vector) = {
+      axpy(1.0, v1, v2)
+      v2
+    }
+    val muArr: Array[(Double, Vector)] = dataSet.zip(misProb).map {
+      case (point, prob) =>
+        val scaledFeatures = Vectors.zeros(numFeatures)
+        axpy(prob, point.features, scaledFeatures)
+        (point.label, scaledFeatures)
+    }.aggregateByKey(Vectors.zeros(numFeatures))(func, func).collect()
+    assert(muArr.length == 2)
+    val grads: Array[Double] = new Array[Double](numFeatures)
+    val muPlus: Array[Double] = {if (muArr(0)._1 > 0) muArr(0)._2 else muArr(1)._2}.toArray
+    val muMinus: Array[Double] = {if (muArr(0)._1 < 0) muArr(0)._2 else muArr(1)._2}.toArray
+    var i = 0
+    while (i < numFeatures) {
+      grads(i) = if (epsilon == 0.0) {
+        math.log(muPlus(i) / muMinus(i))
+      } else {
+        math.log(muPlus(i) / (epsilon + muMinus(i)))
+      }
+      i += 1
+    }
+    grads
   }
 }
