@@ -24,21 +24,52 @@ import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
 import com.github.cloudml.zen.ml.linalg.BLAS.dot
 import com.github.cloudml.zen.ml.linalg.BLAS.axpy
+import com.github.cloudml.zen.ml.linalg.BLAS.scal
 
-class LogisticRegressionMIS (
-  private var stepSize: Double,
-  private var numIterations: Int,
-  private var regParm: Double,
-  private var miniBatchFraction: Double)
-extends Logging with Serializable{
+class LogisticRegressionMIS extends Logging with Serializable{
   /**
    * Construct a LogisticRegression object with default parameters: {stepSize: 1.0,
    * numIterations: 100, regParm: 0.01, miniBatchFraction: 1.0}.
    */
   def this() = this(1.0, 100, 0.01, 1.0)
 
-  private var epsilon = 1e-4
+  private var epsilon: Double = 1e-4
+  private var stepSize: Double = 1.0
+  private var numIterations: Int = 100
+  private var regParam: Double = 0.0
+  private var miniBatchFraction: Double = 1.0
+  /**
+   * Set the initial step size of SGD for the first step. Default 1.0.
+   * In subsequent steps, the step size will decrease with stepSize/sqrt(t)
+   */
+  def setStepSize(stepSize: Double): this.type = {
+    this.stepSize = stepSize
+    this
+  }
+  /**
+   * Set fraction of data to be used for each SGD iteration.
+   * Default 1.0 (corresponding to deterministic/classical gradient descent)
+   */
+  def setMiniBatchFraction(fraction: Double): this.type = {
+    this.miniBatchFraction = fraction
+    this
+  }
 
+  /**
+   * Set the number of iterations for SGD. Default 100.
+   */
+  def setNumIterations(iters: Int): this.type = {
+    this.numIterations = iters
+    this
+  }
+
+  /**
+   * Set the regularization parameter. Default 0.0.
+   */
+  def setRegParam(regParam: Double): this.type = {
+    this.regParam = regParam
+    this
+  }
   /**
    * Set smooth parameter.
    * @param eps parameter for smooth, default 1e-4.
@@ -66,7 +97,7 @@ extends Logging with Serializable{
    * @param dataSet
    */
   protected[ml] def backward(misProb: RDD[Double], dataSet: RDD[LabeledPoint], numFeatures: Int):
-  Array[Double] = {
+  Vector = {
     def func(v1: Vector, v2: Vector) = {
       axpy(1.0, v1, v2)
       v2
@@ -90,9 +121,27 @@ extends Logging with Serializable{
       }
       i += 1
     }
-    grads
+    Vectors.dense(grads)
   }
 
+  /**
+   * delta = stepSize * grad
+   * @param iter
+   * @param grads
+   */
+  protected[ml] def updateGradients(iter: Int, grads: Vector): Unit = {
+    val thisIterStepSize = stepSize / math.sqrt(iter)
+    scal(thisIterStepSize, grads)
+  }
+
+  /**
+   * Update weights
+   * @param initialWeights
+   * @param delta
+   */
+  protected[ml] def updateWeights(initialWeights: Vector, delta: Vector): Unit = {
+    axpy(1.0, delta, initialWeights)
+  }
   /**
    * @param weights
    * @param dataSet
