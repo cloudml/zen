@@ -18,26 +18,79 @@ package com.github.cloudml.zen.ml.classification
 
 import breeze.numerics.exp
 import com.github.cloudml.zen.ml.util.Utils
-import org.apache.spark.Logging
-import org.apache.spark.mllib.linalg.{Vectors, Vector}
+import org.apache.hadoop.hdfs.server.namenode.FSImageFormatProtobuf.Loader
+import org.apache.spark.mllib.classification.LogisticRegressionModel
+import org.apache.spark.mllib.classification.impl.GLMClassificationModel.SaveLoadV1_0.Data
+import org.apache.spark.mllib.feature.StandardScaler
+import org.apache.spark.mllib.util.Loader
+import org.apache.spark.mllib.util.Loader
+import org.apache.spark.sql.SQLContext
+import org.apache.spark.{SparkContext, Logging}
+import org.apache.spark.mllib.linalg.{DenseVector, Vectors, Vector}
 import org.apache.spark.mllib.regression.LabeledPoint
+import org.apache.spark.mllib.util.MLUtils._
 import org.apache.spark.rdd.RDD
 import com.github.cloudml.zen.ml.linalg.BLAS.dot
 import com.github.cloudml.zen.ml.linalg.BLAS.axpy
 import com.github.cloudml.zen.ml.linalg.BLAS.scal
+import org.apache.spark.storage.StorageLevel
+import org.json4s.jackson.JsonMethods._
 
-class LogisticRegressionMIS extends Logging with Serializable{
+class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Serializable{
   /**
    * Construct a LogisticRegression object with default parameters: {stepSize: 1.0,
    * numIterations: 100, regParm: 0.01, miniBatchFraction: 1.0}.
    */
   def this() = this(1.0, 100, 0.01, 1.0)
-
   private var epsilon: Double = 1e-4
   private var stepSize: Double = 1.0
   private var numIterations: Int = 100
   private var regParam: Double = 0.0
   private var miniBatchFraction: Double = 1.0
+  /**
+   * In `GeneralizedLinearModel`, only single linear predictor is allowed for both weights
+   * and intercept. However, for multinomial logistic regression, with K possible outcomes,
+   * we are training K-1 independent binary logistic regression models which requires K-1 sets
+   * of linear predictor.
+   *
+   * As a result, the workaround here is if more than two sets of linear predictors are needed,
+   * we construct bigger `weights` vector which can hold both weights and intercepts.
+   * If the intercepts are added, the dimension of `weights` will be
+   * (numOfLinearPredictor) * (numFeatures + 1) . If the intercepts are not added,
+   * the dimension of `weights` will be (numOfLinearPredictor) * numFeatures.
+   *
+   * Thus, the intercepts will be encapsulated into weights, and we leave the value of intercept
+   * in GeneralizedLinearModel as zero.
+   */
+  protected var numOfLinearPredictor: Int = 1
+  /** Whether to add intercept (default: false). */
+  protected var addIntercept: Boolean = false
+  /**
+   * The dimension of training features.
+   */
+  protected var numFeatures: Int = -1
+  /**
+   * Whether to perform feature scaling before model training to reduce the condition numbers
+   * which can significantly help the optimizer converging faster. The scaling correction will be
+   * translated back to resulting model weights, so it's transparent to users.
+   * Note: This technique is used in both libsvm and glmnet packages. Default false.
+   */
+  private var useFeatureScaling = false
+  /**
+   * Set if the algorithm should use feature scaling to improve the convergence during optimization.
+   */
+  private[mllib] def setFeatureScaling(useFeatureScaling: Boolean): this.type = {
+    this.useFeatureScaling = useFeatureScaling
+    this
+  }
+  /**
+   * Set if the algorithm should add an intercept. Default false.
+   * We set the default to false because adding the intercept will cause memory allocation.
+   */
+  def setIntercept(addIntercept: Boolean): this.type = {
+    this.addIntercept = addIntercept
+    this
+  }
   /**
    * Set the initial step size of SGD for the first step. Default 1.0.
    * In subsequent steps, the step size will decrease with stepSize/sqrt(t)
@@ -79,12 +132,116 @@ class LogisticRegressionMIS extends Logging with Serializable{
     epsilon = eps
     this
   }
+
+  /**
+   * Run the algorithm with the configured parameters on an input
+   * RDD of LabeledPoint entries.
+   */
+  def run(iterations: Int): Unit = {
+    if (numFeatures < 0) {
+      numFeatures = dataSet.map(_.features.size).first()
+    }
+    /**
+     * When `numOfLinearPredictor > 1`, the intercepts are encapsulated into weights,
+     * so the `weights` will include the intercepts. When `numOfLinearPredictor == 1`,
+     * the intercept will be stored as separated value in `GeneralizedLinearModel`.
+     * This will result in different behaviors since when `numOfLinearPredictor == 1`,
+     * users have no way to set the initial intercept, while in the other case, users
+     * can set the intercepts as part of weights.
+     *
+     * TODO: See if we can deprecate `intercept` in `GeneralizedLinearModel`, and always
+     * have the intercept as part of weights to have consistent design.
+     */
+    val initialWeights = {
+      if (numOfLinearPredictor == 1) {
+        Vectors.dense(new Array[Double](numFeatures))
+      } else if (addIntercept) {
+        Vectors.dense(new Array[Double]((numFeatures + 1) * numOfLinearPredictor))
+      } else {
+        Vectors.dense(new Array[Double](numFeatures * numOfLinearPredictor))
+      }
+    }
+    run(iterations, initialWeights)
+  }
+  def run(iterations: Int, initialWeights: Vector): Unit ={
+    if (numFeatures < 0) {
+      numFeatures = dataSet.map(_.features.size).first()
+    }
+
+    if (dataSet.getStorageLevel == StorageLevel.NONE) {
+      logWarning("The input data is not directly cached, which may hurt performance if its"
+        + " parent RDDs are also uncached.")
+    }
+
+    /*
+     * Scaling columns to unit variance as a heuristic to reduce the condition number:
+     *
+     * During the optimization process, the convergence (rate) depends on the condition number of
+     * the training dataset. Scaling the variables often reduces this condition number
+     * heuristically, thus improving the convergence rate. Without reducing the condition number,
+     * some training datasets mixing the columns with different scales may not be able to converge.
+     *
+     * GLMNET and LIBSVM packages perform the scaling to reduce the condition number, and return
+     * the weights in the original scale.
+     * See page 9 in http://cran.r-project.org/web/packages/glmnet/glmnet.pdf
+     *
+     * Here, if useFeatureScaling is enabled, we will standardize the training features by dividing
+     * the variance of each column (without subtracting the mean), and train the model in the
+     * scaled space. Then we transform the coefficients from the scaled space to the original scale
+     * as GLMNET and LIBSVM do.
+     *
+     * Currently, it's only enabled in LogisticRegressionWithLBFGS
+     */
+    val scaler = if (useFeatureScaling) {
+      new StandardScaler(withStd = true, withMean = false).fit(dataSet.map(_.features))
+    } else {
+      null
+    }
+    // Prepend an extra variable consisting of all 1.0's for the intercept.
+    // TODO: Apply feature scaling to the weight vector instead of input data.
+    val data =
+      if (addIntercept) {
+        if (useFeatureScaling) {
+          dataSet.map(lp => (lp.label, appendBias(scaler.transform(lp.features)))).cache()
+        } else {
+          dataSet.map(lp => (lp.label, appendBias(lp.features))).cache()
+        }
+      } else {
+        if (useFeatureScaling) {
+          dataSet.map(lp => (lp.label, scaler.transform(lp.features))).cache()
+        } else {
+          dataSet.map(lp => (lp.label, lp.features))
+        }
+      }
+
+    /**
+     * TODO: For better convergence, in logistic regression, the intercepts should be computed
+     * from the prior probability distribution of the outcomes; for linear regression,
+     * the intercept should be set as the average of response.
+     */
+    val initialWeightsWithIntercept = if (addIntercept && numOfLinearPredictor == 1) {
+      appendBias(initialWeights)
+    } else {
+      /** If `numOfLinearPredictor > 1`, initialWeights already contains intercepts. */
+      initialWeights
+    }
+    for (iter <- 1 to iterations) {
+      logInfo(s"Start train (Iteration $iter/$iterations)")
+      val startedAt = System.nanoTime()
+
+      val delta = updateGradients(iter, backward(forward(initialWeightsWithIntercept), numFeatures))
+      updateWeights(initialWeightsWithIntercept, delta)
+      val loss = loss(initialWeightsWithIntercept)
+      val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
+      logInfo(s"train (Iteration $iter/$iterations) loss:              $loss")
+      logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
+    }
+  }
   /**
    * Calculate the mistake probability: q(i) = 1/(1+exp(yi*(w*xi))).
    * @param initialWeights weights of last iteration.
-   * @param dataSet
    */
-  protected[ml] def forward(initialWeights: Vector, dataSet: RDD[LabeledPoint]): RDD[Double] = {
+  protected[ml] def forward(initialWeights: Vector): RDD[Double] = {
     dataSet.map{point =>
       val z = point.label * dot(initialWeights, point.features)
       1.0 / (1.0 + exp(z))
@@ -94,9 +251,8 @@ class LogisticRegressionMIS extends Logging with Serializable{
   /**
    * Calculate the change in weights. wj = log(mu_j_+/mu_j_-)
    * @param misProb q(i) = 1/(1+exp(yi*(w*xi))).
-   * @param dataSet
    */
-  protected[ml] def backward(misProb: RDD[Double], dataSet: RDD[LabeledPoint], numFeatures: Int):
+  protected[ml] def backward(misProb: RDD[Double], numFeatures: Int):
   Vector = {
     def func(v1: Vector, v2: Vector) = {
       axpy(1.0, v1, v2)
@@ -140,16 +296,14 @@ class LogisticRegressionMIS extends Logging with Serializable{
    * @param weights
    * @param delta
    */
-  protected[ml] def updateWeights(weights: Vector, delta: Vector): Vector = {
+  protected[ml] def updateWeights(weights: Vector, delta: Vector): Unit = {
     axpy(1.0, delta, weights)
-    weights
   }
   /**
    * @param weights
-   * @param dataSet
    * @return Loss of given weights and dataSet in one iteration.
    */
-  protected[ml] def loss(weights: Vector, dataSet: RDD[LabeledPoint]) : Double = {
+  protected[ml] def loss(weights: Vector) : Double = {
     // For Binary Logistic Regression
     var lossSum = 0
     dataSet.foreach {point =>
@@ -161,5 +315,23 @@ class LogisticRegressionMIS extends Logging with Serializable{
       }
     }
     lossSum
+  }
+}
+
+object LogisticRegression {
+  def trainMIS(
+    input: RDD[LabeledPoint],
+    numIterations: Int,
+    stepSize: Double,
+    regParam: Double,
+    epsilon: Double = 1e-3,
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): Unit = {
+    val lr = new LogisticRegressionMIS(input)
+    lr.setEpsilon(epsilon)
+      .setIntercept(false)
+      .setStepSize(stepSize)
+      .setNumIterations(numIterations)
+      .setRegParam(regParam)
+      .run(numIterations)
   }
 }
