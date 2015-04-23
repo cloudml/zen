@@ -18,15 +18,9 @@ package com.github.cloudml.zen.ml.classification
 
 import breeze.numerics.exp
 import com.github.cloudml.zen.ml.util.Utils
-import org.apache.hadoop.hdfs.server.namenode.FSImageFormatProtobuf.Loader
-import org.apache.spark.mllib.classification.LogisticRegressionModel
-import org.apache.spark.mllib.classification.impl.GLMClassificationModel.SaveLoadV1_0.Data
 import org.apache.spark.mllib.feature.StandardScaler
-import org.apache.spark.mllib.util.Loader
-import org.apache.spark.mllib.util.Loader
-import org.apache.spark.sql.SQLContext
-import org.apache.spark.{SparkContext, Logging}
-import org.apache.spark.mllib.linalg.{DenseVector, Vectors, Vector}
+import org.apache.spark.{Logging}
+import org.apache.spark.mllib.linalg.{Vectors, Vector}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.mllib.util.MLUtils._
 import org.apache.spark.rdd.RDD
@@ -34,7 +28,6 @@ import com.github.cloudml.zen.ml.linalg.BLAS.dot
 import com.github.cloudml.zen.ml.linalg.BLAS.axpy
 import com.github.cloudml.zen.ml.linalg.BLAS.scal
 import org.apache.spark.storage.StorageLevel
-import org.json4s.jackson.JsonMethods._
 
 class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Serializable{
   /**
