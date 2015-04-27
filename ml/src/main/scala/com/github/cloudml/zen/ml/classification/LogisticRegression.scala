@@ -18,7 +18,6 @@ package com.github.cloudml.zen.ml.classification
 
 import breeze.numerics.exp
 import com.github.cloudml.zen.ml.util.Utils
-import org.apache.spark.mllib.feature.StandardScaler
 import org.apache.spark.{Logging}
 import org.apache.spark.mllib.linalg.{Vectors, Vector}
 import org.apache.spark.mllib.regression.LabeledPoint
@@ -30,11 +29,6 @@ import com.github.cloudml.zen.ml.linalg.BLAS.scal
 import org.apache.spark.storage.StorageLevel
 
 class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Serializable{
-  /**
-   * Construct a LogisticRegression object with default parameters: {stepSize: 1.0,
-   * numIterations: 100, regParm: 0.01, miniBatchFraction: 1.0}.
-   */
-  def this() = this(1.0, 100, 0.01, 1.0)
   private var epsilon: Double = 1e-4
   private var stepSize: Double = 1.0
   private var numIterations: Int = 100
@@ -72,7 +66,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
   /**
    * Set if the algorithm should use feature scaling to improve the convergence during optimization.
    */
-  private[mllib] def setFeatureScaling(useFeatureScaling: Boolean): this.type = {
+  private def setFeatureScaling(useFeatureScaling: Boolean): this.type = {
     this.useFeatureScaling = useFeatureScaling
     this
   }
@@ -185,27 +179,27 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
      *
      * Currently, it's only enabled in LogisticRegressionWithLBFGS
      */
-    val scaler = if (useFeatureScaling) {
-      new StandardScaler(withStd = true, withMean = false).fit(dataSet.map(_.features))
-    } else {
-      null
-    }
-    // Prepend an extra variable consisting of all 1.0's for the intercept.
-    // TODO: Apply feature scaling to the weight vector instead of input data.
-    val data =
-      if (addIntercept) {
-        if (useFeatureScaling) {
-          dataSet.map(lp => (lp.label, appendBias(scaler.transform(lp.features)))).cache()
-        } else {
-          dataSet.map(lp => (lp.label, appendBias(lp.features))).cache()
-        }
-      } else {
-        if (useFeatureScaling) {
-          dataSet.map(lp => (lp.label, scaler.transform(lp.features))).cache()
-        } else {
-          dataSet.map(lp => (lp.label, lp.features))
-        }
-      }
+//    val scaler = if (useFeatureScaling) {
+//      new StandardScaler(withStd = true, withMean = false).fit(dataSet.map(_.features))
+//    } else {
+//      null
+//    }
+//    // Prepend an extra variable consisting of all 1.0's for the intercept.
+//    // TODO: Apply feature scaling to the weight vector instead of input data.
+//    val data =
+//      if (addIntercept) {
+//        if (useFeatureScaling) {
+//          dataSet.map(lp => (lp.label, appendBias(scaler.transform(lp.features)))).cache()
+//        } else {
+//          dataSet.map(lp => (lp.label, appendBias(lp.features))).cache()
+//        }
+//      } else {
+//        if (useFeatureScaling) {
+//          dataSet.map(lp => (lp.label, scaler.transform(lp.features))).cache()
+//        } else {
+//          dataSet.map(lp => (lp.label, lp.features))
+//        }
+//      }
 
     /**
      * TODO: For better convergence, in logistic regression, the intercepts should be computed
@@ -224,9 +218,9 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
 
       val delta = updateGradients(iter, backward(forward(initialWeightsWithIntercept), numFeatures))
       updateWeights(initialWeightsWithIntercept, delta)
-      val loss = loss(initialWeightsWithIntercept)
+      val lossSum = loss(initialWeightsWithIntercept)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      logInfo(s"train (Iteration $iter/$iterations) loss:              $loss")
+      logInfo(s"train (Iteration $iter/$iterations) loss:              $lossSum")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
     }
   }
@@ -298,7 +292,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
    */
   protected[ml] def loss(weights: Vector) : Double = {
     // For Binary Logistic Regression
-    var lossSum = 0
+    var lossSum = 0.0
     dataSet.foreach {point =>
       val margin = -1.0 * dot(point.features, weights)
       if (point.label > 0) {
