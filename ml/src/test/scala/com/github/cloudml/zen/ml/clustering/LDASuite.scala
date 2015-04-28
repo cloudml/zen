@@ -17,13 +17,13 @@
 
 package com.github.cloudml.zen.ml.clustering
 
-
 import java.util.Random
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import breeze.stats.distributions.Poisson
 import com.github.cloudml.zen.ml.util.SharedSparkContext
 import com.github.cloudml.zen.ml.util.SparkUtils._
+import com.google.common.io.Files
 import org.apache.spark.mllib.linalg.{Vector => SV}
 import org.scalatest.FunSuite
 
@@ -52,6 +52,17 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
     assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.size > 0.6)
     assert(pps.head - pps.last > 0)
+
+    val ldaModel = lda.saveModel()
+    val tempDir = Files.createTempDir()
+    tempDir.deleteOnExit()
+    val path = tempDir.toURI.toString
+    ldaModel.save(sc, path)
+    val sameModel = LDAModel.load(sc, path)
+    assert(sameModel.ttc === ldaModel.ttc)
+    assert(sameModel.alpha === ldaModel.alpha)
+    assert(sameModel.beta === ldaModel.beta)
+    assert(sameModel.alphaAS === ldaModel.alphaAS)
   }
 
 }

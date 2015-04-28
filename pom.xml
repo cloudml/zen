@@ -20,7 +20,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.github.cloudml.zen</groupId>
   <artifactId>zen-parent</artifactId>
-  <version>0.01-SNAPSHOT</version>
+  <version>0.1-SNAPSHOT</version>
   <packaging>pom</packaging>
   <name>Zen Project Parent POM</name>
   <url>https://github.com/cloudml/zen/</url>

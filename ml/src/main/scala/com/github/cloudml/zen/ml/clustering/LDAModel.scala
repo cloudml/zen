@@ -19,21 +19,26 @@ package com.github.cloudml.zen.ml.clustering
 import java.lang.ref.SoftReference
 import java.util.{PriorityQueue => JPriorityQueue, Random}
 
-import breeze.linalg.{Vector => BV, DenseVector => BDV, SparseVector => BSV,
-sum => brzSum, norm => brzNorm}
-
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, norm => brzNorm, sum => brzSum}
+import com.github.cloudml.zen.ml.clustering.LDAUtils._
 import com.github.cloudml.zen.ml.util.SparkUtils._
-import org.apache.spark.mllib.linalg.{Vectors, DenseVector => SDV, SparseVector => SSV}
+import com.github.cloudml.zen.ml.util.LoaderUtils
+import org.apache.spark.SparkContext
+import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, Vector => SV}
+import org.apache.spark.mllib.regression.LabeledPoint
+import org.apache.spark.mllib.util.{MLUtils, Saveable, Loader}
+import org.apache.spark.sql.{Row, SQLContext}
 import org.apache.spark.util.collection.AppendOnlyMap
-
-import LDAUtils._
+import org.json4s.DefaultFormats
+import org.json4s.JsonDSL._
+import org.json4s.jackson.JsonMethods._
 
 class LDAModel private[ml](
   private[ml] val gtc: BDV[Double],
   private[ml] val ttc: Array[BSV[Double]],
   val alpha: Double,
   val beta: Double,
-  val alphaAS: Double) extends Serializable {
+  val alphaAS: Double) extends Serializable with Saveable {
 
   def this(topicCounts: SDV, topicTermCounts: Array[SSV], alpha: Double, beta: Double) {
     this(new BDV[Double](topicCounts.toArray), topicTermCounts.map(t =>
@@ -59,9 +64,9 @@ class LDAModel private[ml](
     rand.setSeed(seed)
   }
 
-  def globalTopicCounter = fromBreeze(gtc)
+  def globalTopicCounter: SV = fromBreeze(gtc)
 
-  def topicTermCounter = ttc.map(t => fromBreeze(t))
+  def topicTermCounter: Array[SV] = ttc.map(t => fromBreeze(t))
 
   def inference(
     doc: SSV,
@@ -131,11 +136,8 @@ class LDAModel private[ml](
     for (i <- 0 until topics.length) {
       val termId = tokens(i)
       val currentTopic = topics(i)
-      val d = dSparse(gtc, ttc(termId), docTopicCounter,
-        currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
-
-      val (wSum, w) = wordTable(wordTableCache, gtc, ttc(termId), termId,
-        numTokens, numTerms, alpha, alphaAS, beta)
+      val d = dSparse(gtc, ttc(termId), docTopicCounter, currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
+      val (wSum, w) = wordTable(wordTableCache, gtc, ttc(termId), termId, numTokens, numTerms, alpha, alphaAS, beta)
       val newTopic = tokenSampling(rand, t, tSum, w, wSum, d)
       if (newTopic != currentTopic) {
         docTopicCounter(newTopic) += 1D
@@ -172,7 +174,6 @@ class LDAModel private[ml](
       sampleAlias(gen, t)
     }
   }
-
 
   private def tDense(
     totalTopicCounter: BDV[Double],
@@ -283,14 +284,85 @@ class LDAModel private[ml](
     }
     this
   }
+
+  override def save(sc: SparkContext, path: String): Unit = {
+    LDAModel.SaveLoadV1_0.save(sc, path, ttc, alpha, beta, alphaAS)
+  }
+
+  override protected def formatVersion: String = LDAModel.SaveLoadV1_0.formatVersionV1_0
 }
 
-object LDAModel {
-  def apply(numTopics: Int, numTerms: Int, alpha: Double = 0.1, beta: Double = 0.01) = {
+object LDAModel extends Loader[LDAModel] {
+  def apply(numTopics: Int, numTerms: Int, alpha: Double = 0.1, beta: Double = 0.01, alphaAS: Double = 0.1) = {
     new LDAModel(
       BDV.zeros[Double](numTopics),
-      (0 until numTerms).map(_ => BSV.zeros[Double](numTopics)).toArray, alpha, beta, alpha)
+      (0 until numTerms).map(_ => BSV.zeros[Double](numTopics)).toArray, alpha, beta, alphaAS)
   }
+
+  override def load(sc: SparkContext, path: String): LDAModel = {
+    val (loadedClassName, version, metadata) = LoaderUtils.loadMetadata(sc, path)
+    val versionV1_0 = SaveLoadV1_0.formatVersionV1_0
+    val classNameV1_0 = SaveLoadV1_0.classNameV1_0
+    if (loadedClassName == classNameV1_0 && version == versionV1_0) {
+      implicit val formats = DefaultFormats
+      val alpha = (metadata \ "alpha").extract[Double]
+      val beta = (metadata \ "beta").extract[Double]
+      val alphaAS = (metadata \ "alphaAS").extract[Double]
+      val numTopics = (metadata \ "numTopics").extract[Int]
+      val ttc = SaveLoadV1_0.loadData(sc, path, classNameV1_0, numTopics)
+      val gtc = BDV.zeros[Double](numTopics)
+      ttc.foreach(v => gtc :+= v)
+      new LDAModel(gtc, ttc, alpha, beta, alphaAS)
+    } else {
+      throw new Exception(
+        s"LogisticRegressionModel.load did not recognize model with (className, format version):" +
+          s"($loadedClassName, $version).  Supported:\n" +
+          s"  ($classNameV1_0, 1.0)")
+    }
+
+  }
+
+  private object SaveLoadV1_0 {
+
+    val formatVersionV1_0 = "1.0"
+    val classNameV1_0 = "com.github.cloudml.zen.ml.clustering.LDAModel"
+
+    def loadData(sc: SparkContext, path: String, modelClass: String, numTopics: Int): Array[BSV[Double]] = {
+      val dataPath = LoaderUtils.dataPath(path)
+      val dataRDD = MLUtils.loadLibSVMFile(sc, dataPath, numTopics)
+      val dataArray = dataRDD.take(1)
+      assert(dataArray.size == 1, s"Unable to load $modelClass data from: $dataPath")
+      val termSize = dataRDD.count().toInt
+      val ttc = new Array[BSV[Double]](termSize)
+      dataRDD.map { case LabeledPoint(termId, vector) =>
+        (termId.toInt, vector)
+      }.toLocalIterator.foreach { case (termId, vector) =>
+        ttc(termId) = toBreeze(vector).asInstanceOf[BSV[Double]]
+      }
+      ttc
+    }
+
+    def save(
+      sc: SparkContext,
+      path: String,
+      ttc: Array[BSV[Double]],
+      alpha: Double,
+      beta: Double,
+      alphaAS: Double): Unit = {
+      val numTopics = ttc.head.length
+      val numTerms = ttc.size
+      val metadata = compact(render
+        (("class" -> classNameV1_0) ~ ("version" -> formatVersionV1_0) ~
+          ("alpha" -> alpha) ~ ("beta" -> beta) ~ ("alphaAS" -> alphaAS) ~
+          ("numTopics" -> numTopics) ~ ("numTerms" -> numTerms)))
+      sc.parallelize(Seq(metadata), 1).saveAsTextFile(LoaderUtils.metadataPath(path))
+
+      val dataArray = ttc.zipWithIndex.map { case (vector, termId) => LabeledPoint(termId, fromBreeze(vector)) }
+      val rdd = sc.parallelize(dataArray.toSeq, 1)
+      MLUtils.saveAsLibSVMFile(rdd, LoaderUtils.dataPath(path))
+    }
+  }
+
 }
 
 private[ml] object LDAUtils {
