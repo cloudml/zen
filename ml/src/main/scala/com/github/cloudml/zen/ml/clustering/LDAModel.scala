@@ -27,7 +27,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, Vector => SV}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.mllib.util.{MLUtils, Saveable, Loader}
-import org.apache.spark.sql.{Row, SQLContext}
 import org.apache.spark.util.collection.AppendOnlyMap
 import org.json4s.DefaultFormats
 import org.json4s.JsonDSL._
@@ -52,8 +51,7 @@ class LDAModel private[ml](
   @transient private lazy val alphaSum = numTopics * alpha
   @transient private lazy val termSum = numTokens + alphaAS * numTopics
 
-  @transient private lazy val wordTableCache =
-    new AppendOnlyMap[Int, SoftReference[(Double, Table)]]()
+  @transient private lazy val wordTableCache = new AppendOnlyMap[Int, SoftReference[(Double, Table)]](ttc.length / 2)
   @transient private lazy val (t, tSum) = {
     val dv = tDense(gtc, numTokens, numTerms, alpha, alphaAS, beta)
     (generateAlias(dv._2, dv._1), dv._1)
@@ -69,15 +67,15 @@ class LDAModel private[ml](
   def topicTermCounter: Array[SV] = ttc.map(t => fromBreeze(t))
 
   def inference(
-    doc: SSV,
+    doc: SV,
     totalIter: Int = 10,
-    burnIn: Int = 5): SSV = {
+    burnIn: Int = 5): SV = {
     require(totalIter > burnIn, "totalIter is less than burnInIter")
     require(totalIter > 0, "totalIter is less than 0")
     require(burnIn > 0, "burnInIter is less than 0")
 
     val topicDist = BSV.zeros[Double](numTopics)
-    val tokens = vector2Array(new BSV[Int](doc.indices, doc.values.map(_.toInt), doc.size))
+    val tokens = vector2Array(toBreeze(doc))
     val topics = new Array[Int](tokens.length)
 
     var docTopicCounter = uniformDistSampler(tokens, topics)
@@ -88,27 +86,14 @@ class LDAModel private[ml](
 
     topicDist.compact()
     topicDist :/= brzNorm(topicDist, 1)
-    fromBreeze(topicDist).asInstanceOf[SSV]
+    fromBreeze(topicDist)
   }
 
-  private[ml] def vector2Array(vec: BV[Int]): Array[Int] = {
-    val docLen = brzSum(vec)
-    var offset = 0
-    val sent = new Array[Int](docLen)
-    vec.activeIterator.foreach { case (term, cn) =>
-      for (i <- 0 until cn) {
-        sent(offset) = term
-        offset += 1
-      }
-    }
-    sent
-  }
-
-  private[ml] def vectorDouble2Array(vec: BV[Double]): Array[Int] = {
+  private[ml] def vector2Array(vec: BV[Double]): Array[Int] = {
     val docLen = brzSum(vec)
     var offset = 0
     val sent = new Array[Int](docLen.toInt)
-    vec.activeIterator.foreach { case (term, cn) =>
+    vec.activeIterator.filter(_._2 != 0.0).foreach { case (term, cn) =>
       for (i <- 0 until cn.toInt) {
         sent(offset) = term
         offset += 1
