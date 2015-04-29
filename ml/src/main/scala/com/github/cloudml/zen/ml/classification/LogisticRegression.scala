@@ -218,7 +218,9 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
       logInfo(s"Start train (Iteration $iter/$iterations)")
       val startedAt = System.nanoTime()
 
-      val delta = updateGradients(iter, backward(forward(initialWeightsWithIntercept), numFeatures))
+      val q = forward(initialWeightsWithIntercept)
+      val qArr = q.collect()
+      val delta = backward(iter, q, numFeatures)
       updateWeights(initialWeightsWithIntercept, delta)
       val lossSum = loss(initialWeightsWithIntercept)
       lossArr(iter-1) = lossSum
@@ -253,8 +255,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
    * Calculate the change in weights. wj = log(mu_j_+/mu_j_-)
    * @param misProb q(i) = 1/(1+exp(yi*(w*xi))).
    */
-  protected[ml] def backward(misProb: RDD[Double], numFeatures: Int):
-  Vector = {
+  protected[ml] def backward(iter: Int, misProb: RDD[Double], numFeatures: Int): Vector = {
     def func(v1: Vector, v2: Vector) = {
       axpy(1.0, v1, v2)
       v2
@@ -278,18 +279,10 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
       }
       i += 1
     }
-    Vectors.dense(grads)
-  }
-
-  /**
-   * delta = stepSize * grad
-   * @param iter
-   * @param grads
-   */
-  protected[ml] def updateGradients(iter: Int, grads: Vector): Vector = {
+    val gradVec = Vectors.dense(grads)
     val thisIterStepSize = stepSize / math.sqrt(iter)
-    scal(thisIterStepSize, grads)
-    grads
+    scal(thisIterStepSize, gradVec)
+    gradVec
   }
 
   /**
