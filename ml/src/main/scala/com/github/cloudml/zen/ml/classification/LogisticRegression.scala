@@ -18,6 +18,7 @@ package com.github.cloudml.zen.ml.classification
 
 import breeze.numerics.exp
 import com.github.cloudml.zen.ml.util.Utils
+import org.apache.spark.mllib.classification.LogisticRegressionModel
 import org.apache.spark.{Logging}
 import org.apache.spark.mllib.linalg.{Vectors, Vector}
 import org.apache.spark.mllib.regression.LabeledPoint
@@ -124,7 +125,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
    * Run the algorithm with the configured parameters on an input
    * RDD of LabeledPoint entries.
    */
-  def run(iterations: Int): Unit = {
+  def run(iterations: Int): (LogisticRegressionModel, Array[Double]) = {
     if (numFeatures < 0) {
       numFeatures = dataSet.map(_.features.size).first()
     }
@@ -150,7 +151,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
     }
     run(iterations, initialWeights)
   }
-  def run(iterations: Int, initialWeights: Vector): Unit ={
+  def run(iterations: Int, initialWeights: Vector): (LogisticRegressionModel, Array[Double]) ={
     if (numFeatures < 0) {
       numFeatures = dataSet.map(_.features.size).first()
     }
@@ -212,6 +213,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
       /** If `numOfLinearPredictor > 1`, initialWeights already contains intercepts. */
       initialWeights
     }
+    val lossArr = new Array[Double](iterations)
     for (iter <- 1 to iterations) {
       logInfo(s"Start train (Iteration $iter/$iterations)")
       val startedAt = System.nanoTime()
@@ -219,10 +221,22 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
       val delta = updateGradients(iter, backward(forward(initialWeightsWithIntercept), numFeatures))
       updateWeights(initialWeightsWithIntercept, delta)
       val lossSum = loss(initialWeightsWithIntercept)
+      lossArr(iter-1) = lossSum
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
       logInfo(s"train (Iteration $iter/$iterations) loss:              $lossSum")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
     }
+    val intercept = if (addIntercept && numOfLinearPredictor == 1) {
+      initialWeightsWithIntercept(initialWeightsWithIntercept.size - 1)
+    } else {
+      0.0
+    }
+    var weights = if (addIntercept && numOfLinearPredictor == 1) {
+      Vectors.dense(initialWeightsWithIntercept.toArray.slice(0, initialWeightsWithIntercept.size - 1))
+    } else {
+      initialWeightsWithIntercept
+    }
+    (new LogisticRegressionModel(initialWeightsWithIntercept, intercept), lossArr)
   }
   /**
    * Calculate the mistake probability: q(i) = 1/(1+exp(yi*(w*xi))).
@@ -283,8 +297,9 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
    * @param weights
    * @param delta
    */
-  protected[ml] def updateWeights(weights: Vector, delta: Vector): Unit = {
+  protected[ml] def updateWeights(weights: Vector, delta: Vector): Vector = {
     axpy(1.0, delta, weights)
+    weights
   }
   /**
    * @param weights
