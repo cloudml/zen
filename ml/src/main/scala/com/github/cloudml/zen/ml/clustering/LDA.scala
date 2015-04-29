@@ -20,7 +20,7 @@ package com.github.cloudml.zen.ml.clustering
 import java.lang.ref.SoftReference
 import java.util.Random
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, Vector => BV, normalize => brzNormalize}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, Vector => BV}
 import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.clustering.LDA._
 import com.github.cloudml.zen.ml.clustering.LDAUtils._
@@ -287,8 +287,8 @@ object LDA {
   /**
    * LDA training
    * @param docs training data (docId, wordId) docId >= 0, wordId < 0
-   * @param numTopics the number of topics (5000+ for large data) 
    * @param totalIter  the number of iterations
+   * @param numTopics the number of topics (5000+ for large data)
    * @param alpha      recommend to be (5.0 /numTopics)
    * @param beta       recommend to be in range 0.001 - 0.1
    * @param alphaAS    recommend to be in range 0.01 - 1.0
@@ -297,8 +297,8 @@ object LDA {
    */
   def train(
     docs: RDD[(Long, SV)],
-    numTopics: Int = 2048,
     totalIter: Int = 150,
+    numTopics: Int = 2048,
     alpha: Double = 0.001,
     beta: Double = 0.01,
     alphaAS: Double = 0.1,
@@ -318,8 +318,8 @@ object LDA {
    * topicID termID+1:counter termID+1:counter ..
    * @param docs training data: (docId, wordId) docId >= 0 while wordId < 0
    * @param dir   the directory where the model is saved
-   * @param numTopics  the number of topics (> 5000 for large data)
    * @param totalIter  the number of iterations
+   * @param numTopics  the number of topics (> 5000 for large data)
    * @param alpha      recommend to be (5.0 /numTopics)
    * @param beta       recommend to be in range 0.001 - 0.1
    * @param alphaAS    recommend to be in range 0.01 - 1.0
@@ -329,8 +329,8 @@ object LDA {
   def trainAndSaveModel(
     docs: RDD[(Long, SV)],
     dir: String,
-    numTopics: Int = 2048,
     totalIter: Int = 150,
+    numTopics: Int = 2048,
     alpha: Double = 0.01,
     beta: Double = 0.01,
     alphaAS: Double = 0.1,
@@ -355,7 +355,7 @@ object LDA {
   }
 
   /**
-   * 增量训练
+   * incremental train
    * @param docs
    * @param computedModel
    * @param alphaAS
@@ -459,7 +459,7 @@ object LDA {
     assert(docId >= 0)
     val newDocId: DocId = genNewDocId(docId)
     computedModel.setSeed(gen.nextInt())
-    val tokens = computedModel.vectorDouble2Array(doc)
+    val tokens = computedModel.vector2Array(doc)
     val topics = new Array[Int](tokens.length)
     var docTopicCounter = computedModel.uniformDistSampler(tokens, topics)
     for (t <- 0 until 15) {
@@ -487,7 +487,7 @@ object LDA {
       if ((svCounter == 1 && table._1.length > 1) ||
         /* the sampled topic that contains current token and other tokens */
         (svCounter > 1 && gen.nextDouble() < 1.0 / svCounter)
-        /* the sampled topic has 1/svCounter probability that belongs to current token */) {
+      /* the sampled topic has 1/svCounter probability that belongs to current token */ ) {
         return sampleSV(gen, table, sv, currentTopic)
       }
     }
