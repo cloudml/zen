@@ -286,13 +286,16 @@ object LDA {
 
   /**
    * LDA training
-   * @param docs training data (docId, wordId) docId >= 0, wordId < 0
+   * @param docs       RDD of documents, which are term (word) count vectors paired with IDs.
+   *                   The term count vectors are "bags of words" with a fixed-size vocabulary
+   *                   (where the vocabulary size is the length of the vector).
+   *                   Document IDs must be unique and >= 0.
    * @param totalIter  the number of iterations
    * @param numTopics the number of topics (5000+ for large data)
    * @param alpha      recommend to be (5.0 /numTopics)
    * @param beta       recommend to be in range 0.001 - 0.1
    * @param alphaAS    recommend to be in range 0.01 - 1.0
-   * @param useLightLDA use LightLDA sampling algorithm or not, recommend false for short doc
+   * @param useLightLDA use LightLDA sampling algorithm or not, recommend false for short text
    * @return LDAModel
    */
   def train(
@@ -316,14 +319,17 @@ object LDA {
   /**
    * Train and save the trained model. The training data is in LibSVM format where each line is represented in:
    * topicID termID+1:counter termID+1:counter ..
-   * @param docs training data: (docId, wordId) docId >= 0 while wordId < 0
-   * @param dir   the directory where the model is saved
+   * @param docs        RDD of documents, which are term (word) count vectors paired with IDs.
+   *                    The term count vectors are "bags of words" with a fixed-size vocabulary
+   *                    (where the vocabulary size is the length of the vector).
+   *                    Document IDs must be unique and >= 0.
+   * @param dir         the directory where the model is saved
    * @param totalIter  the number of iterations
    * @param numTopics  the number of topics (> 5000 for large data)
    * @param alpha      recommend to be (5.0 /numTopics)
    * @param beta       recommend to be in range 0.001 - 0.1
    * @param alphaAS    recommend to be in range 0.01 - 1.0
-   * @param useLightLDA use LightLDA or not? Recommend to be false for short length document
+   * @param useLightLDA use LightLDA or not? Recommend to be false for short text
    * @return LDAModel
    */
   def trainAndSaveModel(
