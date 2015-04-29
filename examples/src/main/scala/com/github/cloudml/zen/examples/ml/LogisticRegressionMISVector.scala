@@ -1,5 +1,10 @@
 package com.github.cloudml.zen.examples.ml
 
+import com.github.cloudml.zen.ml.classification.LogisticRegressionMIS
+import org.apache.spark.{SparkContext, SparkConf}
+import org.apache.spark.mllib.regression.LabeledPoint
+import org.apache.spark.mllib.util.MLUtils
+
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -17,6 +22,24 @@ package com.github.cloudml.zen.examples.ml
  * limitations under the License.
  */
 
-class LogisticRegressionMISVector {
+object LogisticRegressionMISVector {
+  def main (args: Array[String]) {
+    val conf = new SparkConf().setAppName("MIS with Vectors").setMaster("local")
+    val sc = new SparkContext(conf)
+    val dataSetFile = s"/Users/basin/gitStore/zen/data/binary_classification_data.txt"
+    val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile).map{case LabeledPoint(label, features)=>
+      val newLabel = if (label > 0.0) 1.0 else -1.0
+      LabeledPoint(newLabel, features)
+    }
+    val maxIter = 10
+    val stepSize = 1
+    val lr = new LogisticRegressionMIS(dataSet)
+    lr.setStepSize(stepSize)
+    var i = 0
+    val startedAt = System.currentTimeMillis()
+    val (model, lossArr) = lr.run(maxIter)
+    println((System.currentTimeMillis() - startedAt) / 1e3)
 
+    lossArr.foreach(println)
+  }
 }

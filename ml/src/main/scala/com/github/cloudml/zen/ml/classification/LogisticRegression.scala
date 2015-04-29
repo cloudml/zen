@@ -71,6 +71,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
     this.useFeatureScaling = useFeatureScaling
     this
   }
+  private val numSamples = dataSet.count()
   /**
    * Set if the algorithm should add an intercept. Default false.
    * We set the default to false because adding the intercept will cause memory allocation.
@@ -217,7 +218,6 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
     for (iter <- 1 to iterations) {
       logInfo(s"Start train (Iteration $iter/$iterations)")
       val startedAt = System.nanoTime()
-
       val q = forward(initialWeightsWithIntercept)
       val qArr = q.collect()
       val delta = backward(iter, q, numFeatures)
@@ -233,12 +233,12 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
     } else {
       0.0
     }
-    var weights = if (addIntercept && numOfLinearPredictor == 1) {
+    val weights = if (addIntercept && numOfLinearPredictor == 1) {
       Vectors.dense(initialWeightsWithIntercept.toArray.slice(0, initialWeightsWithIntercept.size - 1))
     } else {
       initialWeightsWithIntercept
     }
-    (new LogisticRegressionModel(initialWeightsWithIntercept, intercept), lossArr)
+    (new LogisticRegressionModel(weights, intercept), lossArr)
   }
   /**
    * Calculate the mistake probability: q(i) = 1/(1+exp(yi*(w*xi))).
@@ -252,7 +252,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
   }
 
   /**
-   * Calculate the change in weights. wj = log(mu_j_+/mu_j_-)
+   * Calculate the change in weights. delta_W_j = stepSize * log(mu_j_+/mu_j_-)
    * @param misProb q(i) = 1/(1+exp(yi*(w*xi))).
    */
   protected[ml] def backward(iter: Int, misProb: RDD[Double], numFeatures: Int): Vector = {
@@ -275,7 +275,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
       grads(i) = if (epsilon == 0.0) {
         math.log(muPlus(i) / muMinus(i))
       } else {
-        math.log(muPlus(i) / (epsilon + muMinus(i)))
+        math.log(epsilon + muPlus(i) / (epsilon + muMinus(i)))
       }
       i += 1
     }
@@ -290,9 +290,8 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
    * @param weights
    * @param delta
    */
-  protected[ml] def updateWeights(weights: Vector, delta: Vector): Vector = {
+  protected[ml] def updateWeights(weights: Vector, delta: Vector): Unit = {
     axpy(1.0, delta, weights)
-    weights
   }
   /**
    * @param weights
@@ -300,16 +299,14 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
    */
   protected[ml] def loss(weights: Vector) : Double = {
     // For Binary Logistic Regression
-    var lossSum = 0.0
-    dataSet.foreach {point =>
+    dataSet.map {point =>
       val margin = -1.0 * dot(point.features, weights)
       if (point.label > 0) {
-        lossSum += Utils.log1pExp(margin)
+        Utils.log1pExp(margin)
       } else {
-        lossSum += Utils.log1pExp(margin) - margin
+        Utils.log1pExp(margin) - margin
       }
-    }
-    lossSum
+    }.reduce(_+_) / numSamples
   }
 }
 
