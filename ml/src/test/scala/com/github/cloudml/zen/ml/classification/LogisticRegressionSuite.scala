@@ -41,6 +41,7 @@ class LogisticRegressionSuite extends FunSuite with SharedSparkContext with Matc
     while (i < maxIter) {
       val (model, lossArr) = lr.run(1)
       println(lossArr(0))
+      i += 1
     }
     println((System.currentTimeMillis() - startedAt) / 1e3)
 
