@@ -218,9 +218,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
     for (iter <- 1 to iterations) {
       logInfo(s"Start train (Iteration $iter/$iterations)")
       val startedAt = System.nanoTime()
-      val q = forward(initialWeightsWithIntercept)
-      val qArr = q.collect()
-      val delta = backward(iter, q, numFeatures)
+      val delta = backward(iter, forward(initialWeightsWithIntercept), numFeatures)
       updateWeights(initialWeightsWithIntercept, delta)
       val lossSum = loss(initialWeightsWithIntercept)
       lossArr(iter-1) = lossSum
