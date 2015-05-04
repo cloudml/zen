@@ -16,7 +16,8 @@
  */
 package com.github.cloudml.zen.ml.classification
 
-import breeze.numerics.exp
+import breeze.linalg.max
+import breeze.numerics.{abs, signum, sqrt, exp}
 import com.github.cloudml.zen.ml.util.Utils
 import org.apache.spark.mllib.classification.LogisticRegressionModel
 import org.apache.spark.{Logging}
@@ -208,7 +209,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
      * from the prior probability distribution of the outcomes; for linear regression,
      * the intercept should be set as the average of response.
      */
-    val initialWeightsWithIntercept = if (addIntercept && numOfLinearPredictor == 1) {
+    var initialWeightsWithIntercept = if (addIntercept && numOfLinearPredictor == 1) {
       appendBias(initialWeights)
     } else {
       /** If `numOfLinearPredictor > 1`, initialWeights already contains intercepts. */
@@ -219,7 +220,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
       logInfo(s"Start train (Iteration $iter/$iterations)")
       val startedAt = System.nanoTime()
       val delta = backward(iter, forward(initialWeightsWithIntercept), numFeatures)
-      updateWeights(initialWeightsWithIntercept, delta)
+      initialWeightsWithIntercept = updateWeights(initialWeightsWithIntercept, delta, iter)
       val lossSum = loss(initialWeightsWithIntercept)
       lossArr(iter-1) = lossSum
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
@@ -288,8 +289,19 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
    * @param weights
    * @param delta
    */
-  protected[ml] def updateWeights(weights: Vector, delta: Vector): Unit = {
+  protected[ml] def updateWeights(weights: Vector, delta: Vector, iter: Int): Vector = {
     axpy(1.0, delta, weights)
+    val thisIterL1StepSize = stepSize / sqrt(iter)
+    weights.toArray.map{
+      weight =>
+        var newWeight = weight
+        if (regParam > 0.0 && weight != 0.0) {
+          val shrinkageVal = regParam * thisIterL1StepSize
+          newWeight = signum(weight) * max(0.0, abs(weight) - shrinkageVal)
+        }
+        assert(!newWeight.isNaN)
+        newWeight
+    }.toVector
   }
   /**
    * @param weights
@@ -315,7 +327,7 @@ object LogisticRegression {
     stepSize: Double,
     regParam: Double,
     epsilon: Double = 1e-3,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): Unit = {
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): (LogisticRegressionModel, Array[Double]) = {
     val lr = new LogisticRegressionMIS(input)
     lr.setEpsilon(epsilon)
       .setIntercept(false)
