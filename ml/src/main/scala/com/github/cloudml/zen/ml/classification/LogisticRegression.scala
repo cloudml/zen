@@ -292,8 +292,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
   protected[ml] def updateWeights(weights: Vector, delta: Vector, iter: Int): Vector = {
     axpy(1.0, delta, weights)
     val thisIterL1StepSize = stepSize / sqrt(iter)
-    weights.toArray.map{
-      weight =>
+    val newWeights = weights.toArray.map{ weight =>
         var newWeight = weight
         if (regParam > 0.0 && weight != 0.0) {
           val shrinkageVal = regParam * thisIterL1StepSize
@@ -301,7 +300,8 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
         }
         assert(!newWeight.isNaN)
         newWeight
-    }.toVector
+    }
+    Vectors.dense(newWeights)
   }
   /**
    * @param weights
