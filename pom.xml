@@ -53,6 +53,7 @@
     <java.version>1.6</java.version>
     <scala.version>2.10.4</scala.version>
     <scala.binary.version>2.10</scala.binary.version>
+    <commons.math3.version>3.4.1</commons.math3.version>
     <PermGen>64m</PermGen>
     <MaxPermGen>512m</MaxPermGen>
     <CodeCacheSize>512m</CodeCacheSize>
@@ -106,7 +107,6 @@
         <artifactId>hadoop-client</artifactId>
         <version>${hadoop.version}</version>
       </dependency>
-
       <dependency>
         <groupId>org.scalanlp</groupId>
         <artifactId>breeze_${scala.binary.version}</artifactId>
@@ -123,6 +123,11 @@
             <artifactId>commons-math3</artifactId>
           </exclusion>
         </exclusions>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-math3</artifactId>
+        <version>${commons.math3.version}</version>
       </dependency>
       <!-- test -->
       <dependency>
@@ -385,6 +390,8 @@
             <artifactSet>
               <includes>
                 <include>org.scalanlp:breeze_${scala.binary.version}</include>
+                <include>org.scalanlp:breeze-macros_${scala.binary.version}</include>
+                <include>org.apache.commons:commons-math3</include>
               </includes>
             </artifactSet>
             <relocations>
@@ -393,6 +400,13 @@
                 <shadedPattern>com.github.cloudml.shaded.breeze</shadedPattern>
                 <includes>
                   <include>breeze.**</include>
+                </includes>
+              </relocation>
+              <relocation>
+                <pattern>org.apache.commons.math3</pattern>
+                <shadedPattern>com.github.cloudml.shaded.math3</shadedPattern>
+                <includes>
+                  <include>org.apache.commons.math3.**</include>
                 </includes>
               </relocation>
             </relocations>

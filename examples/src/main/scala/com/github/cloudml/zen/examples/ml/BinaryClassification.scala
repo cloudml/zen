@@ -18,10 +18,8 @@
 package com.github.cloudml.zen.examples.ml
 
 import com.github.cloudml.zen.ml.regression.LogisticRegression
-import org.apache.hadoop.fs.Path
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.graphx.GraphXUtils
-import org.apache.spark.mllib.linalg.SparseVector
 import org.apache.spark.mllib.util.MLUtils
 import org.apache.spark.{SparkConf, SparkContext}
 

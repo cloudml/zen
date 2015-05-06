@@ -79,21 +79,24 @@ abstract class LogisticRegression(
   @transient protected var gradient: VertexRDD[Double] = null
   @transient protected var vertices = dataSet.vertices
   @transient protected var previousVertices = vertices
-  @transient protected var edges = dataSet.edges.asInstanceOf[EdgeRDDImpl[ED, _]]
-    .mapEdgePartitions((pid, part) => part.withoutVertexAttributes[VD]).setName("edges")
+  @transient protected var edges = dataSet.edges.asInstanceOf[EdgeRDDImpl[ED, _]].mapEdgePartitions {
+    (pid, part) =>
+      part.withoutVertexAttributes[VD]
+  }.setName("edges").persist(storageLevel)
+  if (edges.sparkContext.getCheckpointDir.isDefined) {
+    edges.checkpoint()
+    edges.count()
+  }
+  dataSet.edges.unpersist(blocking = false)
+  if (vertices.getStorageLevel == StorageLevel.NONE) {
+    vertices.persist(storageLevel)
+    vertices.count()
+  }
+  dataSet =  GraphImpl.fromExistingRDDs(vertices, edges)
+  dataSet.persist(storageLevel)
 
   val numFeatures: Long = features.count()
   val numSamples: Long = samples.count()
-
-  if (edges.getStorageLevel == StorageLevel.NONE) {
-    edges.persist(storageLevel)
-  }
-  edges.count()
-
-  if (vertices.getStorageLevel == StorageLevel.NONE) {
-    vertices.persist(storageLevel)
-  }
-  vertices.count()
 
   def samples: VertexRDD[VD] = {
     dataSet.vertices.filter(t => t._1 < 0)
@@ -115,9 +118,9 @@ abstract class LogisticRegression(
 
       val tis = thisIterStepSize(iter)
       vertices = updateWeight(gradient, iter, tis, stepSize / sqrt(iter))
-      checkpointDataSet()
+      checkpointVertices()
       vertices.count()
-      dataSet = GraphImpl(vertices, edges)
+      dataSet =  GraphImpl.fromExistingRDDs(vertices, edges)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
       // logInfo(s"train (Iteration $iter/$iterations) loss:              ${loss(margin)}")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
@@ -253,16 +256,10 @@ abstract class LogisticRegression(
     }
   }
 
-  protected def checkpointDataSet(): Unit = {
+  protected def checkpointVertices(): Unit = {
     val sc = vertices.sparkContext
     if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
       vertices.checkpoint()
-      if (!edges.isCheckpointed) {
-        edges = edges.mapValues(t => t.attr)
-        edges = edges.persist(storageLevel).setName("edges")
-        edges.checkpoint()
-        edges.count()
-      }
     }
   }
 
@@ -320,7 +317,7 @@ class LogisticRegressionSGD(
       }
     }
     multiplier.setName(s"multiplier-$iter").persist(storageLevel)
-    GraphImpl(multiplier, dataSet.edges).aggregateMessages[Double](ctx => {
+    GraphImpl.fromExistingRDDs(multiplier, dataSet.edges).aggregateMessages[Double](ctx => {
       // val sampleId = ctx.dstId
       // val featureId = ctx.srcId
       val x = ctx.attr
@@ -390,7 +387,7 @@ class LogisticRegressionMIS(
       qv.map(q => if (label > 0) q else -q).getOrElse(0)
     }
     qWithLabel.setName(s"qWithLabel-$iter").persist(storageLevel)
-    GraphImpl(qWithLabel, dataSet.edges).aggregateMessages[Array[Double]](ctx => {
+    GraphImpl.fromExistingRDDs(qWithLabel, dataSet.edges).aggregateMessages[Array[Double]](ctx => {
       // val sampleId = ctx.dstId
       // val featureId = ctx.srcId
       val x = ctx.attr
