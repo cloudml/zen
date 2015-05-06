@@ -119,7 +119,7 @@ abstract class LogisticRegression(
       vertices.count()
       dataSet = GraphImpl(vertices, edges)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      // logInfo(s"train (Iteration $iter/$iterations) loss:              ${loss(margin)}")
+       logInfo(s"train (Iteration $iter/$iterations) loss:              ${loss(margin)}")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
       unpersistVertices()
       innerIter += 1
