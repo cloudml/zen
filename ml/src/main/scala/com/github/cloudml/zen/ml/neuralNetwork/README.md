@@ -2,7 +2,7 @@
 
 ## Road map
  
- * 支持Parameter Server(Bulk Synchronous Parallel)
+ * Support Parameter Server(Asynchronous Parallel)
  
- * 添加CNN
+ * Support CNN
  
