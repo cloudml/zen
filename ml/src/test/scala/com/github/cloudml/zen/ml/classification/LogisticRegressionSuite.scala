@@ -36,7 +36,6 @@ class LogisticRegressionSuite extends FunSuite with SharedSparkContext with Matc
     val stepSize = 1 / (2 * max)
     val lr = new LogisticRegressionMIS(dataSet)
     lr.setStepSize(stepSize)
-    var i = 0
     val startedAt = System.currentTimeMillis()
     val (model, lossArr) = lr.run(maxIter)
     println((System.currentTimeMillis() - startedAt) / 1e3)

@@ -259,29 +259,29 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
       axpy(1.0, v1, v2)
       v2
     }
-    val muArr: Array[(Double, Vector)] = dataSet.zip(misProb).map {
+    dataSet.zip(misProb).map {
       case (point, prob) =>
         val scaledFeatures = Vectors.zeros(numFeatures)
         axpy(prob, point.features, scaledFeatures)
         (point.label, scaledFeatures)
-    }.aggregateByKey(Vectors.zeros(numFeatures))(func, func).collect()
-    assert(muArr.length == 2)
-    val grads: Array[Double] = new Array[Double](numFeatures)
-    val muPlus: Array[Double] = {if (muArr(0)._1 > 0) muArr(0)._2 else muArr(1)._2}.toArray
-    val muMinus: Array[Double] = {if (muArr(0)._1 < 0) muArr(0)._2 else muArr(1)._2}.toArray
-    var i = 0
-    while (i < numFeatures) {
-      grads(i) = if (epsilon == 0.0) {
-        math.log(muPlus(i) / muMinus(i))
-      } else {
-        math.log(epsilon + muPlus(i) / (epsilon + muMinus(i)))
+    }.aggregateByKey(Vectors.zeros(numFeatures))(func, func).reduce{ (x1, x2) =>
+      val grads: Array[Double] = new Array[Double](numFeatures)
+      val muPlus: Array[Double] = {if (x1._1 > 0) x1._2 else x2._2}.toArray
+      val muMinus: Array[Double] = {if (x1._1 < 0) x1._2 else x2._2}.toArray
+      var i = 0
+      while (i < numFeatures) {
+        grads(i) = if (epsilon == 0.0) {
+          math.log(muPlus(i) / muMinus(i))
+        } else {
+          math.log(epsilon + muPlus(i) / (epsilon + muMinus(i)))
+        }
+        i += 1
       }
-      i += 1
-    }
-    val gradVec = Vectors.dense(grads)
-    val thisIterStepSize = stepSize / math.sqrt(iter)
-    scal(thisIterStepSize, gradVec)
-    gradVec
+      val thisIterStepSize = stepSize / math.sqrt(iter)
+      val gradVec = Vectors.dense(grads)
+      scal(thisIterStepSize, gradVec)
+      (0.0, gradVec)
+    }._2
   }
 
   /**
