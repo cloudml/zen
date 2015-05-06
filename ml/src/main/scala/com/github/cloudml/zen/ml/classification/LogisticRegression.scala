@@ -316,7 +316,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
       } else {
         Utils.log1pExp(margin) - margin
       }
-    }.reduce(_+_) / numSamples
+    }.reduce(_ + _) / numSamples
   }
 }
 
