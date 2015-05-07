@@ -384,6 +384,20 @@ object FM {
   private[ml] type ED = Double
   private[ml] type VD = Array[Double]
 
+  /**
+   * FM 分类
+   * @param input 训练数据
+   * @param numIterations 迭代次数
+   * @param stepSize  学习步长推荐 1e-2- 1e-1
+   * @param regb   L2范数作用于公式中的 w_{0} 部分
+   * @param regw   L2范数作用于公式中的 \sum_{j=1}^{n}w_{j}x_{j} 部分
+   * @param regv   L2范数作用于公式中的 \sum_{i=1}^{n}\sum_{j=i+1}^{n}<v_{i},v_{j}> x_{i}x_{j} 部分
+   * @param rank   特征分解向量的维度推荐 10-20
+   * @param useAdaGrad 使用 AdaGrad训练
+   * @param miniBatchFraction  每次迭代采样比例
+   * @param storageLevel   缓存级别
+   * @return
+   */
   def trainClassification(
     input: RDD[(Long, LabeledPoint)],
     numIterations: Int,
@@ -406,6 +420,21 @@ object FM {
     val model = lfm.saveModel()
     model
   }
+
+  /**
+   * FM 回归
+   * @param input 训练数据
+   * @param numIterations 迭代次数
+   * @param stepSize  学习步长推荐 1e-2- 1e-1
+   * @param regb   L2范数作用于公式中的 w_{0} 部分
+   * @param regw   L2范数作用于公式中的 \sum_{j=1}^{n}w_{j}x_{j} 部分
+   * @param regv   L2范数作用于公式中的 \sum_{i=1}^{n}\sum_{j=i+1}^{n}<v_{i},v_{j}> x_{i}x_{j} 部分
+   * @param rank   特征分解向量的维度推荐 10-20
+   * @param useAdaGrad 使用 AdaGrad训练
+   * @param miniBatchFraction  每次迭代采样比例
+   * @param storageLevel   缓存级别
+   * @return
+   */
 
   def trainRegression(
     input: RDD[(Long, LabeledPoint)],
