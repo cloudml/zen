@@ -52,8 +52,6 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
    * in GeneralizedLinearModel as zero.
    */
   protected var numOfLinearPredictor: Int = 1
-  /** Whether to add intercept (default: false). */
-  protected var addIntercept: Boolean = false
   /**
    * The dimension of training features.
    */
@@ -81,14 +79,6 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
    */
   def setNumFeatures(numFeatures: Int): this.type = {
     this.numFeatures = numFeatures
-    this
-  }
-  /**
-   * Set if the algorithm should add an intercept. Default false.
-   * We set the default to false because adding the intercept will cause memory allocation.
-   */
-  def setIntercept(addIntercept: Boolean): this.type = {
-    this.addIntercept = addIntercept
     this
   }
   /**
@@ -155,8 +145,6 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
     val initialWeights = {
       if (numOfLinearPredictor == 1) {
         Vectors.dense(new Array[Double](numFeatures))
-      } else if (addIntercept) {
-        Vectors.dense(new Array[Double]((numFeatures + 1) * numOfLinearPredictor))
       } else {
         Vectors.dense(new Array[Double](numFeatures * numOfLinearPredictor))
       }
@@ -173,58 +161,12 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
         + " parent RDDs are also uncached.")
     }
 
-    /*
-     * Scaling columns to unit variance as a heuristic to reduce the condition number:
-     *
-     * During the optimization process, the convergence (rate) depends on the condition number of
-     * the training dataset. Scaling the variables often reduces this condition number
-     * heuristically, thus improving the convergence rate. Without reducing the condition number,
-     * some training datasets mixing the columns with different scales may not be able to converge.
-     *
-     * GLMNET and LIBSVM packages perform the scaling to reduce the condition number, and return
-     * the weights in the original scale.
-     * See page 9 in http://cran.r-project.org/web/packages/glmnet/glmnet.pdf
-     *
-     * Here, if useFeatureScaling is enabled, we will standardize the training features by dividing
-     * the variance of each column (without subtracting the mean), and train the model in the
-     * scaled space. Then we transform the coefficients from the scaled space to the original scale
-     * as GLMNET and LIBSVM do.
-     *
-     * Currently, it's only enabled in LogisticRegressionWithLBFGS
-     */
-//    val scaler = if (useFeatureScaling) {
-//      new StandardScaler(withStd = true, withMean = false).fit(dataSet.map(_.features))
-//    } else {
-//      null
-//    }
-//    // Prepend an extra variable consisting of all 1.0's for the intercept.
-//    // TODO: Apply feature scaling to the weight vector instead of input data.
-//    val data =
-//      if (addIntercept) {
-//        if (useFeatureScaling) {
-//          dataSet.map(lp => (lp.label, appendBias(scaler.transform(lp.features)))).cache()
-//        } else {
-//          dataSet.map(lp => (lp.label, appendBias(lp.features))).cache()
-//        }
-//      } else {
-//        if (useFeatureScaling) {
-//          dataSet.map(lp => (lp.label, scaler.transform(lp.features))).cache()
-//        } else {
-//          dataSet.map(lp => (lp.label, lp.features))
-//        }
-//      }
-
     /**
      * TODO: For better convergence, in logistic regression, the intercepts should be computed
      * from the prior probability distribution of the outcomes; for linear regression,
      * the intercept should be set as the average of response.
      */
-    var initialWeightsWithIntercept = if (addIntercept && numOfLinearPredictor == 1) {
-      appendBias(initialWeights)
-    } else {
-      /** If `numOfLinearPredictor > 1`, initialWeights already contains intercepts. */
-      initialWeights
-    }
+    var initialWeightsWithIntercept = initialWeights
     val lossArr = new Array[Double](iterations)
     for (iter <- 1 to iterations) {
       logInfo(s"Start train (Iteration $iter/$iterations)")
@@ -237,16 +179,8 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
       logInfo(s"train (Iteration $iter/$iterations) loss:              $lossSum")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
     }
-    val intercept = if (addIntercept && numOfLinearPredictor == 1) {
-      initialWeightsWithIntercept(initialWeightsWithIntercept.size - 1)
-    } else {
-      0.0
-    }
-    val weights = if (addIntercept && numOfLinearPredictor == 1) {
-      Vectors.dense(initialWeightsWithIntercept.toArray.slice(0, initialWeightsWithIntercept.size - 1))
-    } else {
-      initialWeightsWithIntercept
-    }
+    val intercept = 0.0
+    val weights = initialWeightsWithIntercept
     (new LogisticRegressionModel(weights, intercept), lossArr)
   }
   /**
@@ -341,7 +275,6 @@ object LogisticRegression {
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): (LogisticRegressionModel, Array[Double]) = {
     val lr = new LogisticRegressionMIS(input)
     lr.setEpsilon(epsilon)
-      .setIntercept(false)
       .setStepSize(stepSize)
       .setNumIterations(numIterations)
       .setRegParam(regParam)
