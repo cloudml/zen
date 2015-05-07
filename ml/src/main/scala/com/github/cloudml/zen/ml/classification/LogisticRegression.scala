@@ -73,6 +73,16 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
     this
   }
   private val numSamples = dataSet.count()
+
+  /**
+   * Set Number of features
+   * @param numFeatures
+   * @return
+   */
+  def setNumFeatures(numFeatures: Int): this.type = {
+    this.numFeatures = numFeatures
+    this
+  }
   /**
    * Set if the algorithm should add an intercept. Default false.
    * We set the default to false because adding the intercept will cause memory allocation.
@@ -261,15 +271,16 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
     }
     dataSet.zip(misProb).map {
       case (point, prob) =>
-        val scaledFeatures = Vectors.zeros(numFeatures)
-        axpy(prob, point.features, scaledFeatures)
+        val scaledFeatures = point.features
+        scal(prob, scaledFeatures)
         (point.label, scaledFeatures)
     }.aggregateByKey(Vectors.zeros(numFeatures))(func, func).reduce{ (x1, x2) =>
-      val grads: Array[Double] = new Array[Double](numFeatures)
       val muPlus: Array[Double] = {if (x1._1 > 0) x1._2 else x2._2}.toArray
       val muMinus: Array[Double] = {if (x1._1 < 0) x1._2 else x2._2}.toArray
+      assert(muPlus.length == muMinus.length)
+      val grads: Array[Double] = new Array[Double](muPlus.length)
       var i = 0
-      while (i < numFeatures) {
+      while (i < muPlus.length) {
         grads(i) = if (epsilon == 0.0) {
           math.log(muPlus(i) / muMinus(i))
         } else {
