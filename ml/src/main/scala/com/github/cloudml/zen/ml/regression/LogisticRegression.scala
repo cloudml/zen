@@ -92,7 +92,7 @@ abstract class LogisticRegression(
     vertices.persist(storageLevel)
     vertices.count()
   }
-  dataSet =  GraphImpl.fromExistingRDDs(vertices, edges)
+  dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
   dataSet.persist(storageLevel)
 
   val numFeatures: Long = features.count()
@@ -120,7 +120,7 @@ abstract class LogisticRegression(
       vertices = updateWeight(gradient, iter, tis, stepSize / sqrt(iter))
       checkpointVertices()
       vertices.count()
-      dataSet =  GraphImpl.fromExistingRDDs(vertices, edges)
+      dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
       // logInfo(s"train (Iteration $iter/$iterations) loss:              ${loss(margin)}")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
