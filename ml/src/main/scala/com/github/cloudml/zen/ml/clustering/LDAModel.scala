@@ -300,7 +300,7 @@ object LDAModel extends Loader[LDAModel] {
       new LDAModel(gtc, ttc, alpha, beta, alphaAS)
     } else {
       throw new Exception(
-        s"LogisticRegressionModel.load did not recognize model with (className, format version):" +
+        s"LDAModel.load did not recognize model with (className, format version):" +
           s"($loadedClassName, $version).  Supported:\n" +
           s"  ($classNameV1_0, 1.0)")
     }
