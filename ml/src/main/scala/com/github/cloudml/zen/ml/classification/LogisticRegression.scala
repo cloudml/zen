@@ -208,7 +208,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
         val scaledFeatures = point.features
         scal(prob, scaledFeatures)
         (point.label, scaledFeatures)
-    }.aggregateByKey(Vectors.zeros(numFeatures))(func, func).reduce{ (x1, x2) =>
+    }.reduceByKey(func).reduce{ (x1, x2) =>
       val muPlus: Array[Double] = {if (x1._1 > 0) x1._2 else x2._2}.toArray
       val muMinus: Array[Double] = {if (x1._1 < 0) x1._2 else x2._2}.toArray
       assert(muPlus.length == muMinus.length)
