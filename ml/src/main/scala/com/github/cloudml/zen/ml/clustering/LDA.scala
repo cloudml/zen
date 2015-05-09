@@ -48,12 +48,12 @@ abstract class LDA private[ml](
   private var storageLevel: StorageLevel) extends Serializable with Logging {
 
   /**
-   * 语料库文档数
+   * Doc number in corpus
    */
   val numDocs = docVertices.count()
 
   /**
-   * 语料库总的词数(包含重复)
+   * Token number in corpus
    */
   val numTokens = corpus.edges.map(e => e.attr.size.toDouble).sum().toLong
 
