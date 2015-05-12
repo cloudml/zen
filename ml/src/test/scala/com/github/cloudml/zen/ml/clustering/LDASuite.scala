@@ -31,13 +31,13 @@ class LDASuite extends FunSuite with SharedSparkContext {
 
   import LDASuite._
 
-  test("LDA || Gibbs sampling") {
+  test("FastLDA || Gibbs sampling") {
     val model = generateRandomLDAModel(numTopics, numTerms)
     val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
 
     val data = sc.parallelize(corpus, 2)
     val pps = new Array[Double](incrementalLearning)
-    val lda = new LightLDA(data, numTopics, alpha, beta, alphaAS)
+    val lda = new FastLDA(data, numTopics, alpha, beta, alphaAS)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
@@ -65,6 +65,28 @@ class LDASuite extends FunSuite with SharedSparkContext {
     assert(sameModel.alphaAS === ldaModel.alphaAS)
   }
 
+  test("LightLDA || Metropolis Hasting sampling") {
+    val model = generateRandomLDAModel(numTopics, numTerms)
+    val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
+
+    val data = sc.parallelize(corpus, 2)
+    val pps = new Array[Double](incrementalLearning)
+    val lda = new LightLDA(data, numTopics, alpha, beta, alphaAS)
+    var i = 0
+    val startedAt = System.currentTimeMillis()
+    while (i < incrementalLearning) {
+      lda.runGibbsSampling(totalIterations)
+      pps(i) = lda.perplexity
+      i += 1
+    }
+
+    println((System.currentTimeMillis() - startedAt) / 1e3)
+    pps.foreach(println)
+
+    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
+    assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.size > 0.6)
+    assert(pps.head - pps.last > 0)
+  }
 }
 
 object LDASuite {
