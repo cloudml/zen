@@ -23,12 +23,12 @@ import org.apache.spark.mllib.classification.LogisticRegressionModel
 import org.apache.spark.{Logging}
 import org.apache.spark.mllib.linalg.{Vectors, Vector}
 import org.apache.spark.mllib.regression.LabeledPoint
-import org.apache.spark.mllib.util.MLUtils._
 import org.apache.spark.rdd.RDD
 import com.github.cloudml.zen.ml.linalg.BLAS.dot
 import com.github.cloudml.zen.ml.linalg.BLAS.axpy
 import com.github.cloudml.zen.ml.linalg.BLAS.scal
 import org.apache.spark.storage.StorageLevel
+import breeze.linalg.{DenseVector => BDV}
 
 class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Serializable{
   private var epsilon: Double = 1e-4
@@ -171,7 +171,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
     for (iter <- 1 to iterations) {
       logInfo(s"Start train (Iteration $iter/$iterations)")
       val startedAt = System.nanoTime()
-      val delta = backward(iter, forward(initialWeightsWithIntercept), numFeatures)
+      val delta = backward(iter, initialWeightsWithIntercept, numFeatures)
       initialWeightsWithIntercept = updateWeights(initialWeightsWithIntercept, delta, iter)
       val lossSum = loss(initialWeightsWithIntercept)
       lossArr(iter-1) = lossSum
@@ -183,50 +183,42 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
     val weights = initialWeightsWithIntercept
     (new LogisticRegressionModel(weights, intercept), lossArr)
   }
-  /**
-   * Calculate the mistake probability: q(i) = 1/(1+exp(yi*(w*xi))).
-   * @param initialWeights weights of last iteration.
-   */
-  protected[ml] def forward(initialWeights: Vector): RDD[Double] = {
-    dataSet.map{point =>
-      val z = point.label * dot(initialWeights, point.features)
-      1.0 / (1.0 + exp(z))
-    }
-  }
 
   /**
    * Calculate the change in weights. delta_W_j = stepSize * log(mu_j_+/mu_j_-)
-   * @param misProb q(i) = 1/(1+exp(yi*(w*xi))).
    */
-  protected[ml] def backward(iter: Int, misProb: RDD[Double], numFeatures: Int): Vector = {
-    def func(v1: Vector, v2: Vector) = {
-      axpy(1.0, v1, v2)
-      v2
+  protected[ml] def backward(iter: Int, initialWeights: Vector, numFeatures: Int): Vector = {
+
+    def func(c1: (Vector, Vector), c2: (Vector, Vector)): (Vector, Vector) = {
+      axpy(1.0, c1._1, c2._1)
+      axpy(1.0, c1._2, c2._2)
+      (c2._1, c2._2)
     }
-    dataSet.zip(misProb).map {
-      case (point, prob) =>
-        val scaledFeatures = point.features
-        scal(prob, scaledFeatures)
-        (point.label, scaledFeatures)
-    }.reduceByKey(func).reduce{ (x1, x2) =>
-      val muPlus: Array[Double] = {if (x1._1 > 0) x1._2 else x2._2}.toArray
-      val muMinus: Array[Double] = {if (x1._1 < 0) x1._2 else x2._2}.toArray
-      assert(muPlus.length == muMinus.length)
-      val grads: Array[Double] = new Array[Double](muPlus.length)
-      var i = 0
-      while (i < muPlus.length) {
-        grads(i) = if (epsilon == 0.0) {
-          math.log(muPlus(i) / muMinus(i))
-        } else {
-          math.log(epsilon + muPlus(i) / (epsilon + muMinus(i)))
-        }
-        i += 1
+    val (muPlus, muMinus) = dataSet.map { point =>
+      val z = point.label * dot(initialWeights, point.features)
+      val prob = 1.0 / (1.0 + exp(z))
+      scal(prob, point.features)
+      if (point.label > 0.0){
+        (point.features, Vectors.zeros(numFeatures))
+      } else {
+        (Vectors.zeros(numFeatures), point.features)
       }
-      val thisIterStepSize = stepSize / math.sqrt(iter)
-      val gradVec = Vectors.dense(grads)
-      scal(thisIterStepSize, gradVec)
-      (0.0, gradVec)
-    }._2
+    }.treeAggregate((Vectors.zeros(numFeatures), Vectors.zeros(numFeatures)))(seqOp = func, combOp = func)
+    assert(muMinus.size == muPlus.size)
+    val grads: Array[Double] = new Array[Double](muPlus.size)
+    var i = 0
+    while (i < muPlus.size) {
+      grads(i) = if (epsilon == 0.0) {
+        math.log(muPlus(i) / muMinus(i))
+      } else {
+        math.log(epsilon + muPlus(i) / (epsilon + muMinus(i)))
+      }
+      i += 1
+    }
+    val thisIterStepSize = stepSize / math.sqrt(iter)
+    val gradVec = Vectors.dense(grads)
+    scal(thisIterStepSize, gradVec)
+    gradVec
   }
 
   /**
