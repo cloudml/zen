@@ -144,10 +144,10 @@ abstract class LDA private[ml](
     alphaAS: Double,
     beta: Double): Graph[VD, ED]
 
-  def saveModel(iter: Int = 1): LDAModel = {
+  def saveModel(totalIter: Int = 1): DistributedLDAModel = {
     var termTopicCounter: RDD[(VertexId, VD)] = null
-    for (iter <- 1 to iter) {
-      logInfo(s"Save TopicModel (Iteration $iter/$iter)")
+    for (iter <- 1 to totalIter) {
+      logInfo(s"Save TopicModel (Iteration $iter/$totalIter)")
       var previousTermTopicCounter = termTopicCounter
       gibbsSampling(iter)
       val newTermTopicCounter = termVertices
@@ -160,16 +160,14 @@ abstract class LDA private[ml](
       Option(previousTermTopicCounter).foreach(_.unpersist(blocking = false))
       previousTermTopicCounter = termTopicCounter
     }
-    val model = LDAModel(numTopics, numTerms, alpha, beta)
-    termTopicCounter.collect().foreach { case (term, counter) =>
-      model.merge(term.toInt, counter)
-    }
-    model.gtc :/= iter.toDouble
-    model.ttc.foreach { ttc =>
-      ttc :/= iter.toDouble
-      ttc.compact()
-    }
-    model
+    val ttc = termTopicCounter.mapValues(c => {
+      val nc = new BSV[Double](c.index.slice(0, c.used), c.data.slice(0, c.used).map(_.toDouble), c.length)
+      nc :/= totalIter.toDouble
+      nc
+    })
+    ttc.persist(storageLevel)
+    val gtc = ttc.map(_._2).aggregate(BDV.zeros[Double](numTopics))(_ :+= _, _ :+= _)
+    new DistributedLDAModel(gtc, ttc, numTopics, numTerms, alpha, beta, alphaAS)
   }
 
   def runGibbsSampling(iterations: Int): Unit = {
@@ -297,7 +295,7 @@ object LDA {
    * @param beta       recommend to be in range 0.001 - 0.1
    * @param alphaAS    recommend to be in range 0.01 - 1.0
    * @param useLightLDA use LightLDA sampling algorithm or not, recommend false for short text
-   * @return LDAModel
+   * @return DistributedLDAModel
    */
   def train(
     docs: RDD[(Long, SV)],
@@ -306,7 +304,7 @@ object LDA {
     alpha: Double = 0.001,
     beta: Double = 0.01,
     alphaAS: Double = 0.1,
-    useLightLDA: Boolean = false): LDAModel = {
+    useLightLDA: Boolean = false): DistributedLDAModel = {
     require(totalIter > 0, "totalIter is less than 0")
     val lda = if (useLightLDA) {
       new LightLDA(docs, numTopics, alpha, beta, alphaAS)
@@ -315,50 +313,6 @@ object LDA {
     }
     lda.runGibbsSampling(totalIter - 1)
     lda.saveModel(1)
-  }
-
-  /**
-   * Train and save the trained model. The training data is in LibSVM format where each line is represented in:
-   * topicID termID+1:counter termID+1:counter ..
-   * @param docs        RDD of documents, which are term (word) count vectors paired with IDs.
-   *                    The term count vectors are "bags of words" with a fixed-size vocabulary
-   *                    (where the vocabulary size is the length of the vector).
-   *                    Document IDs must be unique and >= 0.
-   * @param dir         the directory where the model is saved
-   * @param totalIter  the number of iterations
-   * @param numTopics  the number of topics (> 5000 for large data)
-   * @param alpha      recommend to be (5.0 /numTopics)
-   * @param beta       recommend to be in range 0.001 - 0.1
-   * @param alphaAS    recommend to be in range 0.01 - 1.0
-   * @param useLightLDA use LightLDA or not? Recommend to be false for short text
-   * @return LDAModel
-   */
-  def trainAndSaveModel(
-    docs: RDD[(Long, SV)],
-    dir: String,
-    totalIter: Int = 150,
-    numTopics: Int = 2048,
-    alpha: Double = 0.01,
-    beta: Double = 0.01,
-    alphaAS: Double = 0.1,
-    useLightLDA: Boolean = false): Unit = {
-    val lda = if (useLightLDA) {
-      new LightLDA(docs, numTopics, alpha, beta, alphaAS)
-    } else {
-      new FastLDA(docs, numTopics, alpha, beta, alphaAS)
-    }
-    val numTerms = lda.numTerms
-    lda.runGibbsSampling(totalIter)
-    val rdd = lda.termVertices.flatMap { case (termId, counter) =>
-      counter.activeIterator.map { case (topic, cn) =>
-        val sv = BSV.zeros[Double](numTerms)
-        sv(termId.toInt) = cn.toDouble
-        (topic, sv)
-      }
-    }.reduceByKey { (a, b) => a + b }.map { case (topic, sv) =>
-      LabeledPoint(topic.toDouble, fromBreeze(sv))
-    }
-    MLUtils.saveAsLibSVMFile(rdd, dir)
   }
 
   /**
@@ -372,10 +326,10 @@ object LDA {
    */
   def incrementalTrain(
     docs: RDD[(Long, SV)],
-    computedModel: LDAModel,
+    computedModel: LocalLDAModel,
     alphaAS: Double = 0.1,
     totalIter: Int = 150,
-    useLightLDA: Boolean = false): LDAModel = {
+    useLightLDA: Boolean = false): DistributedLDAModel = {
     require(totalIter > 0, "totalIter is less than 0")
     val numTopics = computedModel.ttc.size
     val alpha = computedModel.alpha
@@ -395,7 +349,7 @@ object LDA {
     docs: RDD[(LDA.DocId, SV)],
     numTopics: Int,
     storageLevel: StorageLevel,
-    computedModel: Broadcast[LDAModel] = null): Graph[VD, ED] = {
+    computedModel: Broadcast[LocalLDAModel] = null): Graph[VD, ED] = {
     val edges = docs.mapPartitionsWithIndex((pid, iter) => {
       val gen = new Random(pid + 117)
       iter.flatMap { case (docId, doc) =>
@@ -412,33 +366,8 @@ object LDA {
     corpus.vertices.count()
     corpus.edges.count()
     edges.unpersist(blocking = false)
-    corpus = partitionByDBH(corpus, storageLevel)
+    corpus = DBHPartitioner.partitionByDBH[VD, ED](corpus, storageLevel)
     updateCounter(corpus, numTopics)
-  }
-
-  private def partitionByDBH(corpus: Graph[VD, ED], storageLevel: StorageLevel): Graph[VD, ED] = {
-    val edges = corpus.edges
-    val degrees = corpus.degrees.setName("degrees").persist(storageLevel)
-    val degreesGraph = GraphImpl(degrees, edges)
-    degreesGraph.persist(storageLevel)
-    val numPartitions = edges.partitions.size
-    val partitionStrategy = new DBHPartitioner(numPartitions, 0)
-    val newEdges = degreesGraph.triplets.mapPartitions { iter =>
-      iter.map { e =>
-        (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
-      }
-    }.partitionBy(new HashPartitioner(numPartitions)).map(_._2).persist(storageLevel)
-    val dataSet = Graph.fromEdges(newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
-    dataSet.persist(storageLevel)
-    dataSet.vertices.count()
-    dataSet.edges.count()
-    degrees.unpersist(blocking = false)
-    degreesGraph.vertices.unpersist(blocking = false)
-    degreesGraph.edges.unpersist(blocking = false)
-    corpus.vertices.unpersist(blocking = false)
-    corpus.edges.unpersist(blocking = false)
-    newEdges.unpersist(blocking = false)
-    dataSet
   }
 
   private def initializeEdges(
@@ -462,7 +391,7 @@ object LDA {
     doc: SV,
     docId: DocId,
     numTopics: Int,
-    computedModel: LDAModel = null): Iterator[Edge[ED]] = {
+    computedModel: LocalLDAModel = null): Iterator[Edge[ED]] = {
     assert(docId >= 0)
     val newDocId: DocId = genNewDocId(docId)
     computedModel.setSeed(gen.nextInt())
@@ -553,7 +482,7 @@ private[ml] class LDAKryoRegistrator extends KryoRegistrator {
 
     kryo.register(classOf[Random])
     kryo.register(classOf[LDA])
-    kryo.register(classOf[LDAModel])
+    kryo.register(classOf[LocalLDAModel])
   }
 }
 
@@ -571,7 +500,7 @@ class FastLDA(
     beta: Double,
     alphaAS: Double,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK,
-    computedModel: Broadcast[LDAModel] = null) {
+    computedModel: Broadcast[LocalLDAModel] = null) {
     this(initializeCorpus(docs, numTopics, storageLevel, computedModel),
       numTopics, docs.first()._2.size, alpha, beta, alphaAS, storageLevel)
   }
@@ -782,7 +711,7 @@ class LightLDA(
     beta: Double,
     alphaAS: Double,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK,
-    computedModel: Broadcast[LDAModel] = null) {
+    computedModel: Broadcast[LocalLDAModel] = null) {
     this(initializeCorpus(docs, numTopics, storageLevel, computedModel),
       numTopics, docs.first()._2.size, alpha, beta, alphaAS, storageLevel)
   }

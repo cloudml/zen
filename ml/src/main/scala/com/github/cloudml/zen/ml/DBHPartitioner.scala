@@ -17,10 +17,13 @@
 
 package com.github.cloudml.zen.ml
 
-import org.apache.spark.Partitioner
+import org.apache.spark.{HashPartitioner, Partitioner}
 import org.apache.spark.graphx._
+import org.apache.spark.graphx.impl.GraphImpl
+import org.apache.spark.storage.StorageLevel
 
 import scala.math._
+import scala.reflect.ClassTag
 
 /**
  * Degree-Based Hashing, the paper:
@@ -69,3 +72,31 @@ private[ml] class DBHPartitioner(val partitions: Int, val threshold: Int = 0) ex
   override def hashCode: Int = numPartitions
 }
 
+object DBHPartitioner {
+  private[zen] def partitionByDBH[VD: ClassTag, ED: ClassTag](
+    corpus: Graph[VD, ED],
+    storageLevel: StorageLevel): Graph[VD, ED] = {
+    val edges = corpus.edges
+    val degrees = corpus.degrees.setName("degrees").persist(storageLevel)
+    val degreesGraph = GraphImpl(degrees, edges)
+    degreesGraph.persist(storageLevel)
+    val numPartitions = edges.partitions.size
+    val partitionStrategy = new DBHPartitioner(numPartitions, 0)
+    val newEdges = degreesGraph.triplets.mapPartitions { iter =>
+      iter.map { e =>
+        (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
+      }
+    }.partitionBy(new HashPartitioner(numPartitions)).map(_._2).persist(storageLevel)
+    val dataSet = Graph.fromEdges(newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
+    dataSet.persist(storageLevel)
+    dataSet.vertices.count()
+    dataSet.edges.count()
+    degrees.unpersist(blocking = false)
+    degreesGraph.vertices.unpersist(blocking = false)
+    degreesGraph.edges.unpersist(blocking = false)
+    corpus.vertices.unpersist(blocking = false)
+    corpus.edges.unpersist(blocking = false)
+    newEdges.unpersist(blocking = false)
+    dataSet
+  }
+}
