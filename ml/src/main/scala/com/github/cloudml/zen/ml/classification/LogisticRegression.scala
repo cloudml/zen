@@ -28,7 +28,6 @@ import com.github.cloudml.zen.ml.linalg.BLAS.dot
 import com.github.cloudml.zen.ml.linalg.BLAS.axpy
 import com.github.cloudml.zen.ml.linalg.BLAS.scal
 import org.apache.spark.storage.StorageLevel
-import breeze.linalg.{DenseVector => BDV}
 
 class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Serializable{
   private var epsilon: Double = 1e-4
@@ -197,11 +196,12 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
     val (muPlus, muMinus) = dataSet.map { point =>
       val z = point.label * dot(initialWeights, point.features)
       val prob = 1.0 / (1.0 + exp(z))
-      scal(prob, point.features)
+      val scaledFeatures = Vectors.dense(point.features.toArray)
+      scal(prob, scaledFeatures)
       if (point.label > 0.0){
-        (point.features, Vectors.zeros(numFeatures))
+        (scaledFeatures, Vectors.zeros(numFeatures))
       } else {
-        (Vectors.zeros(numFeatures), point.features)
+        (Vectors.zeros(numFeatures), scaledFeatures)
       }
     }.treeAggregate((Vectors.zeros(numFeatures), Vectors.zeros(numFeatures)))(seqOp = func, combOp = func)
     assert(muMinus.size == muPlus.size)
