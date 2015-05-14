@@ -98,16 +98,6 @@ class LDASuite extends FunSuite with SharedSparkContext {
       val sim: Double = euclideanDistance(a, b)
       assert(sim < 0.1)
     }
-
-    //    lda.runGibbsSampling(20)
-    //    val ldaModel = lda.saveModel(1)
-    //    data = sc.parallelize(data.takeSample(withReplacement = false, 1, 41), 2)
-    //    val a = ldaModel.inference(data, 15, 12)
-    //    val b = ldaModel.inference(data, 15, 12)
-    //    a.join(b).collect().foreach { case (_, (sva, svb)) =>
-    //      val sim: Double = euclideanDistance(sva, svb)
-    //      assert(sim < 0.2)
-    //    }
   }
 }
 

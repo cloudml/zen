@@ -236,9 +236,11 @@ class DistributedLDAModel private[ml](
   }
 
   def toLocalLDAModel(): LocalLDAModel = {
-    val ttc1 = new Array[BSV[Double]](numTerms.toInt)
+    val ttc1 = Array.fill(numTerms.toInt) {
+      BSV.zeros[Double](numTopics)
+    }
     ttc.collect().foreach { case (termId, vector) =>
-      ttc1(termId.toInt) = toBreeze(vector).asInstanceOf[BSV[Double]]
+      ttc1(termId.toInt) :+= vector
     }
     new LocalLDAModel(gtc, ttc1, alpha, beta, alphaAS)
   }
@@ -568,7 +570,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
       val alphaAS = (metadata \ "alphaAS").extract[Double]
       val numTopics = (metadata \ "numTopics").extract[Int]
       val numTerms = (metadata \ "numTerms").extract[Long]
-      val ttc = SaveLoadV1_0.loadData(sc, path, classNameV1_0, numTopics)
+      val ttc = SaveLoadV1_0.loadData(sc, path, classNameV1_0, numTopics, numTerms)
       ttc.persist(StorageLevel.MEMORY_AND_DISK)
       val gtc = ttc.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
       new DistributedLDAModel(gtc, ttc, numTopics, numTerms, alpha, beta, alphaAS)
@@ -586,13 +588,17 @@ object LDAModel extends Loader[DistributedLDAModel] {
     val formatVersionV1_0 = "1.0"
     val classNameV1_0 = "com.github.cloudml.zen.ml.clustering.LDAModel"
 
-    def loadData(sc: SparkContext, path: String, modelClass: String, numTopics: Int): RDD[(VertexId, VD)] = {
+    def loadData(
+      sc: SparkContext,
+      path: String,
+      modelClass: String,
+      numTopics: Int,
+      numTerms: Long): RDD[(VertexId, VD)] = {
       val dataPath = LoaderUtils.dataPath(path)
       val dataRDD = MLUtils.loadLibSVMFile(sc, dataPath, numTopics)
       val dataArray = dataRDD.take(1)
       assert(dataArray.size == 1, s"Unable to load $modelClass data from: $dataPath")
-      val termSize = dataRDD.count().toInt
-      val ttc = new Array[BSV[Double]](termSize)
+      val ttc = new Array[BSV[Double]](numTerms.toInt)
       dataRDD.map { case LabeledPoint(termId, vector) =>
         (termId.toLong, toBreeze(vector).asInstanceOf[BSV[Double]])
       }
