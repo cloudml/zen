@@ -17,17 +17,10 @@
 
 package com.github.cloudml.zen.ml.neuralNetwork
 
-import com.github.cloudml.zen.ml.linalg.BLAS
-import com.github.cloudml.zen.ml.util.SparkUtils
 import java.util.Random
 
-import breeze.linalg.{DenseVector => BDV, Matrix => BM, DenseMatrix => BDM,
-Axis => brzAxis, sum => brzSum, max => brzMax}
-
+import breeze.linalg.{DenseVector => BDV, DenseMatrix => BDM, Axis => brzAxis, sum => brzSum, max => brzMax}
 import org.apache.spark.Logging
-import org.apache.spark.mllib.linalg.{DenseMatrix => SDM, Matrix => SM,
-Vector => SV, Vectors, Matrices}
-
 import NNUtil._
 
 private[ml] trait Layer extends Serializable {
@@ -48,7 +41,7 @@ private[ml] trait Layer extends Serializable {
     rand.setSeed(seed)
   }
 
-  def forward(input: BM[Double]): BDM[Double] = {
+  def forward(input: BDM[Double]): BDM[Double] = {
     val batchSize = input.cols
     val output: BDM[Double] = weight * input
     for (i <- 0 until batchSize) {
@@ -64,19 +57,15 @@ private[ml] trait Layer extends Serializable {
     (gradWeight, gradBias)
   }
 
-  def outputError(output: BDM[Double], label: BM[Double]): BDM[Double] = {
-    val delta: BDM[Double] = if (label.isInstanceOf[BDM[Double]]) {
-      output - label.asInstanceOf[BDM[Double]]
-    } else {
-      output - label.toDenseMatrix
-    }
+  def outputError(output: BDM[Double], label: BDM[Double]): BDM[Double] = {
+    val delta: BDM[Double] = output - label
 
     computeNeuronPrimitive(delta, output)
     delta
   }
 
   def previousError(
-    input: BM[Double],
+    input: BDM[Double],
     previousLayer: Layer,
     currentDelta: BDM[Double]): BDM[Double] = {
     val preDelta = weight.t * currentDelta
@@ -86,7 +75,7 @@ private[ml] trait Layer extends Serializable {
 
   def computeNeuron(temp: BDM[Double]): Unit
 
-  def computeNeuronPrimitive(temp: BDM[Double], output: BM[Double]): Unit
+  def computeNeuronPrimitive(temp: BDM[Double], output: BDM[Double]): Unit
 
   protected[ml] def sample(out: BDM[Double]): BDM[Double] = out
 }
@@ -112,7 +101,7 @@ private[ml] class SigmoidLayer(
 
   override def computeNeuronPrimitive(
     temp: BDM[Double],
-    output: BM[Double]): Unit = {
+    output: BDM[Double]): Unit = {
     for (i <- 0 until temp.rows) {
       for (j <- 0 until temp.cols) {
         temp(i, j) = temp(i, j) * sigmoidPrimitive(output(i, j))
@@ -146,7 +135,7 @@ private[ml] class TanhLayer(
 
   def computeNeuronPrimitive(
     temp: BDM[Double],
-    output: BM[Double]): Unit = {
+    output: BDM[Double]): Unit = {
     for (i <- 0 until temp.rows) {
       for (y <- 0 until temp.cols) {
         temp(i, y) = temp(i, y) * tanhPrimitive(output(i, y))
@@ -189,7 +178,7 @@ private[ml] class SoftMaxLayer(
 
   override def computeNeuronPrimitive(
     temp: BDM[Double],
-    output: BM[Double]): Unit = {
+    output: BDM[Double]): Unit = {
     // See: http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.49.6403
 
     //  for (i <- 0 until temp.numRows) {
@@ -250,7 +239,7 @@ private[ml] class NoisyReLULayer(
 
   override def computeNeuronPrimitive(
     temp: BDM[Double],
-    output: BM[Double]): Unit = {
+    output: BDM[Double]): Unit = {
     for (i <- 0 until temp.rows) {
       for (j <- 0 until temp.cols)
         if (output(i, j) <= 0) {
@@ -283,7 +272,7 @@ private[ml] class ReLuLayer(
     relu(temp)
   }
 
-  override def computeNeuronPrimitive(temp: BDM[Double], output: BM[Double]): Unit = {
+  override def computeNeuronPrimitive(temp: BDM[Double], output: BDM[Double]): Unit = {
     for (i <- 0 until temp.rows) {
       for (j <- 0 until temp.cols)
         if (output(i, j) <= 0) {
@@ -319,7 +308,7 @@ private[ml] class SoftPlusLayer(
     }
   }
 
-  override def computeNeuronPrimitive(temp: BDM[Double], output: BM[Double]): Unit = {
+  override def computeNeuronPrimitive(temp: BDM[Double], output: BDM[Double]): Unit = {
     for (i <- 0 until temp.rows) {
       for (j <- 0 until temp.cols) {
         temp(i, j) *= softplusPrimitive(output(i, j))
@@ -351,7 +340,7 @@ private[ml] class IdentityLayer(
 
   override def computeNeuron(tmp: BDM[Double]): Unit = {}
 
-  override def computeNeuronPrimitive(temp: BDM[Double], output: BM[Double]): Unit = {}
+  override def computeNeuronPrimitive(temp: BDM[Double], output: BDM[Double]): Unit = {}
 
   override protected[ml] def sample(input: BDM[Double]): BDM[Double] = {
     input.map(v => v + rand.nextGaussian())

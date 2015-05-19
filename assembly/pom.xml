@@ -58,10 +58,10 @@
               <exclude>log4j:*</exclude>
               <exclude>asm:*</exclude>
               <exclude>commons-logging:*</exclude>
-              <exclude>org.scala-lang:*</exclude>
               <exclude>org.apache.hadoop:*</exclude>
               <exclude>org.eclipse.jetty:*</exclude>
               <exclude>com.fasterxml.jackson.core:*</exclude>
+              <exclude>com.fasterxml.jackson.module:*</exclude>
               <exclude>org.eclipse.jetty.*:*</exclude>
               <exclude>com.esotericsoftware.*:*</exclude>
               <exclude>com.codahale.*:*</exclude>
@@ -71,14 +71,17 @@
               <exclude>com.google.guava:*</exclude>
               <exclude>com.twitter:*:*</exclude>
               <exclude>org.mockito:*:*</exclude>
-              <exclude>*:commons-beanutils</exclude>
               <exclude>org.apache.mesos:*</exclude>
               <exclude>com.google.protobuf:*</exclude>
               <exclude>org.apache.ant:*</exclude>
+              <exclude>org.apache.avro:*</exclude>
+              <exclude>org.apache.ivy:*</exclude>
+              <exclude>org.mortbay.jetty:*</exclude>
+              <exclude>io.dropwizard.metrics:*</exclude>
               <exclude>xmlenc:*</exclude>
               <exclude>hsqldb:*</exclude>
-              <!--<exclude>org.scalanlp:*</exclude>-->
-              <!--<exclude>org.apache.commons:*</exclude>-->
+              <exclude>org.scalanlp:*</exclude>
+              <exclude>org.apache.commons:*</exclude>
               <exclude>org.jblas:*</exclude>
               <exclude>com.google.code.findbugs:*</exclude>
               <exclude>io.netty:*</exclude>
@@ -91,7 +94,7 @@
               <exclude>com.ning:*</exclude>
               <exclude>org.scala-lang:*:*:*</exclude>
               <exclude>org.apache.hadoop.thirdparty.guava:*</exclude>
-              <exclude>net.sf.py4j:*</exclude>
+              <exclude>net.sf.py4j:*:*:*</exclude>
               <exclude>org.tachyonproject:*</exclude>
             </excludes>
           </artifactSet>

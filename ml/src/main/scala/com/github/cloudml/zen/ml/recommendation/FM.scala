@@ -120,7 +120,7 @@ private[ml] abstract class FM extends Serializable with Logging {
       vertices.count()
       dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      logInfo(s"Train (Iteration $iter/$iterations) cost:               ${loss(margin)}")
+      // logInfo(s"Train (Iteration $iter/$iterations) cost:               ${loss(margin)}")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
 
       previousVertices.unpersist(blocking = false)
@@ -210,6 +210,7 @@ private[ml] abstract class FM extends Serializable with Logging {
     iter: Int): (Double, VertexRDD[Array[Double]]) = {
     if (useAdaGrad) {
       val (newW0Grad, newW0Sum, delta) = adaGrad(gradientSum, gradient, 1e-6, 1.0)
+      // val (newW0Grad, newW0Sum, delta) = equilibratedGradientDescent(gradientSum, gradient, 1e-8, iter)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
 
       gradient._2.unpersist(blocking = false)
@@ -259,6 +260,41 @@ private[ml] abstract class FM extends Serializable with Logging {
 
     val newW0Sum = w0Sum * rho + pow(w0Grad, 2)
     val newW0Grad = w0Grad / (epsilon + sqrt(newW0Sum))
+
+    (newW0Grad, newW0Sum, newGradSumWithoutW0)
+  }
+
+  protected def equilibratedGradientDescent(
+    gradientSum: (Double, VertexRDD[Array[Double]]),
+    gradient: (Double, VertexRDD[Array[Double]]),
+    epsilon: Double,
+    iter: Int): (Double, Double, VertexRDD[(Array[Double], Array[Double])]) = {
+    val delta = if (gradientSum == null) {
+      features.mapValues(t => t.map(x => 0.0))
+    }
+    else {
+      gradientSum._2
+    }
+    val newGradSumWithoutW0 = delta.leftJoin(gradient._2) { (_, gradSum, g) =>
+      g match {
+        case Some(grad) =>
+          val gradLen = grad.length
+          val newGradSum = new Array[Double](gradLen)
+          val newGrad = new Array[Double](gradLen)
+          for (i <- 0 until gradLen) {
+            newGradSum(i) = gradSum(i) + pow(Utils.random.nextGaussian() * grad(i), 2)
+            newGrad(i) = grad(i) / (epsilon + sqrt(newGradSum(i) / iter))
+          }
+          (newGrad, newGradSum)
+        case _ => (null, gradSum)
+      }
+
+    }
+    val w0Sum = if (gradientSum == null) 0.0 else gradientSum._1
+    val w0Grad = gradient._1
+
+    val newW0Sum = w0Sum + pow(Utils.random.nextGaussian() * w0Grad, 2)
+    val newW0Grad = w0Grad / (epsilon + sqrt(newW0Sum / iter))
 
     (newW0Grad, newW0Sum, newGradSumWithoutW0)
   }
