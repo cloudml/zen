@@ -20,6 +20,7 @@ package com.github.cloudml.zen.ml.clustering
 import java.util.Random
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
+import breeze.linalg.functions.euclideanDistance
 import breeze.stats.distributions.Poisson
 import com.github.cloudml.zen.ml.util.SharedSparkContext
 import com.github.cloudml.zen.ml.util.SparkUtils._
@@ -31,13 +32,14 @@ class LDASuite extends FunSuite with SharedSparkContext {
 
   import LDASuite._
 
-  test("LDA || Gibbs sampling") {
+  test("FastLDA || Gibbs sampling") {
     val model = generateRandomLDAModel(numTopics, numTerms)
     val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
 
     val data = sc.parallelize(corpus, 2)
+    data.cache()
     val pps = new Array[Double](incrementalLearning)
-    val lda = new LightLDA(data, numTopics, alpha, beta, alphaAS)
+    val lda = new FastLDA(data, numTopics, alpha, beta, alphaAS)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
@@ -59,12 +61,44 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val path = tempDir.toURI.toString
     ldaModel.save(sc, path)
     val sameModel = LDAModel.load(sc, path)
-    assert(sameModel.ttc === ldaModel.ttc)
+    assert(sameModel.toLocalLDAModel().ttc === ldaModel.toLocalLDAModel().ttc)
     assert(sameModel.alpha === ldaModel.alpha)
     assert(sameModel.beta === ldaModel.beta)
     assert(sameModel.alphaAS === ldaModel.alphaAS)
   }
 
+  test("LightLDA || Metropolis Hasting sampling") {
+    val model = generateRandomLDAModel(numTopics, numTerms)
+    val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
+
+    var data = sc.parallelize(corpus, 2)
+    data.cache()
+    val pps = new Array[Double](incrementalLearning)
+    val lda = new LightLDA(data, numTopics, alpha, beta, alphaAS)
+    var i = 0
+    val startedAt = System.currentTimeMillis()
+    while (i < incrementalLearning) {
+      lda.runGibbsSampling(totalIterations)
+      pps(i) = lda.perplexity
+      i += 1
+    }
+
+    println((System.currentTimeMillis() - startedAt) / 1e3)
+    pps.foreach(println)
+
+    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
+    assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.size > 0.6)
+    assert(pps.head - pps.last > 0)
+
+    val ldaModel = lda.saveModel(3).toLocalLDAModel()
+    val rand = new Random
+    data.collect().foreach { case (_, sv) =>
+      val a = toBreeze(ldaModel.inference(sv))
+      val b = toBreeze(ldaModel.inference(sv))
+      val sim: Double = euclideanDistance(a, b)
+      assert(sim < 0.1)
+    }
+  }
 }
 
 object LDASuite {
