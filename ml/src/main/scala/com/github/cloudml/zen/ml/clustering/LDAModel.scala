@@ -93,9 +93,9 @@ class LocalLDAModel private[ml](
     val topics = new Array[Int](tokens.length)
 
     var docTopicCounter = uniformDistSampler(tokens, topics)
-    for (i <- 0 until totalIter) {
+    for (i <- 1 to totalIter) {
       docTopicCounter = sampleTokens(docTopicCounter, tokens, topics)
-      if (burnIn >= i) topicDist :+= docTopicCounter
+      if (i > burnIn) topicDist :+= docTopicCounter
     }
 
     topicDist.compact()
@@ -215,7 +215,7 @@ class DistributedLDAModel private[ml](
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
       logInfo(s"End Gibbs sampling  (Iteration $iter/$totalIter) takes:  $elapsedSeconds")
 
-      if (burnIn > iter) {
+      if (iter > burnIn) {
         var previousDocTopicCounter = docTopicCounter
         val newTermTopicCounter = corpus.vertices.filter(t => t._1 < 0)
         docTopicCounter = Option(docTopicCounter).map(_.join(newTermTopicCounter).map {
