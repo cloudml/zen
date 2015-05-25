@@ -61,11 +61,11 @@ class MLP(
     topology
   }
 
-  def numLayer = innerLayers.length
+  def numLayer: Int = innerLayers.length
 
-  def numInput = innerLayers.head.numIn
+  def numInput: Int = innerLayers.head.numIn
 
-  def numOut = innerLayers.last.numOut
+  def numOut: Int = innerLayers.last.numOut
 
   def predict(x: BDM[Double]): BDM[Double] = {
     var output = x

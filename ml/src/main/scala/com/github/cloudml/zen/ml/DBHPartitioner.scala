@@ -32,7 +32,7 @@ import scala.reflect.ClassTag
 private[ml] class DBHPartitioner(val partitions: Int, val threshold: Int = 0) extends Partitioner {
   val mixingPrime: Long = 1125899906842597L
 
-  def numPartitions = partitions
+  override def numPartitions: Int = partitions
 
   /**
    * Default DBH doesn't consider the situation where both the degree of src and

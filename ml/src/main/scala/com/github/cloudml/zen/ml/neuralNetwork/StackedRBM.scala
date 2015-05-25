@@ -32,11 +32,11 @@ class StackedRBM(val innerRBMs: Array[RBM])
     this(StackedRBM.initializeRBMs(topology))
   }
 
-  def numLayer = innerRBMs.length
+  def numLayer: Int = innerRBMs.length
 
-  def numInput = innerRBMs.head.numIn
+  def numInput: Int = innerRBMs.head.numIn
 
-  def numOut = innerRBMs.last.numOut
+  def numOut: Int = innerRBMs.last.numOut
 
   def forward(visible: BDM[Double], toLayer: Int): BDM[Double] = {
     var x = visible

@@ -143,7 +143,7 @@ object NNUtil {
     y * (1 - y)
   }
 
-  def scalarExp(x: Double, expThreshold: Double = 64D) = {
+  def scalarExp(x: Double, expThreshold: Double = 64D): Double = {
     if (x < -expThreshold) {
       math.exp(-expThreshold)
     } else if (x > expThreshold) {

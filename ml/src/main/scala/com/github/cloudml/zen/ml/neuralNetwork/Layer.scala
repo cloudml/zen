@@ -29,9 +29,9 @@ private[ml] trait Layer extends Serializable {
 
   def bias: BDV[Double]
 
-  def numIn = weight.cols
+  def numIn: Int = weight.cols
 
-  def numOut = weight.rows
+  def numOut: Int = weight.rows
 
   def layerType: String
 

@@ -83,7 +83,7 @@ abstract class LDA private[ml](
     this
   }
 
-  def getCorpus = corpus
+  def getCorpus: Graph[VD, ED] = corpus
 
   @transient private var seed = new Random().nextInt()
   @transient private var innerIter = 1
