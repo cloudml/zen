@@ -24,7 +24,7 @@
     <version>9</version>
   </parent>
   <groupId>com.github.cloudml.zen</groupId>
-  <artifactId>zen-parent</artifactId>
+  <artifactId>zen-parent_2.10</artifactId>
   <version>0.2-SNAPSHOT</version>
   <packaging>pom</packaging>
   <name>Zen Project Parent POM</name>
@@ -175,6 +175,28 @@
   </dependencyManagement>
 
   <profiles>
+    <profile>
+      <id>scala-2.10</id>
+      <activation>
+        <property><name>!scala-2.11</name></property>
+      </activation>
+      <properties>
+        <scala.version>2.10.4</scala.version>
+        <scala.binary.version>2.10</scala.binary.version>
+      </properties>
+    </profile>
+    <profile>
+      <id>scala-2.11</id>
+      <activation>
+        <property>
+          <name>scala-2.11</name>
+        </property>
+      </activation>
+      <properties>
+        <scala.version>2.11.6</scala.version>
+        <scala.binary.version>2.11</scala.binary.version>
+      </properties>
+    </profile>
     <profile>
       <id>sonatype-oss-release</id>
       <distributionManagement>
@@ -397,7 +419,7 @@
             <junitxml>.</junitxml>
             <filereports>${project.build.directory}/ToonaTestSuite.txt</filereports>
             <argLine>-Xmx3g -XX:MaxPermSize=${MaxPermGen} -XX:ReservedCodeCacheSize=512m</argLine>
-            <stderr />
+            <stderr/>
             <environmentVariables>
               <!--
                 Setting SPARK_DIST_CLASSPATH is a simple way to make sure any child processes
