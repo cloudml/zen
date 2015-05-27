@@ -19,12 +19,13 @@ package com.github.cloudml.zen.ml.neuralNetwork
 
 import java.util.Random
 
-import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, Matrix => BM, SparseVector => BSV, Vector => BV, argmax => brzArgMax, axpy => brzAxpy, max => brzMax, norm => brzNorm, sum => brzSum}
+import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, SparseVector => BSV, argmax => brzArgMax,
+axpy => brzAxpy, max => brzMax, norm => brzNorm, sum => brzSum}
 import com.github.cloudml.zen.ml.linalg.BLAS
 import com.github.cloudml.zen.ml.util.SparkUtils
 import org.apache.spark.Logging
 import org.apache.spark.annotation.Experimental
-import org.apache.spark.mllib.linalg.{DenseMatrix => SDM, DenseVector => SDV, Matrix => SM, SparseMatrix => SSM, SparseVector => SSV, Vector => SV}
+import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, Vector => SV}
 import org.apache.spark.mllib.optimization.{Gradient, LBFGS, Updater}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
@@ -60,11 +61,11 @@ class MLP(
     topology
   }
 
-  def numLayer = innerLayers.length
+  def numLayer: Int = innerLayers.length
 
-  def numInput = innerLayers.head.numIn
+  def numInput: Int = innerLayers.head.numIn
 
-  def numOut = innerLayers.last.numOut
+  def numOut: Int = innerLayers.last.numOut
 
   def predict(x: BDM[Double]): BDM[Double] = {
     var output = x

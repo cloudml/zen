@@ -121,7 +121,7 @@
       <dependency>
         <groupId>org.scalanlp</groupId>
         <artifactId>breeze_${scala.binary.version}</artifactId>
-        <version>0.10</version>
+        <version>0.11.2</version>
         <exclusions>
           <!-- This is included as a compile-scoped dependency by jtransforms, which is
                a dependency of breeze. -->
@@ -458,19 +458,19 @@
             <shadedArtifactAttached>false</shadedArtifactAttached>
             <artifactSet>
               <includes>
-                <include>org.scalanlp:breeze_${scala.binary.version}</include>
-                <include>org.scalanlp:breeze-macros_${scala.binary.version}</include>
+                <!--<include>org.scalanlp:breeze_${scala.binary.version}</include>-->
+                <!--<include>org.scalanlp:breeze-macros_${scala.binary.version}</include>-->
                 <include>org.apache.commons:commons-math3</include>
               </includes>
             </artifactSet>
             <relocations>
-              <relocation>
-                <pattern>breeze</pattern>
-                <shadedPattern>com.github.cloudml.shaded.breeze</shadedPattern>
-                <includes>
-                  <include>breeze.**</include>
-                </includes>
-              </relocation>
+              <!--<relocation>-->
+                <!--<pattern>breeze</pattern>-->
+                <!--<shadedPattern>com.github.cloudml.shaded.breeze</shadedPattern>-->
+                <!--<includes>-->
+                  <!--<include>breeze.**</include>-->
+                <!--</includes>-->
+              <!--</relocation>-->
               <relocation>
                 <pattern>org.apache.commons.math3</pattern>
                 <shadedPattern>com.github.cloudml.shaded.math3</shadedPattern>

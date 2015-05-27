@@ -1,4 +1,4 @@
-# LFM
+# Factorization Machines
 
 ## Road map
  * Support hundereds billions of features
