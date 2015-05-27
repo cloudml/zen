@@ -442,11 +442,23 @@ class DistributedLDAModel private[ml](
   }
 
   override def save(sc: SparkContext, path: String): Unit = {
-    LDAModel.SaveLoadV1_0.save(sc, path, ttc, numTopics, numTerms, alpha, beta, alphaAS)
+    save(sc, path, isTransposed = false)
   }
 
   def save(path: String): Unit = {
-    LDAModel.SaveLoadV1_0.save(ttc.context, path, ttc, numTopics, numTerms, alpha, beta, alphaAS)
+    save(ttc.context, path, isTransposed = false)
+  }
+
+  /**
+   * @param sc
+   * @param path
+   * @param isTransposed libsvm 格式存储 当 isTransposed 为 false 每一行的格式是:
+   *                     termId topicId:counter topicId:counter... 注意 topicId 是从1开始计数
+   *                     当 isTransposed 为 true 每一行的格式是:
+   *                     topicId termId:counter termId:counter... 注意termId 是从1开始计数
+   */
+  def save(sc: SparkContext, path: String, isTransposed: Boolean): Unit = {
+    LDAModel.SaveLoadV1_0.save(sc, path, ttc, numTopics, numTerms, alpha, beta, alphaAS, isTransposed)
   }
 
   override protected def formatVersion: String = LDAModel.SaveLoadV1_0.formatVersionV1_0
@@ -570,8 +582,24 @@ object LDAModel extends Loader[DistributedLDAModel] {
       val alphaAS = (metadata \ "alphaAS").extract[Double]
       val numTopics = (metadata \ "numTopics").extract[Int]
       val numTerms = (metadata \ "numTerms").extract[Long]
-      val ttc = SaveLoadV1_0.loadData(sc, path, classNameV1_0, numTopics, numTerms)
+      val isTransposed = (metadata \ "isTransposed").extract[Boolean]
+      val rdd = SaveLoadV1_0.loadData(sc, path, classNameV1_0, numTopics, numTerms)
+
+      val ttc = if (isTransposed) {
+        rdd.flatMap { case (topicId, vector) =>
+          vector.activeIterator.map { case (termId, cn) =>
+            val z = BSV.zeros[Double](numTopics)
+            z(topicId.toInt) = cn
+            (termId.toLong, z)
+          }
+        }.reduceByKey(_ :+ _).map {
+          t => t._2.compact(); t
+        }
+      } else {
+        rdd
+      }
       ttc.persist(StorageLevel.MEMORY_AND_DISK)
+
       val gtc = ttc.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
       new DistributedLDAModel(gtc, ttc, numTopics, numTerms, alpha, beta, alphaAS)
     } else {
@@ -586,7 +614,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
   private[ml] object SaveLoadV1_0 {
 
     val formatVersionV1_0 = "1.0"
-    val classNameV1_0 = "com.github.cloudml.zen.ml.clustering.LDAModel"
+    val classNameV1_0 = "com.github.cloudml.zen.ml.clustering.DistributedLDAModel"
 
     def loadData(
       sc: SparkContext,
@@ -612,15 +640,29 @@ object LDAModel extends Loader[DistributedLDAModel] {
       numTerms: Long,
       alpha: Double,
       beta: Double,
-      alphaAS: Double): Unit = {
+      alphaAS: Double,
+      isTransposed: Boolean): Unit = {
       val metadata = compact(render
         (("class" -> classNameV1_0) ~ ("version" -> formatVersionV1_0) ~
           ("alpha" -> alpha) ~ ("beta" -> beta) ~ ("alphaAS" -> alphaAS) ~
-          ("numTopics" -> numTopics) ~ ("numTerms" -> numTerms)))
+          ("numTopics" -> numTopics) ~ ("numTerms" -> numTerms) ~
+          ("isTransposed" -> isTransposed)))
       sc.parallelize(Seq(metadata), 1).saveAsTextFile(LoaderUtils.metadataPath(path))
 
-      val rdd = ttc.map { case (termId, vector) => LabeledPoint(termId, fromBreeze(vector)) }
-      MLUtils.saveAsLibSVMFile(rdd, LoaderUtils.dataPath(path))
+      val rdd = if (isTransposed) {
+        ttc.flatMap { case (termId, vector) =>
+          vector.activeIterator.map { case (topicId, cn) =>
+            val z = BSV.zeros[Double](numTerms.toInt)
+            z(termId.toInt) = cn
+            (topicId.toLong, z)
+          }
+        }.reduceByKey(_ :+ _)
+      } else {
+        ttc
+      }
+
+      val labeledPoints = rdd.map { case (termId, vector) => LabeledPoint(termId, fromBreeze(vector)) }
+      MLUtils.saveAsLibSVMFile(labeledPoints, LoaderUtils.dataPath(path))
     }
   }
 
