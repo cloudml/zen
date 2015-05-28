@@ -453,9 +453,9 @@ class DistributedLDAModel private[ml](
    * @param sc
    * @param path
    * @param isTransposed libsvm 格式存储 当 isTransposed 为 false 每一行的格式是:
-   *                     termId topicId:counter topicId:counter... 注意 topicId 是从1开始计数
+   *                     termId  \grave{topicId}:counter \grave{topicId}:counter... 其中\grave{topicId} = topicId + 1
    *                     当 isTransposed 为 true 每一行的格式是:
-   *                     topicId termId:counter termId:counter... 注意termId 是从1开始计数
+   *                     topicId \grave{termId}:counter \grave{termId}:counter...  其中\grave{termId}= termId + 1
    */
   def save(sc: SparkContext, path: String, isTransposed: Boolean): Unit = {
     LDAModel.SaveLoadV1_0.save(sc, path, ttc, numTopics, numTerms, alpha, beta, alphaAS, isTransposed)
