@@ -6,8 +6,8 @@ Zen is based on Apache Spark, MLlib and GraphX, but with sophisticated optimizat
 
 ## Contributors
 
-* GuoQiang Li ([@witgo](https://github.com/witgo))
+* Guoqiang Li ([@witgo](https://github.com/witgo))
 
-* HuCheng Zhou ([@hucheng](https://github.com/hucheng))
+* Hucheng Zhou ([@hucheng](https://github.com/hucheng))
 
-* SenDong Li ([@lisendong](https://github.com/lisendong))
+* Sendong Li ([@lisendong](https://github.com/lisendong))
