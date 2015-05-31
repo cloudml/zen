@@ -204,7 +204,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
     iter: Int): VertexRDD[Array[Double]] = {
     if (useAdaGrad) {
       val delta = adaGrad(gradientSum, gradient, 1e-6, 1.0)
-      // val delta = equilibratedGradientDescent(gradientSum, gradient, 1e-8, iter)
+      // val delta = equilibratedGradientDescent(gradientSum, gradient, 1e-6, iter)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
 
       gradient.unpersist(blocking = false)
@@ -499,7 +499,9 @@ object MVM {
 
         case None =>
           // parameter point
-          Array.fill(rank + 1)(Utils.random.nextGaussian())
+          Array.fill(rank + 1) {
+            (Utils.random.nextDouble() - 0.5) * 2e-3
+          }
 
       }
     }

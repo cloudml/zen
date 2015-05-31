@@ -22,7 +22,8 @@ import org.apache.spark.mllib.regression.LabeledPoint
 import com.google.common.io.Files
 import org.apache.spark.mllib.util.MLUtils
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, Vector => BV}
-import com.github.cloudml.zen.ml.util.SparkUtils
+import org.apache.spark.mllib.linalg.{DenseVector => SDV, Vector => SV, SparseVector => SSV}
+import org.apache.spark.storage.StorageLevel
 
 import org.scalatest.{Matchers, FunSuite}
 
@@ -151,18 +152,21 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     println(f"Test loss: ${model.loss(testSet.cache())}%1.4f")
 
   }
+
   ignore("movieLens regression") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-    val dataSetFile = s"$sparkHome/data/ml-20m/ratings.csv"
-    val checkpointDir = s"$sparkHome/tmp"
+
+    import com.github.cloudml.zen.ml.recommendation._
+    val dataSetFile = s"/input/lbs/recommend/toona/ml-1m/ratings.dat"
+    val checkpointDir = "/input/lbs/recommend/toona/als/checkpointDir"
     sc.setCheckpointDir(checkpointDir)
 
-    val movieLens = sc.textFile(dataSetFile).mapPartitions { iter =>
+    val movieLens = sc.textFile(dataSetFile, 72).mapPartitions { iter =>
       iter.filter(t => !t.startsWith("userId") && !t.isEmpty).map { line =>
-        val Array(userId, movieId, rating, timestamp) = line.split(",")
+        val Array(userId, movieId, rating, timestamp) = line.split("::")
         (userId.toInt, (movieId.toInt, rating.toDouble))
       }
-    }
+    }.repartition(72).cache()
     val maxMovieId = movieLens.map(_._2._1).max + 1
     val maxUserId = movieLens.map(_._1).max + 1
     val numFeatures = maxUserId + 2 * maxMovieId
@@ -179,23 +183,31 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
         ratings.activeKeysIterator.foreach { mId =>
           sv(maxMovieId + maxUserId + mId) = 1.0 / math.sqrt(activeSize)
         }
-        new LabeledPoint(rating, SparkUtils.fromBreeze(sv))
+        new LabeledPoint(rating, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
       }
     }.zipWithIndex().map(_.swap).cache()
-    val stepSize = 0.01
+    dataSet.count()
+    movieLens.unpersist()
+
+    val stepSize = 0.05
     val numIterations = 200
-    val regParam = 0.0
-    val rank = 20
+    val regParam = 1e-3
+    val rank = 10
     val useAdaGrad = true
-    val miniBatchFraction = 1.0
-    val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
-    testSet.cache()
-    testSet.cache()
-    val fm = new MVMRegression(trainSet.cache(), stepSize, Array(maxUserId, maxMovieId + maxUserId, numFeatures),
+    val miniBatchFraction = 1
+    val Array(trainSet, testSet, _) = dataSet.randomSplit(Array(0.8, 0.1, 0.1))
+    trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
+    testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
+
+    // val fm = new MVMRegression(trainSet, stepSize, Array(maxUserId, maxMovieId + maxUserId, numFeatures),
+    //   regParam, rank, useAdaGrad, miniBatchFraction)
+
+
+    val fm = new FMRegression(trainSet, stepSize, regParam, regParam,
       regParam, rank, useAdaGrad, miniBatchFraction)
     fm.run(numIterations)
     val model = fm.saveModel()
-    println(f"Test loss: ${model.loss(testSet.cache())}%1.4f")
+    println(f"Test loss: ${model.loss(testSet)}%1.4f")
 
   }
 
