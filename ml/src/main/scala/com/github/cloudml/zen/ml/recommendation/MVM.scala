@@ -204,7 +204,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
     iter: Int): VertexRDD[Array[Double]] = {
     if (useAdaGrad) {
       val delta = adaGrad(gradientSum, gradient, 1e-6, 1.0)
-      // val delta = equilibratedGradientDescent(gradientSum, gradient, 1e-6, iter)
+      // val delta = equilibratedGradientDescent(gradientSum, gradient, 1e-4, iter)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
 
       gradient.unpersist(blocking = false)
@@ -476,35 +476,41 @@ object MVM {
     rank: Int,
     storageLevel: StorageLevel): Graph[VD, ED] = {
     val numFeatures = input.first()._2.features.size
+    assert(numFeatures == views.last)
+
     val edges = input.flatMap { case (sampleId, labelPoint) =>
       // sample id
       val newId = newSampleId(sampleId)
-      val eds = labelPoint.features.activeIterator.filter(_._2 != 0.0).map { case (featureId, value) =>
+      labelPoint.features.activeIterator.filter(_._2 != 0.0).map { case (featureId, value) =>
         assert(featureId < numFeatures)
         Edge(featureId, newId, value)
-      }
-      eds ++ views.indices.map { i => Edge(numFeatures + i, newId, 1D) }
+      } ++ views.indices.map { i => Edge(numFeatures + i, newId, 1D) }
     }
-    assert(numFeatures == views.last)
+    edges.persist(storageLevel).count()
+
     val vertices = input.map { case (sampleId, labelPoint) =>
       val newId = newSampleId(sampleId)
-      (newId, labelPoint.label)
-    }
-    val dataSet = Graph.fromEdges(edges, null.asInstanceOf[VD], storageLevel, storageLevel)
-    dataSet.outerJoinVertices(vertices) { (vid, data, deg) =>
-      deg match {
-        case Some(i) =>
-          // label point
-          Array.fill(1)(i)
-
-        case None =>
-          // parameter point
-          Array.fill(rank + 1) {
-            (Utils.random.nextDouble() - 0.5) * 2e-3
-          }
-
+      val label = Array(labelPoint.label)
+      // label point
+      (newId, label)
+    } ++ edges.map(_.srcId).distinct().map { featureId =>
+      // parameter point
+      val parms = Array.fill(rank) {
+        (Utils.random.nextDouble() - 0.5) * 2e-2
       }
+      (featureId, parms)
     }
+    vertices.persist(storageLevel).count()
+
+    val dataSet = GraphImpl(vertices, edges, null.asInstanceOf[VD], storageLevel, storageLevel)
+    val newDataSet = dataSet.partitionBy(PartitionStrategy.EdgePartition2D)
+    newDataSet.vertices.count()
+    newDataSet.edges.count()
+    dataSet.vertices.unpersist()
+    dataSet.edges.unpersist()
+    vertices.unpersist()
+    edges.unpersist()
+    newDataSet
   }
 
   @inline private[ml] def featureId2viewId(featureId: Long, views: Array[Long]): Int = {

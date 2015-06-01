@@ -100,7 +100,7 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     println(f"Test loss: ${model.loss(testSet.cache())}%1.4f")
   }
 
-  test("url_combined classification") {
+  ignore("url_combined classification") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
     val dataSetFile = s"$sparkHome/data/binary_classification_data.txt"
     val checkpointDir = s"$sparkHome/tmp"
@@ -153,20 +153,20 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
 
   }
 
-  ignore("movieLens regression") {
+  ignore("movieLens 10m regression") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
 
     import com.github.cloudml.zen.ml.recommendation._
-    val dataSetFile = s"/input/lbs/recommend/toona/ml-1m/ratings.dat"
+    val dataSetFile = s"/input/lbs/recommend/toona/ml-10M100K/ratings.dat"
     val checkpointDir = "/input/lbs/recommend/toona/als/checkpointDir"
     sc.setCheckpointDir(checkpointDir)
 
-    val movieLens = sc.textFile(dataSetFile, 72).mapPartitions { iter =>
+    val movieLens = sc.textFile(dataSetFile, 1024).mapPartitions { iter =>
       iter.filter(t => !t.startsWith("userId") && !t.isEmpty).map { line =>
         val Array(userId, movieId, rating, timestamp) = line.split("::")
         (userId.toInt, (movieId.toInt, rating.toDouble))
       }
-    }.repartition(72).cache()
+    }.repartition(1024).persist(StorageLevel.MEMORY_AND_DISK)
     val maxMovieId = movieLens.map(_._2._1).max + 1
     val maxUserId = movieLens.map(_._1).max + 1
     val numFeatures = maxUserId + 2 * maxMovieId
@@ -185,30 +185,89 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
         }
         new LabeledPoint(rating, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
       }
-    }.zipWithIndex().map(_.swap).cache()
+    }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
     dataSet.count()
     movieLens.unpersist()
 
-    val stepSize = 0.05
+    val stepSize = 0.1
     val numIterations = 200
     val regParam = 1e-3
-    val rank = 10
+    val rank = 5
     val useAdaGrad = true
     val miniBatchFraction = 1
-    val Array(trainSet, testSet, _) = dataSet.randomSplit(Array(0.8, 0.1, 0.1))
+    val Array(trainSet, testSet, _) = dataSet.randomSplit(Array(0.6, 0.1, 0.3))
     trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
     testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
+    dataSet.unpersist()
 
-    // val fm = new MVMRegression(trainSet, stepSize, Array(maxUserId, maxMovieId + maxUserId, numFeatures),
-    //   regParam, rank, useAdaGrad, miniBatchFraction)
-
-
-    val fm = new FMRegression(trainSet, stepSize, regParam, regParam,
+    val fm = new MVMRegression(trainSet, stepSize, Array(maxUserId, maxMovieId + maxUserId, numFeatures),
       regParam, rank, useAdaGrad, miniBatchFraction)
+
+    //     val fm = new FMRegression(trainSet, stepSize, regParam, regParam,
+    //       regParam, rank, useAdaGrad, miniBatchFraction)
+
     fm.run(numIterations)
     val model = fm.saveModel()
     println(f"Test loss: ${model.loss(testSet)}%1.4f")
 
   }
 
+
+  test("movieLens 100k regression") {
+    val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
+
+    import com.github.cloudml.zen.ml.recommendation._
+    val dataSetFile = s"$sparkHome/data/ml-100k/u.data"
+    val checkpointDir = s"$sparkHome/tmp"
+    sc.setCheckpointDir(checkpointDir)
+
+    val movieLens = sc.textFile(dataSetFile, 2).mapPartitions { iter =>
+      iter.filter(t => !t.startsWith("userId") && !t.isEmpty).map { line =>
+        val Array(userId, movieId, rating, timestamp) = line.split("\t")
+        (userId.toInt, (movieId.toInt, rating.toDouble))
+      }
+    }.persist(StorageLevel.MEMORY_AND_DISK)
+    val maxMovieId = movieLens.map(_._2._1).max + 1
+    val maxUserId = movieLens.map(_._1).max + 1
+    val numFeatures = maxUserId + 2 * maxMovieId
+    val dataSet = movieLens.map { case (userId, (movieId, rating)) =>
+      val sv = BSV.zeros[Double](maxMovieId)
+      sv(movieId) = rating
+      (userId, sv)
+    }.reduceByKey(_ :+= _).flatMap { case (userId, ratings) =>
+      val activeSize = ratings.activeSize
+      ratings.activeIterator.map { case (movieId, rating) =>
+        val sv = BSV.zeros[Double](numFeatures)
+        sv(userId) = 1.0
+        sv(movieId + maxUserId) = 1.0
+        ratings.activeKeysIterator.foreach { mId =>
+          sv(maxMovieId + maxUserId + mId) = 1.0 / math.sqrt(activeSize)
+        }
+        new LabeledPoint(rating, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
+      }
+    }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
+    dataSet.count()
+    movieLens.unpersist()
+
+    val stepSize = 0.1
+    val numIterations = 200
+    val regParam = 1e-3
+    val rank = 10
+    val useAdaGrad = true
+    val miniBatchFraction = 1
+    val Array(trainSet, testSet, _) = dataSet.randomSplit(Array(0.2, 0.1, 0.7))
+    trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
+    testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
+
+    // val fm = new MVMRegression(trainSet, stepSize, Array(maxUserId, maxMovieId + maxUserId, numFeatures),
+    //  regParam, rank, useAdaGrad, miniBatchFraction)
+
+    val fm = new FMRegression(trainSet, stepSize, regParam, regParam,
+      regParam, rank, useAdaGrad, miniBatchFraction)
+
+    fm.run(numIterations)
+    val model = fm.saveModel()
+    println(f"Test loss: ${model.loss(testSet)}%1.4f")
+
+  }
 }

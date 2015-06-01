@@ -514,8 +514,11 @@ object FM {
           Array.fill(1)(i) // label point
         }
         case None => {
-          val a = Array.fill(rank + 1)(Utils.random.nextGaussian() * 1e-2) // parameter point
-          a
+          // parameter point
+          Array.fill(rank + 1) {
+            (Utils.random.nextDouble() - 0.5) * 2e-2
+          }
+
         }
       }
     }
