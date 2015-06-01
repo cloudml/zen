@@ -421,17 +421,17 @@ object FM {
   private[ml] type VD = Array[Double]
 
   /**
-   * FM 分类
-   * @param input 训练数据
-   * @param numIterations 迭代次数
-   * @param stepSize  学习步长推荐 1e-2- 1e-1
-   * @param regb   L2范数作用于公式中的 w_{0} 部分
-   * @param regw   L2范数作用于公式中的 \sum_{j=1}^{n}w_{j}x_{j} 部分
-   * @param regv   L2范数作用于公式中的 \sum_{i=1}^{n}\sum_{j=i+1}^{n}<v_{i},v_{j}> x_{i}x_{j} 部分
-   * @param rank   特征分解向量的维度推荐 10-20
-   * @param useAdaGrad 使用 AdaGrad训练
-   * @param miniBatchFraction  每次迭代采样比例
-   * @param storageLevel   缓存级别
+   * FM clustering
+   * @param input train data
+   * @param numIterations
+   * @param stepSize  recommend 1e-2- 1e-1
+   * @param regb   w_{0} in L2 regularization
+   * @param regw   \sum_{j=1}^{n}w_{j}x_{j} in L2 regularization
+   * @param regv   \sum_{i=1}^{n}\sum_{j=i+1}^{n}<v_{i},v_{j}> x_{i}x_{j} in L2 regularization
+   * @param rank   recommend 10-20
+   * @param useAdaGrad use AdaGrad to train
+   * @param miniBatchFraction
+   * @param storageLevel
    * @return
    */
   def trainClassification(
@@ -458,20 +458,19 @@ object FM {
   }
 
   /**
-   * FM 回归
-   * @param input 训练数据
-   * @param numIterations 迭代次数
-   * @param stepSize  学习步长推荐 1e-2- 1e-1
-   * @param regb   L2范数作用于公式中的 w_{0} 部分
-   * @param regw   L2范数作用于公式中的 \sum_{j=1}^{n}w_{j}x_{j} 部分
-   * @param regv   L2范数作用于公式中的 \sum_{i=1}^{n}\sum_{j=i+1}^{n}<v_{i},v_{j}> x_{i}x_{j} 部分
-   * @param rank   特征分解向量的维度推荐 10-20
-   * @param useAdaGrad 使用 AdaGrad训练
-   * @param miniBatchFraction  每次迭代采样比例
-   * @param storageLevel   缓存级别
+   * FM regression
+   * @param input train data
+   * @param numIterations
+   * @param stepSize  recommend 1e-2- 1e-1
+   * @param regb   w_{0} in L2 regularization
+   * @param regw   \sum_{j=1}^{n}w_{j}x_{j} in L2 regularization
+   * @param regv   \sum_{i=1}^{n}\sum_{j=i+1}^{n}<v_{i},v_{j}> x_{i}x_{j} in L2 regularization
+   * @param rank   recommend 10-20
+   * @param useAdaGrad use AdaGrad to train
+   * @param miniBatchFraction
+   * @param storageLevel
    * @return
    */
-
   def trainRegression(
     input: RDD[(Long, LabeledPoint)],
     numIterations: Int,
@@ -551,9 +550,9 @@ object FM {
   }
 
   /**
-   * arr[0] = w_{i}x{i}
-   * arr[f] = v_{i,j}x_{i} f属于 [1,rank]
-   * arr[k] = v_{i,j}^{2}x_{i}^{2} k属于 (rank,rank * 2 + 1]
+   * arr[0] = \sum_{j=1}^{n}w_{j}x_{i}
+   * arr[f] = \sum_{i=1}^{n}v_{i,f}x_{i}, f belongs to  [1,rank]
+   * arr[k] = \sum_{i=1}^{n} v_{i,k}^{2}x_{i}^{2}, k belongs to  (rank,rank * 2 + 1]
    */
   private[ml] def forwardInterval(rank: Int, x: ED, w: VD): VD = {
     val arr = new Array[Double](rank * 2 + 1)

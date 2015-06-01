@@ -176,6 +176,19 @@
 
   <profiles>
     <profile>
+      <id>java-1.7</id>
+      <properties>
+        <java.version>1.7</java.version>
+      </properties>
+    </profile>
+    <profile>
+      <id>hadoop-2.4</id>
+      <properties>
+        <hadoop.version>2.4.0</hadoop.version>
+        <avro.mapred.classifier>hadoop2</avro.mapred.classifier>
+      </properties>
+    </profile>
+    <profile>
       <id>scala-2.10</id>
       <activation>
         <property><name>!scala-2.11</name></property>

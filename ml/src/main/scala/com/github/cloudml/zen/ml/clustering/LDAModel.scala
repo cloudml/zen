@@ -25,6 +25,8 @@ import com.github.cloudml.zen.ml.clustering.LDAModel.{Count, DocId, ED, VD, Word
 import com.github.cloudml.zen.ml.clustering.LDAUtils._
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.{AliasTable, LoaderUtils}
+import org.apache.hadoop.io.{Text, NullWritable}
+import org.apache.hadoop.mapred.TextOutputFormat
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.GraphImpl
 import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, Vector => SV}
@@ -74,11 +76,10 @@ class LocalLDAModel private[ml](
   def topicTermCounter: Array[SV] = ttc.map(t => fromBreeze(t))
 
   /**
-   * 推断接口
+   * inference interface
    * @param doc
-   * @param totalIter 总迭代次数
-   * @param burnIn  前burnIn次迭代的结果会被丢弃.
-   * @return  返回totalIter次迭代中的后(totalIter - burnIn)次迭代的结果
+   * @param totalIter overall iterations
+   * @param burnIn
    */
   def inference(
     doc: SV,
@@ -192,11 +193,11 @@ class DistributedLDAModel private[ml](
   val storageLevel: StorageLevel = ttc.getStorageLevel
 
   /**
-   * 推断接口
-   * @param docs (dicId, Vector)对 docId 唯一 推荐设置缓存级别为: StorageLevel.MEMORY_AND_DISK
-   * @param totalIter 总迭代次数
-   * @param burnIn  前burnIn次迭代的结果会被丢弃.
-   * @return  返回totalIter次迭代中的后(totalIter - burnIn)次迭代的结果
+   * inference interface
+   * @param docs tuple pair: (dicId, Vector), in which 'docId' is unique
+   *             recommended storage level: StorageLevel.MEMORY_AND_DISK
+   * @param totalIter overall iterations
+   * @param burnIn previous burnIn iters results will discard
    */
   def inference(
     docs: RDD[(VertexId, SV)],
@@ -452,10 +453,12 @@ class DistributedLDAModel private[ml](
   /**
    * @param sc
    * @param path
-   * @param isTransposed libsvm 格式存储 当 isTransposed 为 false 每一行的格式是:
-   *                     termId  \grave{topicId}:counter \grave{topicId}:counter... 其中\grave{topicId} = topicId + 1
-   *                     当 isTransposed 为 true 每一行的格式是:
-   *                     topicId \grave{termId}:counter \grave{termId}:counter...  其中\grave{termId}= termId + 1
+   * @param isTransposed libsvm when `isTransposed` is false, the format of each line:
+   *                     termId  \grave{topicId}:counter \grave{topicId}:counter...,
+   *                     in which \grave{topicId} = topicId + 1
+   *                     otherwise:
+   *                     topicId \grave{termId}:counter \grave{termId}:counter...,
+   *                     in which \grave{termId}= termId + 1
    */
   def save(sc: SparkContext, path: String, isTransposed: Boolean): Unit = {
     LDAModel.SaveLoadV1_0.save(sc, path, ttc, numTopics, numTerms, alpha, beta, alphaAS, isTransposed)
@@ -661,8 +664,11 @@ object LDAModel extends Loader[DistributedLDAModel] {
         ttc
       }
 
-      val labeledPoints = rdd.map { case (termId, vector) => LabeledPoint(termId, fromBreeze(vector)) }
-      MLUtils.saveAsLibSVMFile(labeledPoints, LoaderUtils.dataPath(path))
+      // save model with the topic or word-term descending order
+      rdd.map{ case(id, vector) =>
+        val list =  vector.activeIterator.toList.sortWith((a, b) => a._2 > b._2)
+        (NullWritable.get(), new Text(id + "\t" + list.map(item => item._1 + ":" + item._2).mkString("\t")))
+      }.saveAsHadoopFile[TextOutputFormat[NullWritable, Text]](LoaderUtils.dataPath(path))
     }
   }
 
