@@ -649,7 +649,8 @@ object LDAModel extends Loader[DistributedLDAModel] {
         (("class" -> classNameV1_0) ~ ("version" -> formatVersionV1_0) ~
           ("alpha" -> alpha) ~ ("beta" -> beta) ~ ("alphaAS" -> alphaAS) ~
           ("numTopics" -> numTopics) ~ ("numTerms" -> numTerms) ~
-          ("isTransposed" -> isTransposed)))
+          ("numEdges" -> LDA.numEdges) ~ ("numDocs" -> LDA.numDocs)
+          ~ ("isTransposed" -> isTransposed)))
       sc.parallelize(Seq(metadata), 1).saveAsTextFile(LoaderUtils.metadataPath(path))
 
       val rdd = if (isTransposed) {

@@ -283,6 +283,9 @@ object LDA {
   private[ml] type ED = Array[Count]
   private[ml] type VD = BSV[Count]
 
+  var numDocs = 0L
+  var numEdges = 0L
+
   /**
    * LDA training
    * @param docs       RDD of documents, which are term (word) count vectors paired with IDs.
@@ -350,6 +353,8 @@ object LDA {
     numTopics: Int,
     storageLevel: StorageLevel,
     computedModel: Broadcast[LocalLDAModel] = null): Graph[VD, ED] = {
+    numDocs = docs.count()
+    println(s"num docs in the corpus: $numDocs")
     val edges = docs.mapPartitionsWithIndex((pid, iter) => {
       val gen = new Random(pid + 117)
       iter.flatMap { case (docId, doc) =>
@@ -364,7 +369,8 @@ object LDA {
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
     corpus.persist(storageLevel)
     corpus.vertices.count()
-    corpus.edges.count()
+    numEdges = corpus.edges.count()
+    println(s"edges in the corpus: $numEdges")
     edges.unpersist(blocking = false)
     corpus = DBHPartitioner.partitionByDBH[VD, ED](corpus, storageLevel)
     updateCounter(corpus, numTopics)
