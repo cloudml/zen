@@ -40,6 +40,11 @@
       <artifactId>zen-ml_${scala.binary.version}</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <dependency>
+      <groupId>com.github.cloudml.zen</groupId>
+      <artifactId>zen-examples_${scala.binary.version}</artifactId>
+      <version>${project.version}</version>
+    </dependency>
   </dependencies>
   <build>
     <plugins>

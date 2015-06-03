@@ -21,7 +21,7 @@ import breeze.linalg.{Vector => BV, SparseVector => BSV, DenseVector => BDV}
 import org.apache.spark.mllib.linalg.{DenseVector => SDV, Vector => SV, SparseVector => SSV}
 import scala.language.implicitConversions
 
-private[ml] object SparkUtils {
+private[zen] object SparkUtils {
   implicit def toBreeze(sv: SV): BV[Double] = {
     sv match {
       case SDV(data) =>
