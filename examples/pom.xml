@@ -109,7 +109,7 @@
               <exclude>xmlenc:*</exclude>
               <exclude>hsqldb:*</exclude>
               <exclude>org.scalanlp:*</exclude>
-              <exclude>org.apache.commons:*</exclude>
+              <!--<exclude>org.apache.commons:*</exclude>-->
               <exclude>org.jblas:*</exclude>
               <exclude>com.google.code.findbugs:*</exclude>
               <exclude>io.netty:*</exclude>
