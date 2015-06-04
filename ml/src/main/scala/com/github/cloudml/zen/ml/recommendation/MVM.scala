@@ -17,6 +17,7 @@
 
 package com.github.cloudml.zen.ml.recommendation
 
+import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.recommendation.MVM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.Utils
@@ -32,11 +33,18 @@ import org.apache.spark.storage.StorageLevel
 import scala.math._
 
 /**
- * Factorization Machines 公式定义:
- * \breve{y}(x) := w_{0} + \sum_{j=1}^{n}w_{j}x_{j} + \sum_{i=1}^{n}\sum_{j=i+1}^{n}<v_{i},v_{j}> x_{i}x_{j}
- * := w_{0} + \sum_{j=1}^{n}w_{j}x_{j} +\frac{1}{2}\sum_{f=1}^{k}((\sum_{i=1}^{n}v_{i,f}x_{i})^{2}
- * - \sum_{i=1}^{n}v_{i,j}^{2}x_{i}^{2})
- * 其中<v_{i},v_{j}> :=\sum_{f=1}^{k}v_{i,j}*v_{j,f}
+ * Multi-view Machines 公式定义:
+ * \hat{y}(x) :=\sum_{i_1 =1}^{I_i +1} ...\sum_{i_m =1}^{I_m +1}
+ * (\prod_{v=1}^{m} z_{i_v}^{(v)})(\sum_{f=1}^{k}\prod_{v=1}^{m}a_{i_{v,j}}^{(v)})
+ * :=  \sum_{f}^{k}(\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)}) ..
+ * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
+ *
+ * 其导数是:
+ * \frac{\partial \hat{y}(x|\Theta )}{\partial\theta} :=z_{i_{v}}^{(v)}
+ * (\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)}) ...
+ * (\sum_{i_{v-1} =1}^{I_{v-1}+1}z_{i_{v-1}}^{({v-1})}a_{i_{v-1},j}^{({v-1})})
+ * (\sum_{i_{v+1} =1}^{I_{v+1}+1}z_{i_{v+1}}^{({v+1})}a_{i_{v+1},j}^{({v+1})}) ...
+ * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
  */
 private[ml] abstract class MVM extends Serializable with Logging {
 
@@ -485,8 +493,8 @@ object MVM {
         assert(featureId < numFeatures)
         Edge(featureId, newId, value)
       } ++ views.indices.map { i => Edge(numFeatures + i, newId, 1D) }
-    }
-    edges.persist(storageLevel).count()
+    }.persist(storageLevel)
+    edges.count()
 
     val vertices = input.map { case (sampleId, labelPoint) =>
       val newId = newSampleId(sampleId)
@@ -500,16 +508,13 @@ object MVM {
       }
       (featureId, parms)
     }
-    vertices.persist(storageLevel).count()
+    vertices.persist(storageLevel)
+    vertices.count()
 
     val dataSet = GraphImpl(vertices, edges, null.asInstanceOf[VD], storageLevel, storageLevel)
-    val newDataSet = dataSet.partitionBy(PartitionStrategy.EdgePartition2D)
-    newDataSet.vertices.count()
-    newDataSet.edges.count()
-    dataSet.vertices.unpersist()
-    dataSet.edges.unpersist()
-    vertices.unpersist()
+    val newDataSet = DBHPartitioner.partitionByDBH(dataSet, storageLevel)
     edges.unpersist()
+    vertices.unpersist()
     newDataSet
   }
 
@@ -537,7 +542,10 @@ object MVM {
     -(id + 1L)
   }
 
-
+  /**
+   * arr(k + v * rank)= (\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)}) ..
+   * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
+   */
   private[ml] def predictInterval(rank: Int, arr: VD): ED = {
     val viewSize = arr.length / rank
     var sum = 0.0
@@ -570,9 +578,9 @@ object MVM {
   }
 
   /**
-   * arr[0] = w_{i}x{i}
-   * arr[f] = v_{i,j}x_{i} f属于 [1,rank]
-   * arr[k] = v_{i,j}^{2}x_{i}^{2} k属于 (rank,rank * 2 + 1]
+   * arr的长度是rank * viewSize
+   * f属于 [viewId * rank ,(viewId +1) * rank)时
+   * arr[f] = z_{i_v}^{(1)}a_{i_{i},j}^{(1)}
    */
   private[ml] def forwardInterval(rank: Int, viewId: Int, arr: Array[Double], z: ED, w: VD): VD = {
     var i = 0
@@ -584,7 +592,12 @@ object MVM {
   }
 
   /**
-   * sumM =  \sum_{j=1}^{n}v_{j,f}x_{j}
+   * arr的长度是rank * viewSize
+   * 当 v=viewId , k属性[0,rank] 时
+   * arr(k + v * rank) = \frac{\partial \hat{y}(x|\Theta )}{\partial\theta }
+   * 返回 multi * \frac{\partial \hat{y}(x|\Theta )}{\partial\theta }
+   * 分类: multi = 1/(1+ \exp(-\hat{y}(x|\Theta)) ) - y
+   * 回归: multi = 2(\hat{y}(x|\Theta) -y)
    */
   private[ml] def backwardInterval(
     rank: Int,
@@ -601,6 +614,10 @@ object MVM {
     m
   }
 
+  /**
+   * arr(k + v * rank)= (\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)}) ..
+   * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
+   */
   private[ml] def sumInterval(rank: Int, arr: Array[Double]): VD = {
     val viewSize = arr.length / rank
     val m = new Array[Double](rank)
