@@ -102,7 +102,10 @@ abstract class LDA private[ml](
 
   private def collectTotalTopicCounter(graph: Graph[VD, ED]): BDV[Count] = {
     val globalTopicCounter = collectGlobalCounter(graph, numTopics)
-    assert(brzSum(globalTopicCounter) == numTokens)
+    // avoid the numTokens is larger than Int.MaxValue
+    var count = 0L
+    globalTopicCounter.activeValuesIterator.foreach(v => count += v.toLong)
+    assert(count == numTokens)
     globalTopicCounter
   }
 
