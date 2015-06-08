@@ -26,11 +26,12 @@ import org.apache.spark.{SparkContext, SparkConf}
 import org.apache.spark.graphx.GraphXUtils
 
 
-object LdaDriver {
+object LDADriver {
   def main(args: Array[String]) {
     if (args.length < 10) {
-      println("usage: LDATrain <numTopics> <alpha> <beta> <alphaAs> <totalIteration>" +
-        " <checkpoint path> <input path> <output path> <sampleRate> <partition num> {<use kryo serialize>}")
+      println("usage: LDADriver <numTopics> <alpha> <beta> <alphaAs> <totalIteration>" +
+        " <checkpoint path> <input path> <output path> <sampleRate> <partition num> " +
+        "{<use DBHStrategy>} {<use kryo serialize>}")
       System.exit(1)
     }
     val numTopics = args(0).toInt
@@ -55,7 +56,7 @@ object LdaDriver {
     assert(partitionNum > 0)
 
     val conf = new SparkConf()
-    if (args.length > 10){
+    if (args.length > 11){
       conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
       conf.set("spark.kryo.registrator", "com.github.cloudml.zen.ml.clustering.LDAKryoRegistrator")
       GraphXUtils.registerKryoClasses(conf)
@@ -73,8 +74,9 @@ object LdaDriver {
     // read data from file
     val trainingDocs = readDocsFromTxt(sc, inputDataPath, sampleRate, partitionNum)
     println(s"trainingDocs count: ${trainingDocs.count()}")
+    val useDBHStrategy: Boolean = if (args.length > 10) args(10).toBoolean else false
     val trainingTime = runTraining(sc, outputRootPath, numTopics,
-      totalIter, alpha, beta, alphaAS, trainingDocs)
+      totalIter, alpha, beta, alphaAS, trainingDocs, useDBHStrategy)
 
     val appEndedTime = System.currentTimeMillis()
     println(s"Training time consumed: $trainingTime seconds")
@@ -89,9 +91,10 @@ object LdaDriver {
                   alpha: Double,
                   beta: Double,
                   alphaAS: Double,
-                  trainingDocs: RDD[(Long, SV)]): Double = {
+                  trainingDocs: RDD[(Long, SV)],
+                  useDBHStrategy: Boolean): Double = {
     val trainingStartedTime = System.currentTimeMillis()
-    val model = LDA.train(trainingDocs, totalIter, numTopics, alpha, beta, alphaAS)
+    val model = LDA.train(trainingDocs, totalIter, numTopics, alpha, beta, alphaAS, useDBHStrategy)
     val trainingEndedTime = System.currentTimeMillis()
 
     val param = (alpha, beta, alphaAS, totalIter)

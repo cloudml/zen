@@ -46,7 +46,8 @@ abstract class LDA private[ml](
   private var alpha: Double,
   private var beta: Double,
   private var alphaAS: Double,
-  private var storageLevel: StorageLevel) extends Serializable with Logging {
+  private var storageLevel: StorageLevel,
+  private var useDBHStrategy: Boolean) extends Serializable with Logging {
 
   /**
    * Doc number in corpus
@@ -301,6 +302,7 @@ object LDA {
    * @param beta       recommend to be in range 0.001 - 0.1
    * @param alphaAS    recommend to be in range 0.01 - 1.0
    * @param useLightLDA use LightLDA sampling algorithm or not, recommend false for short text
+   * @param useDBHStrategy whether DBH Strategy to re partition by the graph
    * @return DistributedLDAModel
    */
   def train(
@@ -310,12 +312,13 @@ object LDA {
     alpha: Double = 0.001,
     beta: Double = 0.01,
     alphaAS: Double = 0.1,
-    useLightLDA: Boolean = false): DistributedLDAModel = {
+    useLightLDA: Boolean = false,
+    useDBHStrategy: Boolean = false): DistributedLDAModel = {
     require(totalIter > 0, "totalIter is less than 0")
     val lda = if (useLightLDA) {
-      new LightLDA(docs, numTopics, alpha, beta, alphaAS)
+      new LightLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy)
     } else {
-      new FastLDA(docs, numTopics, alpha, beta, alphaAS)
+      new FastLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy)
     }
     lda.runGibbsSampling(totalIter - 1)
     lda.saveModel(1)
@@ -328,6 +331,7 @@ object LDA {
    * @param alphaAS
    * @param totalIter
    * @param useLightLDA
+   * @param useDBHStrategy whether DBH Strategy to re partition by the graph
    * @return
    */
   def incrementalTrain(
@@ -335,16 +339,17 @@ object LDA {
     computedModel: LocalLDAModel,
     alphaAS: Double = 0.1,
     totalIter: Int = 150,
-    useLightLDA: Boolean = false): DistributedLDAModel = {
+    useLightLDA: Boolean = false,
+    useDBHStrategy: Boolean = false): DistributedLDAModel = {
     require(totalIter > 0, "totalIter is less than 0")
     val numTopics = computedModel.ttc.size
     val alpha = computedModel.alpha
     val beta = computedModel.beta
     val broadcastModel = docs.context.broadcast(computedModel)
     val lda = if (useLightLDA) {
-      new LightLDA(docs, numTopics, alpha, beta, alphaAS, computedModel = broadcastModel)
+      new LightLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy, computedModel = broadcastModel)
     } else {
-      new FastLDA(docs, numTopics, alpha, beta, alphaAS, computedModel = broadcastModel)
+      new FastLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy, computedModel = broadcastModel)
     }
     broadcastModel.unpersist(blocking = false)
     lda.runGibbsSampling(totalIter - 1)
@@ -355,7 +360,8 @@ object LDA {
     docs: RDD[(LDA.DocId, SV)],
     numTopics: Int,
     storageLevel: StorageLevel,
-    computedModel: Broadcast[LocalLDAModel] = null): Graph[VD, ED] = {
+    computedModel: Broadcast[LocalLDAModel] = null,
+    useDBHStrategy: Boolean = false): Graph[VD, ED] = {
     numDocs = docs.count()
     println(s"num docs in the corpus: $numDocs")
     val edges = docs.mapPartitionsWithIndex((pid, iter) => {
@@ -375,7 +381,11 @@ object LDA {
     numEdges = corpus.edges.count()
     println(s"edges in the corpus: $numEdges")
     edges.unpersist(blocking = false)
-    corpus = DBHPartitioner.partitionByDBH[VD, ED](corpus, storageLevel)
+    corpus = if (useDBHStrategy) {
+      DBHPartitioner.partitionByDBH[VD, ED](corpus, storageLevel)
+    }else {
+      corpus.partitionBy(PartitionStrategy.EdgePartition2D)
+    }
     updateCounter(corpus, numTopics)
   }
 
@@ -502,16 +512,19 @@ class FastLDA(
   alpha: Double,
   beta: Double,
   alphaAS: Double,
-  storageLevel: StorageLevel) extends LDA(corpus, numTopics, numTerms, alpha, beta, alphaAS, storageLevel) {
+  storageLevel: StorageLevel,
+  useDBHStrategy: Boolean)
+    extends LDA(corpus, numTopics, numTerms, alpha, beta, alphaAS, storageLevel, useDBHStrategy) {
   def this(docs: RDD[(DocId, SV)],
     numTopics: Int,
     alpha: Double,
     beta: Double,
     alphaAS: Double,
+    useDBHStrategy: Boolean,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK,
     computedModel: Broadcast[LocalLDAModel] = null) {
     this(initializeCorpus(docs, numTopics, storageLevel, computedModel),
-      numTopics, docs.first()._2.size, alpha, beta, alphaAS, storageLevel)
+      numTopics, docs.first()._2.size, alpha, beta, alphaAS, storageLevel, useDBHStrategy)
   }
 
   override protected def sampleTokens(
@@ -713,16 +726,19 @@ class LightLDA(
   alpha: Double,
   beta: Double,
   alphaAS: Double,
-  storageLevel: StorageLevel) extends LDA(corpus, numTopics, numTerms, alpha, beta, alphaAS, storageLevel) {
+  storageLevel: StorageLevel,
+  useDBHStrategy: Boolean)
+    extends LDA(corpus, numTopics, numTerms, alpha, beta, alphaAS, storageLevel, useDBHStrategy) {
   def this(docs: RDD[(Long, SV)],
     numTopics: Int,
     alpha: Double,
     beta: Double,
     alphaAS: Double,
+    useDBHStrategy: Boolean,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK,
     computedModel: Broadcast[LocalLDAModel] = null) {
     this(initializeCorpus(docs, numTopics, storageLevel, computedModel),
-      numTopics, docs.first()._2.size, alpha, beta, alphaAS, storageLevel)
+      numTopics, docs.first()._2.size, alpha, beta, alphaAS, storageLevel, useDBHStrategy)
   }
 
   override protected def sampleTokens(
