@@ -17,7 +17,6 @@
 
 package com.github.cloudml.zen.ml.recommendation
 
-import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.recommendation.FM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.Utils
@@ -121,7 +120,7 @@ private[ml] abstract class FM extends Serializable with Logging {
       vertices.count()
       dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      println(s"Train (Iteration $iter/$iterations) cost:               ${loss(margin)}")
+      // logInfo(s"Train (Iteration $iter/$iterations) cost:               ${loss(margin)}")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
 
       previousVertices.unpersist(blocking = false)
@@ -499,35 +498,27 @@ object FM {
     rank: Int,
     storageLevel: StorageLevel): Graph[VD, ED] = {
     val edges = input.flatMap { case (sampleId, labelPoint) =>
-      // sample id
-      val newId = newSampleId(sampleId)
-      val features = labelPoint.features
-      features.activeIterator.filter(_._2 != 0.0).map { case (featureId, value) =>
-        Edge(featureId, newId, value)
+      val newId = newSampleId(sampleId) // sample id
+      labelPoint.features.activeIterator.filter(_._2 != 0.0).map { case (index, value) =>
+        Edge(index, newId, value)
       }
-    }.persist(storageLevel)
-    edges.count()
-
+    }
     val vertices = input.map { case (sampleId, labelPoint) =>
       val newId = newSampleId(sampleId)
-      // label point
-      val label = Array(labelPoint.label)
-      (newId, label)
-    } ++ edges.map(_.srcId).distinct().map { featureId =>
-      // parameter point
-      val parms = Array.fill(rank + 1) {
-        (Utils.random.nextDouble() - 0.5) * 2e-2
-      }
-      (featureId, parms)
+      (newId, labelPoint.label)
     }
-    vertices.persist(storageLevel)
-    vertices.count()
-
-    val dataSet = GraphImpl(vertices, edges, null.asInstanceOf[VD], storageLevel, storageLevel)
-    val newDataSet = DBHPartitioner.partitionByDBH(dataSet, storageLevel)
-    edges.unpersist()
-    vertices.unpersist()
-    newDataSet
+    val dataSet = Graph.fromEdges(edges, null.asInstanceOf[VD], storageLevel, storageLevel)
+    dataSet.outerJoinVertices(vertices) { (vid, data, deg) =>
+      deg match {
+        case Some(i) => {
+          Array.fill(1)(i) // label point
+        }
+        case None => {
+          val a = Array.fill(rank + 1)(Utils.random.nextGaussian() * 1e-2) // parameter point
+          a
+        }
+      }
+    }
   }
 
   private[ml] def newSampleId(id: Long): VertexId = {
