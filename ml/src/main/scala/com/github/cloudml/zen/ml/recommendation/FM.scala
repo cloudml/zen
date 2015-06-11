@@ -497,8 +497,9 @@ object FM {
     } ++ edges.map(_.srcId).distinct().map { featureId =>
       // parameter point
       val parms = Array.fill(rank + 1) {
-        (Utils.random.nextDouble() - 0.5) * 2e-2
+        Utils.random.nextGaussian() * 1e-1
       }
+      parms(0) = 0.0
       (featureId, parms)
     }).repartition(input.partitions.length)
     vertices.persist(storageLevel)

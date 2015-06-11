@@ -505,7 +505,7 @@ object MVM {
     } ++ edges.map(_.srcId).distinct().map { featureId =>
       // parameter point
       val parms = Array.fill(rank) {
-        (Utils.random.nextDouble() - 0.5) * 2e-2
+        Utils.random.nextGaussian() * 0.1
       }
       (featureId, parms)
     }).repartition(input.partitions.length)

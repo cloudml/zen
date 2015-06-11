@@ -85,7 +85,7 @@ class FMSuite extends FunSuite with SharedSparkContext with Matchers {
     }
     val stepSize = 0.1
     val numIterations = 200
-    val regParam = 1e-4
+    val regParam = 1e-3
     val l2 = (regParam, regParam, regParam)
     val rank = 20
     val useAdaGrad = true

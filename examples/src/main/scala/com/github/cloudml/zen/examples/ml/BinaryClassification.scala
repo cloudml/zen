@@ -39,8 +39,8 @@ object BinaryClassification {
 
   def main(args: Array[String]) {
     val defaultParams = Params()
-    val parser = new OptionParser[Params]("LogisticRegression") {
-      head("LogisticRegression: an example app for LogisticRegression.")
+    val parser = new OptionParser[Params]("BinaryClassification") {
+      head("BinaryClassification: an example app for LogisticRegression.")
       opt[Int]("numIterations")
         .text(s"number of iterations, default: ${defaultParams.numIterations}")
         .action((x, c) => c.copy(numIterations = x))

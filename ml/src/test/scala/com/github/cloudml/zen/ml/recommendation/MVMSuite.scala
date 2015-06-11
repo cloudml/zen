@@ -322,8 +322,8 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     val fm = new MVMRegression(trainSet, stepSize, Array(maxUserId, numFeatures),
       regParam, rank, useAdaGrad, miniBatchFraction)
 
-    //  val fm = new FMRegression(trainSet, stepSize,l2
-    //   rank, useAdaGrad, miniBatchFraction, StorageLevel.MEMORY_AND_DISK)
+    // val fm = new FMRegression(trainSet, stepSize, l2, rank, useAdaGrad,
+    // miniBatchFraction, StorageLevel.MEMORY_AND_DISK)
 
     //  val fm = new BSFMRegression(trainSet, stepSize, Array(maxUserId, numFeatures),
     //   l2, rank, useAdaGrad, miniBatchFraction)
