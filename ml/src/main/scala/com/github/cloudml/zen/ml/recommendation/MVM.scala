@@ -18,7 +18,7 @@
 package com.github.cloudml.zen.ml.recommendation
 
 import com.github.cloudml.zen.ml.DBHPartitioner
-import com.github.cloudml.zen.ml.recommendation.FM._
+import com.github.cloudml.zen.ml.recommendation.MVM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.Utils
 import org.apache.commons.math3.primes.Primes
@@ -33,23 +33,29 @@ import org.apache.spark.storage.StorageLevel
 import scala.math._
 
 /**
- * Factorization Machines 公式定义:
- * \breve{y}(x) := w_{0} + \sum_{j=1}^{n}w_{j}x_{j} + \sum_{i=1}^{n}\sum_{j=i+1}^{n}<v_{i},v_{j}> x_{i}x_{j}
- * := w_{0} + \sum_{j=1}^{n}w_{j}x_{j} +\frac{1}{2}\sum_{f=1}^{k}((\sum_{i=1}^{n}v_{i,f}x_{i})^{2}
- * - \sum_{i=1}^{n}v_{i,j}^{2}x_{i}^{2})
- * 其中<v_{i},v_{j}> :=\sum_{f=1}^{k}v_{i,j}*v_{j,f}
+ * Multi-view Machines 公式定义:
+ * \hat{y}(x) :=\sum_{i_1 =1}^{I_i +1} ...\sum_{i_m =1}^{I_m +1}
+ * (\prod_{v=1}^{m} z_{i_v}^{(v)})(\sum_{f=1}^{k}\prod_{v=1}^{m}a_{i_{v,j}}^{(v)})
+ * :=  \sum_{f}^{k}(\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)}) ..
+ * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
+ *
+ * 其导数是:
+ * \frac{\partial \hat{y}(x|\Theta )}{\partial\theta} :=z_{i_{v}}^{(v)}
+ * (\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)}) ...
+ * (\sum_{i_{v-1} =1}^{I_{v-1}+1}z_{i_{v-1}}^{({v-1})}a_{i_{v-1},j}^{({v-1})})
+ * (\sum_{i_{v+1} =1}^{I_{v+1}+1}z_{i_{v+1}}^{({v+1})}a_{i_{v+1},j}^{({v+1})}) ...
+ * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
  */
-private[ml] abstract class FM extends Serializable with Logging {
+private[ml] abstract class MVM extends Serializable with Logging {
 
   protected val checkpointInterval = 10
-  protected var bias: Double = 0.0
   protected var numFeatures: Long = 0
   protected var numSamples: Long = 0
 
   // SGD
   @transient protected var dataSet: Graph[VD, ED] = null
   @transient protected var multi: VertexRDD[Array[Double]] = null
-  @transient protected var gradientSum: (Double, VertexRDD[Array[Double]]) = null
+  @transient protected var gradientSum: VertexRDD[Array[Double]] = null
   @transient protected var vertices: VertexRDD[VD] = null
   @transient protected var edges: EdgeRDD[ED] = null
   @transient private var innerIter = 1
@@ -76,7 +82,9 @@ private[ml] abstract class FM extends Serializable with Logging {
 
   def stepSize: Double
 
-  def l2: (Double, Double, Double)
+  def views: Array[Long]
+
+  def regL2: Double
 
   def rank: Int
 
@@ -85,10 +93,6 @@ private[ml] abstract class FM extends Serializable with Logging {
   def storageLevel: StorageLevel
 
   def miniBatchFraction: Double
-
-  def intercept: Double = {
-    bias
-  }
 
   protected[ml] def mask: Int = {
     max(1 / miniBatchFraction, 1).toInt
@@ -123,13 +127,13 @@ private[ml] abstract class FM extends Serializable with Logging {
       previousVertices.unpersist(blocking = false)
       margin.unpersist(blocking = false)
       multi.unpersist(blocking = false)
-      gradient._2.unpersist(blocking = false)
+      gradient.unpersist(blocking = false)
       innerIter += 1
     }
   }
 
-  def saveModel(): FMModel = {
-    new FMModel(rank, intercept, false, features)
+  def saveModel(): MVMModel = {
+    new MVMModel(rank, views, false, features)
   }
 
   protected[ml] def loss(q: VertexRDD[VD]): Double = {
@@ -148,9 +152,10 @@ private[ml] abstract class FM extends Serializable with Logging {
     val thisPrimes = primes
     dataSet.aggregateMessages[Array[Double]](ctx => {
       val sampleId = ctx.dstId
-      // val featureId = ctx.srcId
+      val featureId = ctx.srcId
+      val viewId = featureId2viewId(featureId, views)
       if (mod == 1 || ((sampleId * thisPrimes) % mod) + thisMask == 0) {
-        val result = forwardInterval(rank, ctx.attr, ctx.srcAttr)
+        val result = forwardInterval(rank, views.length, viewId, ctx.attr, ctx.srcAttr)
         ctx.sendToDst(result)
       }
     }, forwardReduceInterval, TripletFields.Src).setName(s"margin-$iter").persist(storageLevel)
@@ -160,42 +165,41 @@ private[ml] abstract class FM extends Serializable with Logging {
 
   protected def multiplier(q: VertexRDD[VD]): VertexRDD[VD]
 
-  protected def backward(q: VertexRDD[VD], iter: Int): (Double, VertexRDD[Array[Double]]) = {
+  protected def backward(q: VertexRDD[VD], iter: Int): VertexRDD[Array[Double]] = {
     val thisNumSamples = (1.0 / mask) * numSamples
     multi = multiplier(q).setName(s"multiplier-$iter").persist(storageLevel)
-    val gradW0 = multi.map(_._2.last).sum() / thisNumSamples
+    val sampledArrayLen = rank * views.length + 1
     val gradient = GraphImpl.fromExistingRDDs(multi, edges).aggregateMessages[Array[Double]](ctx => {
       // val sampleId = ctx.dstId
-      // val featureId = ctx.srcId
-      if (ctx.dstAttr.length == 2) {
+      val featureId = ctx.srcId
+      if (ctx.dstAttr.length == sampledArrayLen) {
         val x = ctx.attr
-        val Array(sumM, multi) = ctx.dstAttr
-        val factors = ctx.srcAttr
-        val m = backwardInterval(rank, x, sumM, multi, factors)
-        ctx.sendToSrc(m) // send the multi directly
+        val arr = ctx.dstAttr
+        val viewId = featureId2viewId(featureId, views)
+        val m = backwardInterval(rank, viewId, x, arr, arr.last)
+        // send the multi directly
+        ctx.sendToSrc(m)
       }
-    }, forwardReduceInterval, TripletFields.All).mapValues { gradients =>
-      gradients.map(_ / thisNumSamples) // / numSamples
+    }, forwardReduceInterval, TripletFields.Dst).mapValues { gradients =>
+      gradients.map(_ / thisNumSamples)
     }
     gradient.setName(s"gradient-$iter").persist(storageLevel)
-    (gradW0, gradient)
+
   }
 
   // Updater for L2 regularized problems
-  protected def updateWeight(delta: (Double, VertexRDD[Array[Double]]), iter: Int): VertexRDD[VD] = {
-    val (biasGrad, gradient) = delta
+  protected def updateWeight(delta: VertexRDD[Array[Double]], iter: Int): VertexRDD[VD] = {
+    val gradient = delta
     val wStepSize = if (useAdaGrad) stepSize else stepSize / sqrt(iter)
     val l2StepSize = stepSize / sqrt(iter)
-    val (regB, regW, regV) = l2
-    bias -= wStepSize * biasGrad + l2StepSize * regB * bias
+
     dataSet.vertices.leftJoin(gradient) { (_, attr, gradient) =>
       gradient match {
         case Some(grad) =>
           val weight = attr
-          weight(0) -= wStepSize * grad(0) + l2StepSize * regW * weight(0)
-          var i = 1
-          while (i <= rank) {
-            weight(i) -= wStepSize * grad(i) + l2StepSize * regV * weight(i)
+          var i = 0
+          while (i < rank) {
+            weight(i) -= wStepSize * grad(i) + l2StepSize * regL2 * weight(i)
             i += 1
           }
           weight
@@ -205,41 +209,41 @@ private[ml] abstract class FM extends Serializable with Logging {
   }
 
   protected def updateGradientSum(
-    gradient: (Double, VertexRDD[Array[Double]]),
-    iter: Int): (Double, VertexRDD[Array[Double]]) = {
+    gradient: VertexRDD[Array[Double]],
+    iter: Int): VertexRDD[Array[Double]] = {
     if (useAdaGrad) {
-      val (newW0Grad, newW0Sum, delta) = adaGrad(gradientSum, gradient, 1e-6, 1.0)
-      // val (newW0Grad, newW0Sum, delta) = equilibratedGradientDescent(gradientSum, gradient, 1e-8, iter)
+      val delta = adaGrad(gradientSum, gradient, 1e-6, 1.0)
+      // val delta = equilibratedGradientDescent(gradientSum, gradient, 1e-4, iter)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
 
-      gradient._2.unpersist(blocking = false)
+      gradient.unpersist(blocking = false)
       val newGradient = delta.mapValues(_._1).filter(_._2 != null).
         setName(s"gradient-$iter").persist(storageLevel)
       newGradient.count()
 
-      if (gradientSum != null) gradientSum._2.unpersist(blocking = false)
-      gradientSum = (newW0Sum, delta.mapValues(_._2).setName(s"gradientSum-$iter").persist(storageLevel))
+      if (gradientSum != null) gradientSum.unpersist(blocking = false)
+      gradientSum = delta.mapValues(_._2).setName(s"gradientSum-$iter").persist(storageLevel)
       checkpointGradientSum()
-      gradientSum._2.count()
+      gradientSum.count()
       delta.unpersist(blocking = false)
-      (newW0Grad, newGradient)
+      newGradient
     } else {
       gradient
     }
   }
 
   protected def adaGrad(
-    gradientSum: (Double, VertexRDD[Array[Double]]),
-    gradient: (Double, VertexRDD[Array[Double]]),
+    gradientSum: VertexRDD[Array[Double]],
+    gradient: VertexRDD[Array[Double]],
     epsilon: Double,
-    rho: Double): (Double, Double, VertexRDD[(Array[Double], Array[Double])]) = {
+    rho: Double): VertexRDD[(Array[Double], Array[Double])] = {
     val delta = if (gradientSum == null) {
       features.mapValues(t => t.map(x => 0.0))
     }
     else {
-      gradientSum._2
+      gradientSum
     }
-    val newGradSumWithoutW0 = delta.leftJoin(gradient._2) { (_, gradSum, g) =>
+    val newGradSum = delta.leftJoin(gradient) { (_, gradSum, g) =>
       g match {
         case Some(grad) =>
           val gradLen = grad.length
@@ -254,27 +258,21 @@ private[ml] abstract class FM extends Serializable with Logging {
       }
 
     }
-    val w0Sum = if (gradientSum == null) 0.0 else gradientSum._1
-    val w0Grad = gradient._1
-
-    val newW0Sum = w0Sum * rho + pow(w0Grad, 2)
-    val newW0Grad = w0Grad / (epsilon + sqrt(newW0Sum))
-
-    (newW0Grad, newW0Sum, newGradSumWithoutW0)
+    newGradSum
   }
 
   protected def equilibratedGradientDescent(
-    gradientSum: (Double, VertexRDD[Array[Double]]),
-    gradient: (Double, VertexRDD[Array[Double]]),
+    gradientSum: VertexRDD[Array[Double]],
+    gradient: VertexRDD[Array[Double]],
     epsilon: Double,
-    iter: Int): (Double, Double, VertexRDD[(Array[Double], Array[Double])]) = {
+    iter: Int): VertexRDD[(Array[Double], Array[Double])] = {
     val delta = if (gradientSum == null) {
       features.mapValues(t => t.map(x => 0.0))
     }
     else {
-      gradientSum._2
+      gradientSum
     }
-    val newGradSumWithoutW0 = delta.leftJoin(gradient._2) { (_, gradSum, g) =>
+    val newGradSum = delta.leftJoin(gradient) { (_, gradSum, g) =>
       g match {
         case Some(grad) =>
           val gradLen = grad.length
@@ -289,19 +287,13 @@ private[ml] abstract class FM extends Serializable with Logging {
       }
 
     }
-    val w0Sum = if (gradientSum == null) 0.0 else gradientSum._1
-    val w0Grad = gradient._1
-
-    val newW0Sum = w0Sum + pow(Utils.random.nextGaussian() * w0Grad, 2)
-    val newW0Grad = w0Grad / (epsilon + sqrt(newW0Sum / iter))
-
-    (newW0Grad, newW0Sum, newGradSumWithoutW0)
+    newGradSum
   }
 
   protected def checkpointGradientSum(): Unit = {
-    val sc = gradientSum._2.sparkContext
+    val sc = gradientSum.sparkContext
     if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
-      gradientSum._2.checkpoint()
+      gradientSum.checkpoint()
     }
   }
 
@@ -313,24 +305,26 @@ private[ml] abstract class FM extends Serializable with Logging {
   }
 }
 
-class FMClassification(
+class MVMClassification(
   @transient _dataSet: Graph[VD, ED],
   val stepSize: Double,
-  val l2: (Double, Double, Double),
+  val views: Array[Long],
+  val regL2: Double,
   val rank: Int,
   val useAdaGrad: Boolean,
   val miniBatchFraction: Double,
-  val storageLevel: StorageLevel) extends FM {
+  val storageLevel: StorageLevel) extends MVM {
 
   def this(
     input: RDD[(VertexId, LabeledPoint)],
     stepSize: Double = 1e-2,
-    l2Reg: (Double, Double, Double) = (1e-3, 1e-3, 1e-3),
+    views: Array[Long],
+    regL2: Double = 1e-3,
     rank: Int = 20,
     useAdaGrad: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
-    this(initializeDataSet(input, rank, storageLevel), stepSize, l2Reg, rank,
+    this(initializeDataSet(input, views, rank, storageLevel), stepSize, views, regL2, rank,
       useAdaGrad, miniBatchFraction, storageLevel)
   }
 
@@ -338,12 +332,12 @@ class FMClassification(
   assert(rank > 1, s"rank $rank less than 2")
 
   override protected def predict(arr: Array[Double]): Double = {
-    val result = predictInterval(rank, bias, arr)
+    val result = predictInterval(rank, arr)
     1.0 / (1.0 + math.exp(-result))
   }
 
-  override def saveModel(): FMModel = {
-    new FMModel(rank, intercept, true, features)
+  override def saveModel(): MVMModel = {
+    new MVMModel(rank, views, true, features)
   }
 
   override protected def multiplier(q: VertexRDD[VD]): VertexRDD[VD] = {
@@ -352,31 +346,35 @@ class FMClassification(
         case Some(m) =>
           val y = data.head
           val diff = predict(m) - y
-          Array(sumInterval(rank, m), diff)
+          val ret = sumInterval(rank, m)
+          ret(ret.length - 1) = diff
+          ret
         case _ => data
       }
     }
   }
 }
 
-class FMRegression(
+class MVMRegression(
   @transient _dataSet: Graph[VD, ED],
   val stepSize: Double,
-  val l2: (Double, Double, Double),
+  val views: Array[Long],
+  val regL2: Double,
   val rank: Int,
   val useAdaGrad: Boolean,
   val miniBatchFraction: Double,
-  val storageLevel: StorageLevel) extends FM {
+  val storageLevel: StorageLevel) extends MVM {
 
   def this(
     input: RDD[(VertexId, LabeledPoint)],
     stepSize: Double = 1e-2,
-    l2Reg: (Double, Double, Double) = (1e-3, 1e-3, 1e-3),
+    views: Array[Long],
+    regL2: Double,
     rank: Int = 20,
     useAdaGrad: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
-    this(initializeDataSet(input, rank, storageLevel), stepSize, l2Reg, rank,
+    this(initializeDataSet(input, views, rank, storageLevel), stepSize, views, regL2, rank,
       useAdaGrad, miniBatchFraction, storageLevel)
   }
 
@@ -387,7 +385,7 @@ class FMRegression(
   // val min = samples.map(_._2.head).min
 
   override protected def predict(arr: Array[Double]): Double = {
-    var result = predictInterval(rank, bias, arr)
+    var result = predictInterval(rank, arr)
     // result = Math.max(result, min)
     // result = Math.min(result, max)
     result
@@ -400,75 +398,82 @@ class FMRegression(
           val y = data.head
           // + Utils.random.nextGaussian()
           val diff = predict(m) - y
-          Array(sumInterval(rank, m), diff * 2.0)
+          val ret = sumInterval(rank, m)
+          ret(ret.length - 1) = diff * 2.0
+          ret
         case _ => data
       }
     }
   }
 }
 
-object FM {
+object MVM {
   private[ml] type ED = Double
   private[ml] type VD = Array[Double]
 
   /**
-   * FM clustering
-   * @param input train data
-   * @param numIterations
-   * @param stepSize  recommend 1e-2- 1e-1
-   * @param l2   (w_0, w_i, v_{i,f}) in L2 regularization
-   * @param rank   recommend 10-20
-   * @param useAdaGrad use AdaGrad to train
-   * @param miniBatchFraction
-   * @param storageLevel
+   * MVM 分类
+   * @param input 训练数据
+   * @param numIterations 迭代次数
+   * @param stepSize  学习步长推荐 1e-2- 1e-1
+   * @param regL2   L2范数
+   * @param rank   特征分解向量的维度推荐 10-20
+   * @param useAdaGrad 使用 AdaGrad训练
+   * @param miniBatchFraction  每次迭代采样比例
+   * @param storageLevel   缓存级别
    * @return
    */
   def trainClassification(
     input: RDD[(Long, LabeledPoint)],
     numIterations: Int,
     stepSize: Double,
-    l2: (Double, Double, Double),
+    views: Array[Long],
+    regL2: Double,
     rank: Int,
     useAdaGrad: Boolean = true,
     miniBatchFraction: Double = 1.0,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): FMModel = {
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): MVMModel = {
     val data = input.map { case (id, LabeledPoint(label, features)) =>
       assert(id >= 0.0, s"sampleId $id less than 0")
       val newLabel = if (label > 0.0) 1.0 else 0.0
       (id, LabeledPoint(newLabel, features))
     }
-    val lfm = new FMClassification(data, stepSize, l2, rank, useAdaGrad, miniBatchFraction, storageLevel)
+    val lfm = new MVMClassification(data, stepSize, views, regL2, rank,
+      useAdaGrad, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
     model
   }
 
   /**
-   * FM regression
-   * @param input train data
-   * @param numIterations
-   * @param stepSize  recommend 1e-2- 1e-1
-   * @param l2   (w_0, w_i, v_{i,f}) in L2 regularization
-   * @param rank   recommend 10-20
-   * @param useAdaGrad use AdaGrad to train
-   * @param miniBatchFraction
-   * @param storageLevel
+   * MVM 回归
+   * @param input 训练数据
+   * @param numIterations 迭代次数
+   * @param stepSize  学习步长推荐 1e-2- 1e-1
+   * @param regL2   L2范数
+   * @param rank   特征分解向量的维度推荐 10-20
+   * @param useAdaGrad 使用 AdaGrad训练
+   * @param miniBatchFraction  每次迭代采样比例
+   * @param storageLevel   缓存级别
    * @return
    */
+
   def trainRegression(
     input: RDD[(Long, LabeledPoint)],
     numIterations: Int,
     stepSize: Double,
-    l2: (Double, Double, Double),
+    views: Array[Long],
+    regL2: Double,
     rank: Int,
     useAdaGrad: Boolean = true,
     miniBatchFraction: Double = 1.0,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): FMModel = {
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): MVMModel = {
     val data = input.map { case (id, labeledPoint) =>
       assert(id >= 0.0, s"sampleId $id less than 0")
       (id, labeledPoint)
     }
-    val lfm = new FMRegression(data, stepSize, l2, rank, useAdaGrad, miniBatchFraction, storageLevel)
+    val lfm = new MVMRegression(data, stepSize, views, regL2, rank,
+      useAdaGrad, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
     model
@@ -476,30 +481,32 @@ object FM {
 
   private[ml] def initializeDataSet(
     input: RDD[(VertexId, LabeledPoint)],
+    views: Array[Long],
     rank: Int,
     storageLevel: StorageLevel): Graph[VD, ED] = {
     val numFeatures = input.first()._2.features.size
+    assert(numFeatures == views.last)
+
     val edges = input.flatMap { case (sampleId, labelPoint) =>
       // sample id
       val newId = newSampleId(sampleId)
-      val features = labelPoint.features
-      features.activeIterator.filter(_._2 != 0.0).map { case (featureId, value) =>
+      labelPoint.features.activeIterator.filter(_._2 != 0.0).map { case (featureId, value) =>
+        assert(featureId < numFeatures)
         Edge(featureId, newId, value)
-      } ++ Array(Edge(numFeatures, newId, 1D))
+      } ++ views.indices.map { i => Edge(numFeatures + i, newId, 1D) }
     }.persist(storageLevel)
     edges.count()
 
     val vertices = (input.map { case (sampleId, labelPoint) =>
       val newId = newSampleId(sampleId)
-      // label point
       val label = Array(labelPoint.label)
+      // label point
       (newId, label)
     } ++ edges.map(_.srcId).distinct().map { featureId =>
       // parameter point
-      val parms = Array.fill(rank + 1) {
-        Utils.random.nextGaussian() * 1e-1
+      val parms = Array.fill(rank) {
+        Utils.random.nextGaussian() * 0.1
       }
-      parms(0) = 0.0
       (featureId, parms)
     }).repartition(input.partitions.length)
     vertices.persist(storageLevel)
@@ -512,23 +519,49 @@ object FM {
     newDataSet
   }
 
+  @inline private[ml] def featureId2viewId(featureId: Long, views: Array[Long]): Int = {
+    val numFeatures = views.last
+    val viewId = if (featureId >= numFeatures) {
+      featureId - numFeatures
+    } else {
+      val viewSize = views.length
+      var adj = 0
+      var found = false
+      while (adj < viewSize - 1 && !found) {
+        if (featureId < views(adj)) {
+          found = true
+        } else {
+          adj += 1
+        }
+      }
+      adj
+    }
+    viewId.toInt
+  }
+
   private[ml] def newSampleId(id: Long): VertexId = {
     -(id + 1L)
   }
 
   /**
-   * arr[0] = \sum_{j=1}^{n}w_{j}x_{i}
-   * arr[f] = \sum_{i=1}^{n}v_{i,f}x_{i} f属于 [1,rank]
-   * arr[k] = \sum_{i=1}^{n} v_{i,k}^{2}x_{i}^{2} k属于 (rank,rank * 2 + 1]
+   * arr(k + v * rank)= (\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)}) ..
+   * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
    */
-  private[ml] def predictInterval(rank: Int, bias: Double, arr: VD): ED = {
+  private[ml] def predictInterval(rank: Int, arr: VD): ED = {
+    val viewSize = arr.length / rank
     var sum = 0.0
-    var i = 1
-    while (i <= rank) {
-      sum += pow(arr(i), 2) - arr(rank + i)
+    var i = 0
+    while (i < rank) {
+      var multi = 1.0
+      var viewId = 0
+      while (viewId < viewSize) {
+        multi *= arr(i + viewId * rank)
+        viewId += 1
+      }
+      sum += multi
       i += 1
     }
-    bias + arr(0) + 0.5 * sum
+    sum
   }
 
   private[ml] def forwardReduceInterval(a: VD, b: VD): VD = {
@@ -540,50 +573,79 @@ object FM {
     a
   }
 
+  private[ml] def forwardInterval(rank: Int, viewSize: Int, viewId: Int, x: ED, w: VD): VD = {
+    val arr = new Array[Double](rank * viewSize)
+    forwardInterval(rank, viewId, arr, x, w)
+  }
+
   /**
-   * arr[0] = \sum_{j=1}^{n}w_{j}x_{i}
-   * arr[f] = \sum_{i=1}^{n}v_{i,f}x_{i}, f belongs to  [1,rank]
-   * arr[k] = \sum_{i=1}^{n} v_{i,k}^{2}x_{i}^{2}, k belongs to  (rank,rank * 2 + 1]
+   * arr的长度是rank * viewSize
+   * f属于 [viewId * rank ,(viewId +1) * rank)时
+   * arr[f] = z_{i_v}^{(1)}a_{i_{i},j}^{(1)}
    */
-  private[ml] def forwardInterval(rank: Int, x: ED, w: VD): VD = {
-    val arr = new Array[Double](rank * 2 + 1)
-    arr(0) = x * w(0)
-    var i = 1
-    while (i <= rank) {
-      arr(i) = x * w(i)
-      arr(rank + i) = pow(x, 2) * pow(w(i), 2)
+  private[ml] def forwardInterval(rank: Int, viewId: Int, arr: Array[Double], z: ED, w: VD): VD = {
+    var i = 0
+    while (i < rank) {
+      arr(i + viewId * rank) += z * w(i)
       i += 1
     }
     arr
   }
 
   /**
-   * sumM =  \sum_{j=1}^{n}v_{j,f}x_{j}
+   * arr的长度是rank * viewSize
+   * 当 v=viewId , k属于[0,rank] 时
+   * arr(k + v * rank) = \frac{\partial \hat{y}(x|\Theta )}{\partial\theta }
+   * 返回 multi * \frac{\partial \hat{y}(x|\Theta )}{\partial\theta }
+   * 分类: multi = 1/(1+ \exp(-\hat{y}(x|\Theta)) ) - y
+   * 回归: multi = 2(\hat{y}(x|\Theta) -y)
    */
   private[ml] def backwardInterval(
     rank: Int,
+    viewId: Int,
     x: ED,
-    sumM: ED,
-    multi: ED,
-    factors: VD): VD = {
-    val m = new Array[Double](rank + 1)
-    m(0) = x * multi
-    var i = 1
-    while (i <= rank) {
-      val grad = sumM * x - factors(i) * pow(x, 2)
-      m(i) = grad * multi
+    arr: VD,
+    multi: ED): VD = {
+    val m = new Array[Double](rank)
+    var i = 0
+    while (i < rank) {
+      m(i) = multi * x * arr(i + viewId * rank)
       i += 1
     }
     m
   }
 
-  private[ml] def sumInterval(rank: Int, arr: Array[Double]): Double = {
-    var result = 0.0
-    var i = 1
-    while (i <= rank) {
-      result += arr(i)
+  /**
+   * arr(k + v * rank)= (\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)}) ..
+   * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
+   */
+  private[ml] def sumInterval(rank: Int, arr: Array[Double]): VD = {
+    val viewSize = arr.length / rank
+    val m = new Array[Double](rank)
+    var i = 0
+    while (i < rank) {
+      var multi = 1.0
+      var viewId = 0
+      while (viewId < viewSize) {
+        multi *= arr(i + viewId * rank)
+        viewId += 1
+      }
+      m(i) += multi
       i += 1
     }
-    result
+
+    val ret = new Array[Double](rank * viewSize + 1)
+    i = 0
+    while (i < rank) {
+      var viewId = 0
+      while (viewId < viewSize) {
+        ret(i + viewId * rank) = m(i) / arr(i + viewId * rank)
+        viewId += 1
+      }
+
+      i += 1
+    }
+    ret
   }
 }
+

@@ -17,7 +17,7 @@
 
 package com.github.cloudml.zen.ml.recommendation
 
-import com.github.cloudml.zen.ml.recommendation.FM._
+import com.github.cloudml.zen.ml.recommendation.MVM._
 import com.github.cloudml.zen.ml.util.LoaderUtils
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import org.apache.spark.SparkContext
@@ -32,21 +32,24 @@ import org.json4s.jackson.JsonMethods._
 
 import scala.math._
 
-class FMModel(
+class MVMModel(
   val k: Int,
-  val intercept: ED,
+  val views: Array[Long],
   val classification: Boolean,
   val factors: RDD[(Long, VD)]) extends Serializable with Saveable {
   def predict(data: RDD[(Long, SV)]): RDD[(Long, ED)] = {
+    val numFeatures = data.first()._2.size.toLong
     data.flatMap { case (sampleId, features) =>
       features.activeIterator.filter(_._2 != 0.0).map {
         case (featureId, value) =>
           (featureId.toLong, (sampleId, value))
-      }
+      } ++ views.indices.map { i => (numFeatures + i, (sampleId, 1D)) }
     }.join(factors).map { case (featureId, ((sampleId, x), w)) =>
-      (sampleId, forwardInterval(k, x, w))
+      val viewSize = views.length
+      val viewId = featureId2viewId(featureId, views)
+      (sampleId, forwardInterval(k, viewSize, viewId, x, w))
     }.reduceByKey(forwardReduceInterval).map { case (sampleId, arr) =>
-      var result = predictInterval(k, intercept, arr)
+      var result = predictInterval(k, arr)
       if (classification) {
         result = 1.0 / (1.0 + math.exp(-result))
       }
@@ -65,22 +68,22 @@ class FMModel(
   }
 
   override def save(sc: SparkContext, path: String): Unit = {
-    FMModel.SaveLoadV1_0.save(sc, path, k, intercept, classification, factors)
+    MVMModel.SaveLoadV1_0.save(sc, path, k, views, classification, factors)
   }
 
-  override protected def formatVersion: String = FMModel.SaveLoadV1_0.formatVersionV1_0
+  override protected def formatVersion: String = MVMModel.SaveLoadV1_0.formatVersionV1_0
 }
 
-object FMModel extends Loader[FMModel] {
+object MVMModel extends Loader[MVMModel] {
 
-  override def load(sc: SparkContext, path: String): FMModel = {
+  override def load(sc: SparkContext, path: String): MVMModel = {
     val (loadedClassName, version, metadata) = LoaderUtils.loadMetadata(sc, path)
     val versionV1_0 = SaveLoadV1_0.formatVersionV1_0
     val classNameV1_0 = SaveLoadV1_0.classNameV1_0
     if (loadedClassName == classNameV1_0 && version == versionV1_0) {
       implicit val formats = DefaultFormats
       val classification = (metadata \ "classification").extract[Boolean]
-      val intercept = (metadata \ "intercept").extract[Double]
+      val views = (metadata \ "views").extract[String].split(",").map(_.toLong)
       val k = (metadata \ "k").extract[Int]
       val dataPath = LoaderUtils.dataPath(path)
       val sqlContext = new SQLContext(sc)
@@ -93,7 +96,7 @@ object FMModel extends Loader[FMModel] {
         case Row(featureId: Long, factors: Seq[Double]) =>
           (featureId, factors.toArray)
       }
-      new FMModel(k, intercept, classification, factors)
+      new MVMModel(k, views, classification, factors)
     } else {
       throw new Exception(
         s"FMModel.load did not recognize model with (className, format version):" +
@@ -105,18 +108,18 @@ object FMModel extends Loader[FMModel] {
 
   private object SaveLoadV1_0 {
     val formatVersionV1_0 = "1.0"
-    val classNameV1_0 = "com.github.cloudml.zen.ml.recommendation.FMModel"
+    val classNameV1_0 = "com.github.cloudml.zen.ml.recommendation.MVMModel"
 
     def save(
       sc: SparkContext,
       path: String,
       k: Int,
-      intercept: Double,
+      views: Array[Long],
       classification: Boolean,
       factors: RDD[(Long, Array[Double])]): Unit = {
       val metadata = compact(render
         (("class" -> classNameV1_0) ~ ("version" -> formatVersionV1_0) ~
-          ("k" -> k) ~ ("intercept" -> intercept) ~ ("classification" -> classification)))
+          ("k" -> k) ~ ("views" -> views.mkString(",")) ~ ("classification" -> classification)))
       sc.parallelize(Seq(metadata), 1).saveAsTextFile(LoaderUtils.metadataPath(path))
 
       val sqlContext = new SQLContext(sc)
@@ -125,4 +128,5 @@ object FMModel extends Loader[FMModel] {
       factors.toDF("featureId", "factors").saveAsParquetFile(LoaderUtils.dataPath(path))
     }
   }
+
 }

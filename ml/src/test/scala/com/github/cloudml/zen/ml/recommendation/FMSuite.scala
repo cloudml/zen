@@ -37,10 +37,11 @@ class FMSuite extends FunSuite with SharedSparkContext with Matchers {
     }
     val stepSize = 0.1
     val regParam = 1e-2
+    val l2 = (regParam, regParam, regParam)
     val rank = 20
     val useAdaGrad = true
     val trainSet = dataSet.cache()
-    val fm = new FMClassification(trainSet, stepSize, regParam, regParam, regParam, rank, useAdaGrad)
+    val fm = new FMClassification(trainSet, stepSize, l2, rank, useAdaGrad)
 
     val maxIter = 10
     val pps = new Array[Double](maxIter)
@@ -84,13 +85,13 @@ class FMSuite extends FunSuite with SharedSparkContext with Matchers {
     }
     val stepSize = 0.1
     val numIterations = 200
-    val regParam = 1e-4
+    val regParam = 1e-3
+    val l2 = (regParam, regParam, regParam)
     val rank = 20
     val useAdaGrad = true
     val miniBatchFraction = 1.0
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
-    val fm = new FMRegression(trainSet.cache(), stepSize, regParam, regParam, regParam,
-      rank, useAdaGrad, miniBatchFraction)
+    val fm = new FMRegression(trainSet.cache(), stepSize, l2, rank, useAdaGrad, miniBatchFraction)
     fm.run(numIterations)
     val model = fm.saveModel()
     println(f"Test loss: ${model.loss(testSet.cache())}%1.4f")
@@ -109,12 +110,12 @@ class FMSuite extends FunSuite with SharedSparkContext with Matchers {
     val stepSize = 0.1
     val numIterations = 500
     val regParam = 0.0
+    val l2 = (regParam, regParam, regParam)
     val rank = 20
     val useAdaGrad = true
     val miniBatchFraction = 0.1
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
-    val fm = new FMClassification(trainSet.cache(), stepSize, regParam, regParam, regParam,
-      rank, useAdaGrad, miniBatchFraction)
+    val fm = new FMClassification(trainSet.cache(), stepSize, l2, rank, useAdaGrad, miniBatchFraction)
     fm.run(numIterations)
     val model = fm.saveModel()
     println(f"Test loss: ${model.loss(testSet.cache())}%1.4f")
