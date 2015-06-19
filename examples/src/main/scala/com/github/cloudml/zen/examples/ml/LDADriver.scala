@@ -20,6 +20,8 @@ package com.github.cloudml.zen.examples.ml
 import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDA
 import com.github.cloudml.zen.ml.util.SparkUtils._
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.mllib.linalg.{Vector => SV}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkContext, SparkConf}
@@ -28,9 +30,9 @@ import org.apache.spark.graphx.GraphXUtils
 
 object LDADriver {
   def main(args: Array[String]) {
-    if (args.length < 10) {
+    if (args.length < 9) {
       println("usage: LDADriver <numTopics> <alpha> <beta> <alphaAs> <totalIteration>" +
-        " <checkpoint path> <input path> <output path> <sampleRate> <partition num> " +
+        " <input path> <output path> <sampleRate> <partition num> " +
         "{<use DBHStrategy>} {<use kryo serialize>}")
       System.exit(1)
     }
@@ -47,20 +49,22 @@ object LDADriver {
     assert(totalIter > 0)
 
     val appStartedTime = System.currentTimeMillis()
-    val checkpointPath = args(5)
-    val inputDataPath = args(6)
-    val outputRootPath = args(7)
-    val sampleRate = args(8).toDouble
-    val partitionNum = args(9).toInt
+    val inputDataPath = args(5)
+    val outputRootPath = args(6)
+    val checkpointPath = args(6) + "/checkpoint"
+    val sampleRate = args(7).toDouble
+    val partitionNum = args(8).toInt
     assert(sampleRate > 0)
     assert(partitionNum > 0)
 
     val conf = new SparkConf()
-    if (args.length > 11){
+    val useDBHStrategy: Boolean = if (args.length > 9) args(9).toBoolean else false
+
+    if (args.length > 10) {
       conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
       conf.set("spark.kryo.registrator", "com.github.cloudml.zen.ml.clustering.LDAKryoRegistrator")
       GraphXUtils.registerKryoClasses(conf)
-    }else {
+    } else {
       conf.set("spark.serializer", "org.apache.spark.serializer.JavaSerializer")
     }
     val sc = new SparkContext(conf)
@@ -74,7 +78,7 @@ object LDADriver {
     // read data from file
     val trainingDocs = readDocsFromTxt(sc, inputDataPath, sampleRate, partitionNum)
     println(s"trainingDocs count: ${trainingDocs.count()}")
-    val useDBHStrategy: Boolean = if (args.length > 10) args(10).toBoolean else false
+
     val trainingTime = runTraining(sc, outputRootPath, numTopics,
       totalIter, alpha, beta, alphaAS, trainingDocs, useDBHStrategy)
 
@@ -94,11 +98,28 @@ object LDADriver {
                   trainingDocs: RDD[(Long, SV)],
                   useDBHStrategy: Boolean): Double = {
     val trainingStartedTime = System.currentTimeMillis()
-    val model = LDA.train(trainingDocs, totalIter, numTopics, alpha, beta, alphaAS, useDBHStrategy)
+    val (termModel, docModel) = LDA.train(trainingDocs, totalIter, numTopics, alpha, beta, alphaAS, useDBHStrategy)
     val trainingEndedTime = System.currentTimeMillis()
 
-    val param = (alpha, beta, alphaAS, totalIter)
-    model.save(sc, outputRootPath, isTransposed = true)
+    println("save the model both in doc-term view or term-doc view")
+    termModel.save(sc, outputRootPath + "/topic-term", isTransposed = true)
+    // docModel.save(sc, outputRootPath + "/doc-topic", isTransposed = false)
+
+    // try to delete the checkpoint folder in the HDFS
+    if (sys.env.contains("HADOOP_CONF_DIR") || sys.env.contains("YARN_CONF_DIR")) {
+      val hdfsConfPath = if (sys.env.get("HADOOP_CONF_DIR").isDefined) {
+        sys.env.get("HADOOP_CONF_DIR").get + "/core-site.xml"
+      } else sys.env.get("YARN_CONF_DIR").get + "/core-site.xml"
+      val hdfsConf = new Configuration()
+      hdfsConf.addResource(new Path(hdfsConfPath))
+      val fs = FileSystem.get(hdfsConf)
+      fs.delete(new Path(sc.getCheckpointDir.get), true)
+    } else {
+      val hdfsConf = new Configuration()
+      val fs = FileSystem.get(hdfsConf)
+      fs.delete(new Path(sc.getCheckpointDir.get), true)
+    }
+
     (trainingEndedTime - trainingStartedTime) / 1e3
   }
 
@@ -113,7 +134,7 @@ object LDADriver {
   def convertDocsToBagOfWords(sc: SparkContext,
                               rawDocs: RDD[String]): RDD[(Long, SV)] = {
     rawDocs.cache()
-    val wordsLength = rawDocs.mapPartitions{ iter =>
+    val wordsLength = rawDocs.mapPartitions { iter =>
       val iterator = iter.map { line =>
         val items = line.split("\\t|\\s+")
         var max = Integer.MIN_VALUE
