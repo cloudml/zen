@@ -48,7 +48,7 @@ class MVMModel(
       val viewSize = views.length
       val viewId = featureId2viewId(featureId, views)
       (sampleId, forwardInterval(k, viewSize, viewId, x, w))
-    }.reduceByKey(forwardReduceInterval).map { case (sampleId, arr) =>
+    }.reduceByKey(reduceInterval).map { case (sampleId, arr) =>
       var result = predictInterval(k, arr)
       if (classification) {
         result = 1.0 / (1.0 + math.exp(-result))
