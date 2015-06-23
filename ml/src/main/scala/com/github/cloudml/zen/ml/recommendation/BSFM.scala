@@ -33,13 +33,13 @@ import org.apache.spark.storage.StorageLevel
 import scala.math._
 
 /**
- * Block Structures Factorization Machines 公式定义:
+ * Block Structures Factorization Machines :
  * \hat{y}(x)= w_0 + \sum_{i=1}^{n}w_{i}x_{i} + \frac{1}{2}\sum_{f}^{k}((\sum_{i}^{n}{x_{i}v_{i,f}})^2 -
  * \sum_{l=1}^{|B|}(\sum_{i \epsilon B_{l}}x_{i}v_{i,f})^2)
- * 其导数是\frac{\partial \hat{y}(x|\Theta )}{\partial\theta}
- * 当 \theta 是w_0 时导数是 1
- * 当 \theta 是 w_i 时导数是 x_i
- * 当 \theta 是 v_{i,f}时导数是 x_{i}(\sum_{i=1}^{n}x_{i}v_{i,f} - \sum_{i\epsilon B_{l}}x_{i}v_{i,f})
+ * the derivative: \frac{\partial \hat{y}(x|\Theta )}{\partial\theta}
+ * if \theta is w_0, the derivative: 1
+ * if \theta is w_i, the derivative: x_i
+ * if \theta is v_{i,f}, the derivative: x_{i}(\sum_{i=1}^{n}x_{i}v_{i,f} - \sum_{i\epsilon B_{l}}x_{i}v_{i,f})
  */
 private[ml] abstract class BSFM extends Serializable with Logging {
 
@@ -592,8 +592,8 @@ object BSFM {
 
 
   /**
-   * arr的长度是rank * viewSize + 1
-   * f属于 [viewId * rank ,(viewId +1) * rank)时
+   * arr = rank * viewSize + 1
+   * when f belongs to [viewId * rank ,(viewId +1) * rank)
    * arr[f] = x_{i}v_{i,f}
    */
   private[ml] def forwardInterval(rank: Int, viewId: Int, arr: Array[Double], z: ED, w: VD): VD = {
@@ -607,12 +607,12 @@ object BSFM {
   }
 
   /**
-   * m的长度是rank + 1
-   * 当k属于[0,rank) 时
+   * m = rank + 1
+   * when k belongs to [0,rank)
    * arr(k) = multi \sum_{i \not{\epsilon} B_l}x_{i}v_{i,f}
    * arr(rank)= multi x
-   * 分类: multi = 1/(1+ \exp(-\hat{y}(x|\Theta)) ) - y
-   * 回归: multi = 2(\hat{y}(x|\Theta) -y)
+   * clustering: multi = 1/(1+ \exp(-\hat{y}(x|\Theta)) ) - y
+   * regression: multi = 2(\hat{y}(x|\Theta) -y)
    */
   private[ml] def backwardInterval(
     rank: Int,

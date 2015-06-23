@@ -24,6 +24,7 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.mllib.linalg.{Vector => SV}
 import org.apache.spark.rdd.RDD
+import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{SparkContext, SparkConf}
 import org.apache.spark.graphx.GraphXUtils
 
@@ -98,7 +99,10 @@ object LDADriver {
                   trainingDocs: RDD[(Long, SV)],
                   useDBHStrategy: Boolean): Double = {
     val trainingStartedTime = System.currentTimeMillis()
-    val (termModel, docModel) = LDA.train(trainingDocs, totalIter, numTopics, alpha, beta, alphaAS, useDBHStrategy)
+    //    val storage =  StorageLevel.DISK_ONLY
+    val storage = StorageLevel.MEMORY_AND_DISK
+    val (termModel, docModel) =
+      LDA.train(trainingDocs, totalIter, numTopics, alpha, beta, alphaAS, useDBHStrategy, storageLevel = storage)
     val trainingEndedTime = System.currentTimeMillis()
 
     println("save the model both in doc-term view or term-doc view")

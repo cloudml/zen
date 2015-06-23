@@ -347,12 +347,13 @@ object LDA {
     beta: Double = 0.01,
     alphaAS: Double = 0.1,
     useLightLDA: Boolean = false,
-    useDBHStrategy: Boolean = false): (DistributedLDAModel, DistributedLDAModel) = {
+    useDBHStrategy: Boolean = false,
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): (DistributedLDAModel, DistributedLDAModel) = {
     require(totalIter > 0, "totalIter is less than 0")
     val lda = if (useLightLDA) {
-      new LightLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy)
+      new LightLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy, storageLevel)
     } else {
-      new FastLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy)
+      new FastLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy, storageLevel)
     }
     lda.runGibbsSampling(totalIter - 1)
     val termModel = lda.saveTermModel(1)

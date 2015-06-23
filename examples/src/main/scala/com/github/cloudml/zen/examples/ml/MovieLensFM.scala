@@ -57,7 +57,7 @@ object MovieLensFM {
       opt[String]("regular")
         .text(
           s"""
-             |’r0,r1,r2’ for SGD and ALS: r0=bias regularization,
+             |'r0,r1,r2' for SGD and ALS: r0=bias regularization,
              |r1=1-way regularization, r2=2-way regularization, default: ${defaultParams.regular} (auto)
            """.stripMargin)
         .action((x, c) => c.copy(regular = x))
