@@ -63,6 +63,8 @@ rat-results.txt
 scalastyle.txt
 scalastyle-output.xml
 tmp/
+.cache-main
+.cache-tests
 
 # For Hive
 metastore_db/
