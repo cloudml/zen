@@ -17,12 +17,11 @@
 
 package com.github.cloudml.zen.ml.recommendation
 
-import java.util.{Random => JavaRandom}
-
 import com.github.cloudml.zen.ml.DBHPartitioner
-import com.github.cloudml.zen.ml.recommendation.MVM._
+import com.github.cloudml.zen.ml.recommendation.HigherOrderBSFM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
-import com.github.cloudml.zen.ml.util.{XORShiftRandom, Utils}
+import com.github.cloudml.zen.ml.util.Utils
+import org.apache.commons.math3.primes.Primes
 import org.apache.spark.{SparkContext, Logging}
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.{EdgeRDDImpl, GraphImpl}
@@ -33,33 +32,21 @@ import org.apache.spark.storage.StorageLevel
 
 import scala.math._
 
-/**
- * Multi-view Machines :
- * \hat{y}(x) :=\sum_{i_1 =1}^{I_i +1} ...\sum_{i_m =1}^{I_m +1}
- * (\prod_{v=1}^{m} z_{i_v}^{(v)})(\sum_{f=1}^{k}\prod_{v=1}^{m}a_{i_{v,j}}^{(v)})
- * :=  \sum_{f}^{k}(\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)}) ..
- * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
- *
- * derivative of the model :
- * \frac{\partial \hat{y}(x|\Theta )}{\partial\theta} :=z_{i_{v}}^{(v)}
- * (\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)}) ...
- * (\sum_{i_{v-1} =1}^{I_{v-1}+1}z_{i_{v-1}}^{({v-1})}a_{i_{v-1},j}^{({v-1})})
- * (\sum_{i_{v+1} =1}^{I_{v+1}+1}z_{i_{v+1}}^{({v+1})}a_{i_{v+1},j}^{({v+1})}) ...
- * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
- */
-private[ml] abstract class MVM extends Serializable with Logging {
+private[ml] abstract class HigherOrderBSFM extends Serializable with Logging {
 
   protected val checkpointInterval = 10
+  protected var bias: Double = 0.0
   protected var numFeatures: Long = 0
   protected var numSamples: Long = 0
 
   // SGD
   @transient protected var dataSet: Graph[VD, ED] = null
   @transient protected var multi: VertexRDD[Array[Double]] = null
-  @transient protected var gradientSum: VertexRDD[Array[Double]] = null
+  @transient protected var gradientSum: (Double, VertexRDD[Array[Double]]) = null
   @transient protected var vertices: VertexRDD[VD] = null
   @transient protected var edges: EdgeRDD[ED] = null
   @transient private var innerIter = 1
+  @transient private var primes = Primes.nextPrime(117)
 
   def setDataSet(data: Graph[VD, ED]): this.type = {
     vertices = data.vertices
@@ -82,23 +69,25 @@ private[ml] abstract class MVM extends Serializable with Logging {
 
   def stepSize: Double
 
+  def l2: (Double, Double, Double)
+
   def views: Array[Long]
 
-  def regParam: Double
-
-  def elasticNetParam: Double
+  def rank2: Int
 
   def halfLife: Int = 40
 
   def epsilon: Double = 1e-6
-
-  def rank: Int
 
   def useAdaGrad: Boolean
 
   def storageLevel: StorageLevel
 
   def miniBatchFraction: Double
+
+  def intercept: Double = {
+    bias
+  }
 
   protected[ml] def mask: Int = {
     max(1 / miniBatchFraction, 1).toInt
@@ -111,107 +100,106 @@ private[ml] abstract class MVM extends Serializable with Logging {
   def features: VertexRDD[VD] = {
     dataSet.vertices.filter(t => t._1 >= 0)
   }
-  
+
+  // Factorization Machines
   def run(iterations: Int): Unit = {
     for (iter <- 1 to iterations) {
       logInfo(s"Start train (Iteration $iter/$iterations)")
+      primes = Primes.nextPrime(primes + 1)
       val startedAt = System.nanoTime()
       val previousVertices = vertices
       val margin = forward(iter)
-      var (thisNumSamples, costSum, gradient) = backward(margin, iter)
+      var gradient = backward(margin, iter)
       gradient = updateGradientSum(gradient, iter)
       vertices = updateWeight(gradient, iter)
       checkpointVertices()
       vertices.count()
       dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      val rmse = sqrt(costSum / thisNumSamples)
-      logInfo(s"(Iteration $iter/$iterations) RMSE:                     $rmse")
+      println(s"Train (Iteration $iter/$iterations) cost:               ${loss(margin)}")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
 
       previousVertices.unpersist(blocking = false)
       margin.unpersist(blocking = false)
       multi.unpersist(blocking = false)
-      gradient.unpersist(blocking = false)
+      gradient._2.unpersist(blocking = false)
       innerIter += 1
     }
   }
 
-  def saveModel(): MVMModel = {
-    new MVMModel(rank, views, false, features.mapValues(arr => arr.slice(0, arr.length - 1)))
+  def saveModel(): HigherOrderBSFMModel = {
+    new HigherOrderBSFMModel(rank2, intercept, views, false, features)
   }
+
+  protected[ml] def loss(q: VertexRDD[VD]): Double = {
+    val thisNumSamples = (1.0 / mask) * numSamples
+    val sum = samples.join(q).map { case (_, (y, m)) =>
+      val pm = predict(m)
+      pow(pm - y(0), 2)
+    }.reduce(_ + _)
+    sqrt(sum / thisNumSamples)
+  }
+
 
   protected[ml] def forward(iter: Int): VertexRDD[Array[Double]] = {
     val mod = mask
-    val random: JavaRandom = new XORShiftRandom
-    random.setSeed((iter * 1125899906842597L) * mod)
-    val seed = random.nextLong()
+    val thisMask = iter % mod
+    val thisPrimes = primes
     dataSet.aggregateMessages[Array[Double]](ctx => {
       val sampleId = ctx.dstId
       val featureId = ctx.srcId
       val viewId = featureId2viewId(featureId, views)
-      if (mod == 1 || isSampled(random, seed, sampleId, iter, mod)) {
-        val result = forwardInterval(rank, views.length, viewId, ctx.attr, ctx.srcAttr)
+      if (mod == 1 || ((sampleId * thisPrimes) % mod) + thisMask == 0) {
+        val result = forwardInterval(rank2, views.length, viewId, ctx.attr, ctx.srcAttr)
         ctx.sendToDst(result)
       }
     }, reduceInterval, TripletFields.Src).setName(s"margin-$iter").persist(storageLevel)
   }
 
-  @inline private def isSampled(
-    random: JavaRandom,
-    seed: Long,
-    sampleId: Long,
-    iter: Int,
-    mod: Int): Boolean = {
-    random.setSeed(seed * sampleId)
-    random.nextInt(mod) == iter % mod
-  }
-
   protected def predict(arr: Array[Double]): Double
 
-  protected def multiplier(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD])
+  protected def multiplier(q: VertexRDD[VD]): VertexRDD[VD]
 
-  protected def backward(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD]) = {
-    val (thisNumSamples, costSum, thisMulti) = multiplier(q, iter)
-    multi = thisMulti
-    val sampledArrayLen = rank * views.length + 1
-    val gradient = GraphImpl.fromExistingRDDs(multi, edges).aggregateMessages[VD](ctx => {
+  protected def backward(q: VertexRDD[VD], iter: Int): (Double, VertexRDD[Array[Double]]) = {
+    val thisNumSamples = (1.0 / mask) * numSamples
+    multi = multiplier(q).setName(s"multiplier-$iter").persist(storageLevel)
+    val gradW0 = multi.map(_._2.last).sum() / thisNumSamples
+    val sampledArrayLen = (2 * rank2) * views.length + 2
+    val gradient = GraphImpl.fromExistingRDDs(multi, edges).aggregateMessages[Array[Double]](ctx => {
       // val sampleId = ctx.dstId
       val featureId = ctx.srcId
       if (ctx.dstAttr.length == sampledArrayLen) {
         val x = ctx.attr
         val arr = ctx.dstAttr
         val viewId = featureId2viewId(featureId, views)
-        val m = backwardInterval(rank, viewId, x, arr, arr.last)
-        // send the multi directly
+        val m = backwardInterval(rank2, viewId, x, arr, arr.last)
         ctx.sendToSrc(m)
       }
     }, reduceInterval, TripletFields.Dst).mapValues { gradients =>
       gradients.map(_ / thisNumSamples)
     }
-    (thisNumSamples, costSum, gradient.setName(s"gradient-$iter").persist(storageLevel))
+    gradient.setName(s"gradient-$iter").persist(storageLevel)
+    (gradW0, gradient)
   }
 
-  // Updater for elastic net regularized problems
-  protected def updateWeight(delta: VertexRDD[Array[Double]], iter: Int): VertexRDD[VD] = {
-    val gradient = delta
-    val thisIterStepSize = if (useAdaGrad) stepSize else stepSize / sqrt(iter)
-    val shrinkageVal = elasticNetParam * regParam * thisIterStepSize
-    val regParamL2 = (1.0 - elasticNetParam) * regParam
+  // Updater for L2 regularized problems
+  protected def updateWeight(delta: (Double, VertexRDD[Array[Double]]), iter: Int): VertexRDD[VD] = {
+    val (biasGrad, gradient) = delta
+    val wStepSize = if (useAdaGrad) stepSize else stepSize / sqrt(iter)
+    val l2StepSize = stepSize / sqrt(iter)
+    val (regB, regW, regV) = l2
+    bias -= wStepSize * biasGrad + l2StepSize * regB * bias
     dataSet.vertices.leftJoin(gradient) { (_, attr, gradient) =>
       gradient match {
         case Some(grad) =>
           val weight = attr
           val wd = weight.last / (numSamples + 1.0)
           var i = 0
-          while (i < rank) {
-            if (grad(i) != 0.0) {
-              weight(i) -= thisIterStepSize * (grad(i) + regParamL2 * wd * weight(i))
-              val wi = weight(i)
-              weight(i) = signum(wi) * max(0.0, abs(wi) - wd * shrinkageVal)
-            }
+          while (i < rank2) {
+            weight(i) -= wStepSize * grad(i) + l2StepSize * regV * wd * weight(i)
             i += 1
           }
+          weight(i) -= wStepSize * grad(i) + l2StepSize * regW * wd * weight(i)
           weight
         case None => attr
       }
@@ -219,89 +207,104 @@ private[ml] abstract class MVM extends Serializable with Logging {
   }
 
   protected def updateGradientSum(
-    gradient: VertexRDD[Array[Double]],
-    iter: Int): VertexRDD[Array[Double]] = {
+    gradient: (Double, VertexRDD[Array[Double]]),
+    iter: Int): (Double, VertexRDD[Array[Double]]) = {
     if (useAdaGrad) {
       val rho = math.exp(-math.log(2.0) / halfLife)
-      val delta = adaGrad(gradientSum, gradient, epsilon, rho, iter)
-      // val delta = esgd(gradientSum, gradient, epsilon, 1.0, iter)
+      val (newW0Grad, newW0Sum, delta) = adaGrad(gradientSum, gradient, epsilon, rho)
+      // val (newW0Grad, newW0Sum, delta) = esgd(gradientSum, gradient, 1e-4, iter)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
 
-      gradient.unpersist(blocking = false)
+      gradient._2.unpersist(blocking = false)
       val newGradient = delta.mapValues(_._1).filter(_._2 != null).
         setName(s"gradient-$iter").persist(storageLevel)
       newGradient.count()
 
-      if (gradientSum != null) gradientSum.unpersist(blocking = false)
-      gradientSum = delta.mapValues(_._2).setName(s"gradientSum-$iter").persist(storageLevel)
+      if (gradientSum != null) gradientSum._2.unpersist(blocking = false)
+      gradientSum = (newW0Sum, delta.mapValues(_._2).setName(s"gradientSum-$iter").persist(storageLevel))
       checkpointGradientSum()
-      gradientSum.count()
+      gradientSum._2.count()
       delta.unpersist(blocking = false)
-      newGradient
+      (newW0Grad, newGradient)
     } else {
       gradient
     }
   }
 
   protected def adaGrad(
-    gradientSum: VertexRDD[Array[Double]],
-    gradient: VertexRDD[Array[Double]],
+    gradientSum: (Double, VertexRDD[Array[Double]]),
+    gradient: (Double, VertexRDD[Array[Double]]),
     epsilon: Double,
-    rho: Double,
-    iter: Int): VertexRDD[(Array[Double], Array[Double])] = {
+    rho: Double): (Double, Double, VertexRDD[(Array[Double], Array[Double])]) = {
     val delta = if (gradientSum == null) {
       features.mapValues(t => t.map(x => 0.0))
     }
     else {
-      gradientSum
+      gradientSum._2
     }
-
-    val newGradSum = delta.innerJoin(gradient) { case (_, gs, grad) =>
-      val gradLen = grad.length
-      val newGradSum = new Array[Double](gradLen)
-      val newGrad = new Array[Double](gradLen)
-      for (i <- 0 until gradLen) {
-        newGradSum(i) = gs(i) * rho + pow(grad(i), 2)
-        val div = epsilon + sqrt(newGradSum(i))
-        newGrad(i) = grad(i) / div
+    val newGradSumWithoutW0 = delta.leftJoin(gradient._2) { (_, gradSum, g) =>
+      g match {
+        case Some(grad) =>
+          val gradLen = grad.length
+          val newGradSum = new Array[Double](gradLen)
+          val newGrad = new Array[Double](gradLen)
+          for (i <- 0 until gradLen) {
+            newGradSum(i) = gradSum(i) * rho + pow(grad(i), 2)
+            newGrad(i) = grad(i) / (epsilon + sqrt(newGradSum(i)))
+          }
+          (newGrad, newGradSum)
+        case _ => (null, gradSum)
       }
-      (newGrad, newGradSum)
+
     }
-    newGradSum
+    val w0Sum = if (gradientSum == null) 0.0 else gradientSum._1
+    val w0Grad = gradient._1
+
+    val newW0Sum = w0Sum * rho + pow(w0Grad, 2)
+    val newW0Grad = w0Grad / (epsilon + sqrt(newW0Sum))
+
+    (newW0Grad, newW0Sum, newGradSumWithoutW0)
   }
 
   protected def esgd(
-    gradientSum: VertexRDD[Array[Double]],
-    gradient: VertexRDD[Array[Double]],
+    gradientSum: (Double, VertexRDD[Array[Double]]),
+    gradient: (Double, VertexRDD[Array[Double]]),
     epsilon: Double,
-    rho: Double,
-    iter: Int): VertexRDD[(Array[Double], Array[Double])] = {
+    iter: Int): (Double, Double, VertexRDD[(Array[Double], Array[Double])]) = {
     val delta = if (gradientSum == null) {
       features.mapValues(t => t.map(x => 0.0))
     }
     else {
-      gradientSum
+      gradientSum._2
     }
-
-    val newGradSum = delta.innerJoin(gradient) { case (_, gs, grad) =>
-      val gradLen = grad.length
-      val newGradSum = new Array[Double](gradLen)
-      val newGrad = new Array[Double](gradLen)
-      for (i <- 0 until gradLen) {
-        val h = Utils.random.nextGaussian()
-        newGradSum(i) = gs(i) * rho + pow(h * grad(i), 2)
-        val div = epsilon + sqrt(newGradSum(i) / iter)
-        newGrad(i) = grad(i) / div
+    val newGradSumWithoutW0 = delta.leftJoin(gradient._2) { (_, gradSum, g) =>
+      g match {
+        case Some(grad) =>
+          val gradLen = grad.length
+          val newGradSum = new Array[Double](gradLen)
+          val newGrad = new Array[Double](gradLen)
+          for (i <- 0 until gradLen) {
+            newGradSum(i) = gradSum(i) + pow(Utils.random.nextGaussian() * grad(i), 2)
+            newGrad(i) = grad(i) / (epsilon + sqrt(newGradSum(i) / iter))
+          }
+          (newGrad, newGradSum)
+        case _ => (null, gradSum)
       }
-      (newGrad, newGradSum)
+
     }
-    newGradSum
+    val w0Sum = if (gradientSum == null) 0.0 else gradientSum._1
+    val w0Grad = gradient._1
+
+    val newW0Sum = w0Sum + pow(Utils.random.nextGaussian() * w0Grad, 2)
+    val newW0Grad = w0Grad / (epsilon + sqrt(newW0Sum / iter))
+
+    (newW0Grad, newW0Sum, newGradSumWithoutW0)
   }
 
   protected def checkpointGradientSum(): Unit = {
-    val sc = gradientSum.sparkContext
+    val sc = gradientSum._2.sparkContext
     if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
-      gradientSum.checkpoint()
+      gradientSum._2.checkpoint()
     }
   }
 
@@ -313,140 +316,123 @@ private[ml] abstract class MVM extends Serializable with Logging {
   }
 }
 
-class MVMClassification(
+class HigherOrderBSFMClassification(
   @transient _dataSet: Graph[VD, ED],
   val stepSize: Double,
   val views: Array[Long],
-  val regParam: Double,
-  val elasticNetParam: Double,
-  val rank: Int,
+  val l2: (Double, Double, Double),
+  val rank2: Int,
   val useAdaGrad: Boolean,
   val miniBatchFraction: Double,
-  val storageLevel: StorageLevel) extends MVM {
+  val storageLevel: StorageLevel) extends HigherOrderBSFM {
 
   def this(
     input: RDD[(VertexId, LabeledPoint)],
     stepSize: Double = 1e-2,
     views: Array[Long],
-    regParam: Double = 1e-2,
-    elasticNetParam: Double = 0,
-    rank: Int = 20,
+    l2Reg: (Double, Double, Double) = (1e-3, 1e-3, 1e-3),
+    rank2: Int = 20,
     useAdaGrad: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
-    this(initializeDataSet(input, views, rank, storageLevel), stepSize, views, regParam,
-      elasticNetParam, rank, useAdaGrad, miniBatchFraction, storageLevel)
-  }
-
-  setDataSet(_dataSet)
-  assert(rank > 1, s"rank $rank less than 2")
-
-  override protected def predict(arr: Array[Double]): Double = {
-    val result = predictInterval(rank, arr)
-    1.0 / (1.0 + math.exp(-result))
-  }
-
-  override def saveModel(): MVMModel = {
-    new MVMModel(rank, views, true, features.mapValues(arr => arr.slice(0, arr.length - 1)))
-  }
-
-  override protected def multiplier(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD]) = {
-    val multi = dataSet.vertices.leftJoin(q) { (vid, data, deg) =>
-      deg match {
-        case Some(m) =>
-          val y = data.head
-          // val diff = predict(m) - y
-          val arr = sumInterval(rank, m)
-          val diff = arr.last - y
-          arr(arr.length - 1) = diff
-          arr
-        case _ => data
-      }
-    }
-    multi.setName(s"multiplier-$iter").persist(storageLevel)
-    val Array(numSamples, costSum) = multi.filter(t => t._2.length == rank * views.length + 1).map {
-      case (_, arr) =>
-        Array(1D, pow(arr.last, 2))
-    }.reduce(reduceInterval)
-    (numSamples.toLong, costSum, multi)
-  }
-
-}
-
-class MVMRegression(
-  @transient _dataSet: Graph[VD, ED],
-  val stepSize: Double,
-  val views: Array[Long],
-  val regParam: Double,
-  val elasticNetParam: Double,
-  val rank: Int,
-  val useAdaGrad: Boolean,
-  val miniBatchFraction: Double,
-  val storageLevel: StorageLevel) extends MVM {
-
-  def this(
-    input: RDD[(VertexId, LabeledPoint)],
-    stepSize: Double = 1e-2,
-    views: Array[Long],
-    regParam: Double = 1e-2,
-    elasticNetParam: Double = 0,
-    rank: Int = 20,
-    useAdaGrad: Boolean = true,
-    miniBatchFraction: Double = 1.0,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
-    this(initializeDataSet(input, views, rank, storageLevel), stepSize, views, regParam, elasticNetParam, rank,
+    this(initializeDataSet(input, rank2, storageLevel), stepSize, views, l2Reg, rank2,
       useAdaGrad, miniBatchFraction, storageLevel)
   }
 
   setDataSet(_dataSet)
-  assert(rank > 1, s"rank $rank less than 2")
+  assert(views.length == 3)
+  assert(rank2 > 1, s"rank $rank2 less than 2")
+
+  override protected def predict(arr: Array[Double]): Double = {
+    val result = predictInterval(rank2, views.length, bias, arr)
+    1.0 / (1.0 + math.exp(-result))
+  }
+
+  override def saveModel(): HigherOrderBSFMModel = {
+    new HigherOrderBSFMModel(rank2, intercept, views, true, features)
+  }
+
+  override protected def multiplier(q: VertexRDD[VD]): VertexRDD[VD] = {
+    dataSet.vertices.leftJoin(q) { (vid, data, deg) =>
+      deg match {
+        case Some(m) =>
+          val y = data.head
+          val diff = predict(m) - y
+          val ret = sumInterval(rank2, views.length, m)
+          ret(ret.length - 1) = diff
+          ret
+        case _ => data
+      }
+    }
+  }
+}
+
+class HigherOrderBSFMRegression(
+  @transient _dataSet: Graph[VD, ED],
+  val stepSize: Double,
+  val views: Array[Long],
+  val l2: (Double, Double, Double),
+  val rank2: Int,
+  val useAdaGrad: Boolean,
+  val miniBatchFraction: Double,
+  val storageLevel: StorageLevel) extends HigherOrderBSFM {
+  def this(
+    input: RDD[(VertexId, LabeledPoint)],
+    stepSize: Double = 1e-2,
+    views: Array[Long],
+    l2Reg: (Double, Double, Double) = (1e-3, 1e-3, 1e-3),
+    rank2: Int = 20,
+    useAdaGrad: Boolean = true,
+    miniBatchFraction: Double = 1.0,
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
+    this(initializeDataSet(input, rank2, storageLevel), stepSize, views, l2Reg, rank2,
+      useAdaGrad, miniBatchFraction, storageLevel)
+  }
+
+  setDataSet(_dataSet)
+  assert(views.length == 3)
+  assert(rank2 > 1, s"rank $rank2 less than 2")
 
   // val max = samples.map(_._2.head).max
   // val min = samples.map(_._2.head).min
 
   override protected def predict(arr: Array[Double]): Double = {
-    var result = predictInterval(rank, arr)
+    val result = predictInterval(rank2, views.length, bias, arr)
     // result = Math.max(result, min)
     // result = Math.min(result, max)
     result
   }
 
-  override protected def multiplier(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD]) = {
-    val multi = dataSet.vertices.leftJoin(q) { (vid, data, deg) =>
+  override protected def multiplier(q: VertexRDD[VD]): VertexRDD[VD] = {
+    dataSet.vertices.leftJoin(q) { (vid, data, deg) =>
       deg match {
         case Some(m) =>
           val y = data.head
-          val arr = sumInterval(rank, m)
-          val diff = arr.last - y
-          arr(arr.length - 1) = diff * 2.0
-          arr
+          val diff = predict(m) - y
+          val ret = sumInterval(rank2, views.length, m)
+          ret(ret.length - 1) = 2.0 * diff
+          ret
         case _ => data
       }
     }
-    multi.setName(s"multiplier-$iter").persist(storageLevel)
-    val Array(numSamples, costSum) = multi.filter(t => t._2.length == rank * views.length + 1).map {
-      case (_, arr) =>
-        Array(1D, pow(arr.last / 2.0, 2))
-    }.reduce(reduceInterval)
-    (numSamples.toLong, costSum, multi)
   }
 }
 
-object MVM {
+object HigherOrderBSFM {
   private[ml] type ED = Double
   private[ml] type VD = Array[Double]
 
   /**
-   * MVM Clustering
+   * BS-FM clustering
    * @param input train data
    * @param numIterations
-   * @param stepSize  we recommend the step size: 1e-2 - 1e-1
-   * @param regParam  elastic net regularization
-   * @param elasticNetParam  we recommend 0
-   * @param rank   we recommend the rank of eigenvector: 10-20
+   * @param stepSize  recommend 1e-2- 1e-1
+   * @param views  特征视图
+   * @param l2   (w_0, w_i, v_{i,f}) in L2 regularization
+   * @param rank2   recommend 10-20
    * @param useAdaGrad use AdaGrad to train
    * @param miniBatchFraction
-   * @param storageLevel  cache storage level
+   * @param storageLevel
    * @return
    */
   def trainClassification(
@@ -454,18 +440,17 @@ object MVM {
     numIterations: Int,
     stepSize: Double,
     views: Array[Long],
-    regParam: Double,
-    elasticNetParam: Double,
-    rank: Int,
+    l2: (Double, Double, Double),
+    rank2: Int,
     useAdaGrad: Boolean = true,
     miniBatchFraction: Double = 1.0,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): MVMModel = {
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): HigherOrderBSFMModel = {
     val data = input.map { case (id, LabeledPoint(label, features)) =>
       assert(id >= 0.0, s"sampleId $id less than 0")
       val newLabel = if (label > 0.0) 1.0 else 0.0
       (id, LabeledPoint(newLabel, features))
     }
-    val lfm = new MVMClassification(data, stepSize, views, regParam, elasticNetParam, rank,
+    val lfm = new HigherOrderBSFMClassification(data, stepSize, views, l2, rank2,
       useAdaGrad, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
@@ -473,36 +458,33 @@ object MVM {
   }
 
   /**
-   * MVM Regression
+   * BS-FM regression
    * @param input train data
    * @param numIterations
-   * @param stepSize  we recommend the step size: 1e-2 - 1e-1
-   * @param regParam    elastic net regularization
-   * @param elasticNetParam  we recommend 0
-   * @param rank   we recommend the rank of eigenvector: 10-20
+   * @param stepSize  recommend 1e-2- 1e-1
+   * @param l2   (w_0, w_i, v_{i,f}) in L2 regularization
+   * @param rank2   recommend 10-20
    * @param useAdaGrad use AdaGrad to train
    * @param miniBatchFraction
-   * @param storageLevel  cache storage level
+   * @param storageLevel
    * @return
    */
-
   def trainRegression(
     input: RDD[(Long, LabeledPoint)],
     numIterations: Int,
     stepSize: Double,
     views: Array[Long],
-    regParam: Double,
-    elasticNetParam: Double,
-    rank: Int,
+    l2: (Double, Double, Double),
+    rank2: Int,
     useAdaGrad: Boolean = true,
     miniBatchFraction: Double = 1.0,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): MVMModel = {
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): HigherOrderBSFMModel = {
     val data = input.map { case (id, labeledPoint) =>
       assert(id >= 0.0, s"sampleId $id less than 0")
       (id, labeledPoint)
     }
-    val lfm = new MVMRegression(data, stepSize, views, regParam, elasticNetParam,
-      rank, useAdaGrad, miniBatchFraction, storageLevel)
+    val lfm = new HigherOrderBSFMRegression(data, stepSize, views, l2, rank2,
+      useAdaGrad, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
     model
@@ -510,19 +492,15 @@ object MVM {
 
   private[ml] def initializeDataSet(
     input: RDD[(VertexId, LabeledPoint)],
-    views: Array[Long],
-    rank: Int,
+    rank2: Int,
     storageLevel: StorageLevel): Graph[VD, ED] = {
-    val numFeatures = input.first()._2.features.size
-    assert(numFeatures == views.last)
-
     val edges = input.flatMap { case (sampleId, labelPoint) =>
       // sample id
       val newId = newSampleId(sampleId)
-      labelPoint.features.activeIterator.filter(_._2 != 0.0).map { case (featureId, value) =>
-        assert(featureId < numFeatures)
+      val features = labelPoint.features
+      features.activeIterator.filter(_._2 != 0.0).map { case (featureId, value) =>
         Edge(featureId, newId, value)
-      } ++ views.indices.map { i => Edge(numFeatures + i, newId, 1D) }
+      }
     }.persist(storageLevel)
     edges.count()
 
@@ -533,9 +511,10 @@ object MVM {
 
     val features = edges.map(_.srcId).distinct().map { featureId =>
       // parameter point
-      val parms = Array.fill(rank + 1) {
-        Utils.random.nextGaussian() * 1e-2
+      val parms = Array.fill(rank2 + 2) {
+        Utils.random.nextGaussian() * 1e-1
       }
+      parms(rank2) = 0.0
       (featureId, parms)
     }.join(inDegrees).map { case (featureId, (parms, deg)) =>
       parms(parms.length - 1) = deg
@@ -582,25 +561,35 @@ object MVM {
     -(id + 1L)
   }
 
-  /**
-   * arr(k + v * rank)= (\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)})
-   * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
-   */
-  private[ml] def predictInterval(rank: Int, arr: VD): ED = {
-    val viewSize = arr.length / rank
-    var sum = 0.0
+  private[ml] def predictInterval(rank2: Int, viewSize: Int, bias: Double, arr: VD): ED = {
+    val wx = arr.last
+    var sum2order = 0.0
+    var sum3order = 0.0
     var i = 0
-    while (i < rank) {
+    while (i < rank2) {
       var multi = 1.0
       var viewId = 0
       while (viewId < viewSize) {
-        multi *= arr(i + viewId * rank)
+        multi *= arr(i + viewId * (2 * rank2))
         viewId += 1
       }
-      sum += multi
+      sum3order += multi
       i += 1
     }
-    sum
+
+    while (i < 2 * rank2) {
+      var allSum = 0.0
+      var viewSumP2 = 0.0
+      var viewId = 0
+      while (viewId < viewSize) {
+        viewSumP2 += pow(arr(i + viewId * (2 * rank2)), 2)
+        allSum += arr(i + viewId * (2 * rank2))
+        viewId += 1
+      }
+      sum2order += pow(allSum, 2) - viewSumP2
+      i += 1
+    }
+    bias + wx + 0.5 * sum2order + sum3order
   }
 
   private[ml] def reduceInterval(a: VD, b: VD): VD = {
@@ -612,87 +601,97 @@ object MVM {
     a
   }
 
-  private[ml] def forwardInterval(rank: Int, viewSize: Int, viewId: Int, x: ED, w: VD): VD = {
-    val arr = new Array[Double](rank * viewSize)
-    forwardInterval(rank, viewId, arr, x, w)
+  private[ml] def forwardInterval(rank2: Int, viewSize: Int, viewId: Int, x: ED, w: VD): VD = {
+    val arr = new Array[Double]((2 * rank2) * viewSize + 1)
+    forwardInterval(rank2, viewId, arr, x, w)
   }
 
-  /**
-   * arr = rank * viewSize
-   * when f belongs to [viewId * rank ,(viewId +1) * rank)
-   * arr[f] = z_{i_v}^{(1)}a_{i_{i},j}^{(1)}
-   */
-  private[ml] def forwardInterval(rank: Int, viewId: Int, arr: Array[Double], z: ED, w: VD): VD = {
+  private[ml] def forwardInterval(rank2: Int, viewId: Int, arr: Array[Double], z: ED, w: VD): VD = {
     var i = 0
-    while (i < rank) {
-      arr(i + viewId * rank) += z * w(i)
+    val offset = viewId * (2 * rank2)
+    while (i < rank2) {
+      arr(i + offset) += z * w(i)
       i += 1
     }
+
+    while (i < rank2) {
+      arr(i + offset) += z * w(i - rank2)
+      i += 1
+    }
+    arr(arr.length - 1) += z * w(rank2)
     arr
   }
 
-  /**
-   * arr = rank * viewSize
-   * when v=viewId , k belongs to [0,rank]
-   * arr(k + v * rank) = \frac{\partial \hat{y}(x|\Theta )}{\partial\theta }
-   * return multi * \frac{\partial \hat{y}(x|\Theta )}{\partial\theta }
-   * clustering: multi = 1/(1+ \exp(-\hat{y}(x|\Theta)) ) - y
-   * regression: multi = 2(\hat{y}(x|\Theta) -y)
-   */
   private[ml] def backwardInterval(
-    rank: Int,
+    rank2: Int,
     viewId: Int,
     x: ED,
     arr: VD,
     multi: ED): VD = {
-    val m = new Array[Double](rank)
+    val m = new Array[Double](rank2 + 1)
     var i = 0
-    while (i < rank) {
-      m(i) = multi * x * arr(i + viewId * rank)
+    while (i < rank2) {
+      m(i) += multi * x * arr(i + viewId * (2 * rank2))
       i += 1
     }
+    while (i < 2 * rank2) {
+      m(i - rank2) += multi * x * arr(i + viewId * (2 * rank2))
+      i += 1
+    }
+    m(rank2) = x * multi
     m
   }
 
-  /**
-   * arr(k + v * rank)= (\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)}) ..
-   * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
-   */
-  private[ml] def sumInterval(rank: Int, arr: Array[Double]): VD = {
-    val viewSize = arr.length / rank
-    val m = new Array[Double](rank)
-    var sum = 0.0
+  private[ml] def sumInterval(rank2: Int, viewSize: Int, arr: Array[Double]): VD = {
+    val m3 = new Array[Double](rank2)
+    val m2 = new Array[Double](rank2)
+
     var i = 0
-    while (i < rank) {
+    while (i < rank2) {
       var multi = 1.0
       var viewId = 0
       while (viewId < viewSize) {
-        multi *= arr(i + viewId * rank)
+        multi *= arr(i + viewId * (2 * rank2))
         viewId += 1
       }
-      m(i) += multi
-      sum += multi
+      m3(i) += multi
+      i += 1
+    }
+    while (i < 2 * rank2) {
+      var multi = 0.0
+      var viewId = 0
+      while (viewId < viewSize) {
+        multi += arr(i + viewId * (2 * rank2))
+        viewId += 1
+      }
+      m2(i - rank2) += multi
       i += 1
     }
 
-    val ret = new Array[Double](rank * viewSize + 1)
     i = 0
-    while (i < rank) {
+    val ret = new Array[Double]((2 * rank2) * viewSize + 2)
+    while (i < rank2) {
       var viewId = 0
       while (viewId < viewSize) {
-        val vm = arr(i + viewId * rank)
-        ret(i + viewId * rank) = if (vm == 0.0) {
+        val vm = arr(i + viewId * (2 * rank2))
+        ret(i + viewId * (2 * rank2)) = if (vm == 0.0) {
           0.0
         } else {
-          m(i) / vm
+          m3(i) / vm
         }
         viewId += 1
       }
-
       i += 1
     }
-    ret(rank * viewSize) = sum
+    while (i < 2 * rank2) {
+      var viewId = 0
+      while (viewId < viewSize) {
+        ret(i + viewId * (2 * rank2)) = m2(i - rank2) - arr(i + viewId * (2 * rank2))
+        viewId += 1
+      }
+      i += 1
+    }
+    ret(viewSize * (2 * rank2)) = arr(viewSize * (2 * rank2))
     ret
   }
 }
-

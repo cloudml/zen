@@ -121,7 +121,7 @@ private[ml] abstract class BSFM extends Serializable with Logging {
       vertices.count()
       dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      logInfo(s"Train (Iteration $iter/$iterations) cost:               ${loss(margin)}")
+      println(s"Train (Iteration $iter/$iterations) cost:               ${loss(margin)}")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
 
       previousVertices.unpersist(blocking = false)
@@ -199,12 +199,12 @@ private[ml] abstract class BSFM extends Serializable with Logging {
       gradient match {
         case Some(grad) =>
           val weight = attr
-          weight(0) -= wStepSize * grad(rank) + l2StepSize * regW * weight(rank)
           var i = 0
           while (i < rank) {
             weight(i) -= wStepSize * grad(i) + l2StepSize * regV * weight(i)
             i += 1
           }
+          weight(rank) -= wStepSize * grad(rank) + l2StepSize * regW * weight(rank)
           weight
         case None => attr
       }
@@ -270,7 +270,7 @@ private[ml] abstract class BSFM extends Serializable with Logging {
     (newW0Grad, newW0Sum, newGradSumWithoutW0)
   }
 
-  protected def equilibratedGradientDescent(
+  protected def esgd(
     gradientSum: (Double, VertexRDD[Array[Double]]),
     gradient: (Double, VertexRDD[Array[Double]]),
     epsilon: Double,
