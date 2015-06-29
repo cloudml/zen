@@ -62,7 +62,7 @@ object MovieLensMVM {
       opt[String]("views")
         .text(
           s"""
-             |'id1,id2,id2 ...'  views. The first view contains [0,id1),The second view contains [id2,id3)
+             |'id1,id2,id3 ...'  views. The first view contains [0,id1),The second view contains [id1,id2)...
              |The last id equals the number of features
            """.stripMargin)
         .action((x, c) => c.copy(views = x))
