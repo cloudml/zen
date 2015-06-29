@@ -185,7 +185,7 @@ class HigherOrderBSFMSuite extends FunSuite with SharedSparkContext with Matcher
     val numIterations = 50
     val regParam = 0.1
 
-    val rank = 10
+    val rank = 4
     val useAdaGrad = true
     val views = Array(maxUserId, maxUserId + maxMovieId, numFeatures).map(_.toLong)
     val miniBatchFraction = 1
@@ -193,17 +193,17 @@ class HigherOrderBSFMSuite extends FunSuite with SharedSparkContext with Matcher
     trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
     testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
 
-    val fm = new HigherOrderBSFMRegression(trainSet, stepSize, views, (regParam, regParam, regParam), rank,
-      useAdaGrad, miniBatchFraction)
+    //    val fm = new HigherOrderBSFMRegression(trainSet, stepSize, views, (regParam, regParam, regParam), rank,
+    //      useAdaGrad, miniBatchFraction)
+    //    fm.run(numIterations)
+    //    val model = fm.saveModel()
+    //    println(f"Test loss: ${model.loss(testSet)}%1.4f")
+
+    val fm = new HigherOrderIndependentBSFMRegression(trainSet, stepSize, views,
+      (regParam, regParam, regParam, regParam), rank, rank, useAdaGrad, miniBatchFraction)
     fm.run(numIterations)
     val model = fm.saveModel()
     println(f"Test loss: ${model.loss(testSet)}%1.4f")
 
-
-//    val fm = new HigherOrderIndependentBSFMRegression(trainSet, stepSize, views,
-//      (regParam, regParam, regParam, regParam), rank, rank, useAdaGrad, miniBatchFraction)
-//    fm.run(numIterations)
-//    val model = fm.saveModel()
-//    println(f"Test loss: ${model.loss(testSet)}%1.4f")
   }
 }

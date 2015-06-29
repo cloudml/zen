@@ -339,7 +339,7 @@ class BSFMClassification(
     useAdaGrad: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
-    this(initializeDataSet(input, rank, storageLevel), stepSize, views, l2Reg, rank,
+    this(initializeDataSet(input, views, rank, storageLevel), stepSize, views, l2Reg, rank,
       useAdaGrad, miniBatchFraction, storageLevel)
   }
 
@@ -389,7 +389,7 @@ class BSFMRegression(
     useAdaGrad: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
-    this(initializeDataSet(input, rank, storageLevel), stepSize, views, l2Reg, rank,
+    this(initializeDataSet(input, views, rank, storageLevel), stepSize, views, l2Reg, rank,
       useAdaGrad, miniBatchFraction, storageLevel)
   }
 
@@ -493,8 +493,12 @@ object BSFM {
 
   private[ml] def initializeDataSet(
     input: RDD[(VertexId, LabeledPoint)],
+    views: Array[Long],
     rank: Int,
     storageLevel: StorageLevel): Graph[VD, ED] = {
+    val numFeatures = input.first()._2.features.size
+    assert(numFeatures == views.last)
+
     val edges = input.flatMap { case (sampleId, labelPoint) =>
       // sample id
       val newId = newSampleId(sampleId)

@@ -17,17 +17,19 @@
 
 package com.github.cloudml.zen.ml.recommendation
 
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum => brzSum}
 import com.github.cloudml.zen.ml.util._
+import com.google.common.io.Files
+import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, Vector => SV}
 import org.apache.spark.mllib.recommendation.{ALS, Rating}
 import org.apache.spark.mllib.regression.LabeledPoint
-import com.google.common.io.Files
 import org.apache.spark.mllib.util.MLUtils
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, Vector => BV}
-import org.apache.spark.mllib.linalg.{DenseVector => SDV, Vector => SV, SparseVector => SSV}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 
-import org.scalatest.{Matchers, FunSuite}
+import scala.collection.mutable.ArrayBuffer
+
+import org.scalatest.{FunSuite, Matchers}
 
 class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
 
@@ -133,8 +135,6 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
 
   ignore("url_combined dataSet") {
     // val dataSetFile = "/input/lbs/recommend/kdda/*"
-
-    import com.github.cloudml.zen.ml.recommendation._
     val dataSetFile = "/input/lbs/recommend/url_combined/*"
     val checkpointDir = "/input/lbs/recommend/toona/als/checkpointDir"
     sc.setCheckpointDir(checkpointDir)
@@ -197,9 +197,9 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     dataSet.count()
     movieLens.unpersist()
 
-    val stepSize = 0.05
+    val stepSize = 0.1
     val numIterations = 200
-    val regParam = 0.1
+    val regParam = 0.5
     val l2 = (regParam, regParam, regParam)
     val elasticNetParam = 0.0
     val rank = 20
@@ -227,7 +227,6 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
   }
 
   ignore("movieLens 1m ALS") {
-    import com.github.cloudml.zen.ml.recommendation._
     val dataSetFile = s"/input/lbs/recommend/toona/ml-1m/ratings.dat"
     val checkpointDir = "/input/lbs/recommend/toona/als/checkpointDir"
     sc.setCheckpointDir(checkpointDir)
@@ -259,10 +258,8 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     println(s"Test RMSE = $rmse.")
   }
 
-  ignore("Netflix Prize regression") {
+  ignore("Netflix Prize time regression") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-
-    import com.github.cloudml.zen.ml.recommendation._
     val dataSetFile = s"/input/lbs/recommend/toona/nf_prize_dataset/training_set/*"
     val checkpointDir = "/input/lbs/recommend/toona/als/checkpointDir"
     sc.setCheckpointDir(checkpointDir)
@@ -312,6 +309,7 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
 
     fm.run(numIterations)
     val model = fm.saveModel()
+    MVMModel.load(sc, "/input/lbs/recommend/toona/nf_prize_dataset/model/")
     println(f"Test RMSE: ${model.loss(testSet)}%1.4f")
 
     // val fm = new FMRegression(trainSet, stepSize, l2, rank, useAdaGrad, miniBatchFraction)
@@ -319,10 +317,87 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
 
   }
 
-  ignore("movieLens 100k regression") {
+  ignore("Netflix Prize regression") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
 
+    val dataSetFile = s"/input/lbs/recommend/toona/nf_prize_dataset/training_set/*"
+    val probeFile = "/input/lbs/recommend/toona/nf_prize_dataset/probe.txt"
+    val checkpointDir = "/input/lbs/recommend/toona/als/checkpointDir"
+    sc.setCheckpointDir(checkpointDir)
+
+    val probe = sc.wholeTextFiles(probeFile).flatMap { case (fileName, txt) =>
+      val ab = new ArrayBuffer[(Int, Int)]
+      var lastMovieId = -1
+      var lastUserId = -1
+      txt.split("\n").filter(_.nonEmpty).foreach { line =>
+        if (line.endsWith(":")) {
+          lastMovieId = line.split(":").head.toInt
+        } else {
+          lastUserId = line.toInt
+          val pair = (lastUserId, lastMovieId)
+          ab += pair
+        }
+      }
+      ab.toSeq
+    }.collect().toSet
+
+    val nfPrize = sc.wholeTextFiles(dataSetFile, 144).flatMap { case (fileName, txt) =>
+      val Array(movieId, csv) = txt.split(":")
+      csv.split("\n").filter(_.nonEmpty).map { line =>
+        val Array(userId, rating, timestamp) = line.split(",")
+        ((userId.toInt, movieId.toInt), rating.toDouble)
+      }
+    }.repartition(144).persist(StorageLevel.MEMORY_AND_DISK)
+
+    val maxMovieId = nfPrize.map(_._1._1).max + 1
+    val maxUserId = nfPrize.map(_._1._2).max + 1
+    val numFeatures = maxUserId + maxMovieId
+
+    val testSet = nfPrize.mapPartitions { iter =>
+      iter.filter(t => probe.contains(t._1)).map {
+        case ((userId, movieId), rating) =>
+          val sv = BSV.zeros[Double](numFeatures)
+          sv(userId) = 1.0
+          sv(movieId + maxUserId) = 1.0
+          new LabeledPoint(rating, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
+      }
+    }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
+    testSet.count()
+
+    val trainSet = nfPrize.mapPartitions { iter =>
+      iter.filter(t => !probe.contains(t._1)).map {
+        case ((userId, movieId), rating) =>
+          val sv = BSV.zeros[Double](numFeatures)
+          sv(userId) = 1.0
+          sv(movieId + maxUserId) = 1.0
+          new LabeledPoint(rating, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
+      }
+    }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
+    trainSet.count()
+    nfPrize.unpersist()
+
+    val stepSize = 0.05
+    val numIterations = 200
+    val regParam = 0.01
+    val l2 = (regParam, regParam, regParam)
+    val rank = 64
+    val useAdaGrad = true
+    val miniBatchFraction = 0.1
+    val views = Array(maxUserId, numFeatures).map(_.toLong)
+
     import com.github.cloudml.zen.ml.recommendation._
+    val fm = new MVMRegression(trainSet, stepSize, views, regParam, 0.0,
+      rank, useAdaGrad, miniBatchFraction, StorageLevel.MEMORY_AND_DISK)
+    fm.run(numIterations)
+    val model = fm.saveModel()
+    println(f"Test RMSE: ${model.loss(testSet)}%1.4f")
+
+    MVMModel.load(sc, "/input/lbs/recommend/toona/nf_prize_dataset/model_mvm/")
+
+  }
+
+  test("movieLens 100k regression") {
+    val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
     val dataSetFile = s"$sparkHome/data/ml-100k/u.data"
     val checkpointDir = s"$sparkHome/tmp"
     sc.setCheckpointDir(checkpointDir)
@@ -352,12 +427,12 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     movieLens.unpersist()
 
     val stepSize = 0.1
-    val numIterations = 50
+    val numIterations = 200
     val regParam = 0.0
     val l2 = (regParam, regParam, regParam)
-    val rank = 8
+    val rank = 5
     val useAdaGrad = true
-    val miniBatchFraction = 1
+    val miniBatchFraction = 0.1
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
     trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
     testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
@@ -378,10 +453,8 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
 
   }
 
-  test("movieLens 100k SVD++") {
+  ignore("movieLens 100k SVD++") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-
-    import com.github.cloudml.zen.ml.recommendation._
     val dataSetFile = s"$sparkHome/data/ml-100k/u.data"
     val checkpointDir = s"$sparkHome/tmp"
     sc.setCheckpointDir(checkpointDir)

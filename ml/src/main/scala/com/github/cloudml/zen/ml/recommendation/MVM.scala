@@ -88,7 +88,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
 
   def elasticNetParam: Double
 
-  def halfLife: Int = 40
+  def halfLife: Int = 20
 
   def epsilon: Double = 1e-6
 
@@ -126,7 +126,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
       dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
       val rmse = sqrt(costSum / thisNumSamples)
-      logInfo(s"(Iteration $iter/$iterations) RMSE:                     $rmse")
+      println(s"(Iteration $iter/$iterations) RMSE:                     $rmse")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
 
       previousVertices.unpersist(blocking = false)
@@ -144,7 +144,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
   protected[ml] def forward(iter: Int): VertexRDD[Array[Double]] = {
     val mod = mask
     val random: JavaRandom = new XORShiftRandom
-    random.setSeed((iter * 1125899906842597L) * mod)
+    random.setSeed(17425170 - iter - innerIter)
     val seed = random.nextLong()
     dataSet.aggregateMessages[Array[Double]](ctx => {
       val sampleId = ctx.dstId
