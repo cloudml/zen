@@ -31,6 +31,7 @@ object MovieLensMVM {
   case class Params(
     input: String = null,
     out: String = null,
+    views: String = null,
     numIterations: Int = 40,
     stepSize: Double = 0.1,
     regular: Double = 0.05,
@@ -58,6 +59,13 @@ object MovieLensMVM {
         .text(
           s"L2 regularization, default: ${defaultParams.regular}".stripMargin)
         .action((x, c) => c.copy(regular = x))
+      opt[String]("views")
+        .text(
+          s"""
+             |'id1,id2,id2 ...'  views. The first view contains [0,id1),The second view contains [id2,id3)
+             |The last id equals the number of features
+           """.stripMargin)
+        .action((x, c) => c.copy(views = x))
       opt[Unit]("adagrad")
         .text("use AdaGrad")
         .action((_, c) => c.copy(useAdaGrad = true))
@@ -89,7 +97,17 @@ object MovieLensMVM {
   }
 
   def run(params: Params): Unit = {
-    val Params(input, out, numIterations, stepSize, regular, rank, useAdaGrad, kryo) = params
+    val Params(
+    input,
+    out,
+    views,
+    numIterations,
+    stepSize,
+    regular,
+    rank,
+    useAdaGrad,
+    kryo) = params
+    val checkpointDir = s"$out/checkpoint"
     val conf = new SparkConf().setAppName(s"MVM with $params")
     if (kryo) {
       GraphXUtils.registerKryoClasses(conf)
@@ -97,7 +115,6 @@ object MovieLensMVM {
     }
     Logger.getRootLogger.setLevel(Level.WARN)
     val sc = new SparkContext(conf)
-    val checkpointDir = s"$out/checkpoint"
     sc.setCheckpointDir(checkpointDir)
     val movieLens = sc.textFile(input).mapPartitions { iter =>
       iter.filter(t => !t.startsWith("userId") && !t.isEmpty).map { line =>
@@ -133,11 +150,8 @@ object MovieLensMVM {
     }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
     dataSet.count()
     movieLens.unpersist()
-    val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
-    trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
-    testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
-    dataSet.unpersist()
-    val model = MVM.trainRegression(trainSet, numIterations, stepSize, views, regular, rank, useAdaGrad, 1.0)
+    val model = MVM.trainRegression(dataSet, numIterations, stepSize, views.split(",").map(_.toLong),
+      regular, 0.0, rank, useAdaGrad, 1.0)
     model.save(sc, out)
     println(f"Test RMSE: ${model.loss(testSet)}%1.4f")
     sc.stop()

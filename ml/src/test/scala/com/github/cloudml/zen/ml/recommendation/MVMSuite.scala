@@ -379,10 +379,9 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     val stepSize = 0.05
     val numIterations = 200
     val regParam = 0.01
-    val l2 = (regParam, regParam, regParam)
     val rank = 64
     val useAdaGrad = true
-    val miniBatchFraction = 0.1
+    val miniBatchFraction = 1
     val views = Array(maxUserId, numFeatures).map(_.toLong)
 
     import com.github.cloudml.zen.ml.recommendation._
