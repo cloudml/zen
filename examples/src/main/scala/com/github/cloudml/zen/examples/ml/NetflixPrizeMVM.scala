@@ -26,23 +26,25 @@ import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{SparkConf, SparkContext}
 import scopt.OptionParser
 
-object MovieLensMVM {
+import scala.collection.mutable.ArrayBuffer
+
+object NetflixPrizeMVM {
 
   case class Params(
     input: String = null,
     out: String = null,
     views: String = null,
-    numIterations: Int = 40,
-    stepSize: Double = 0.1,
-    regular: Double = 0.05,
-    rank: Int = 20,
+    numIterations: Int = 200,
+    stepSize: Double = 0.05,
+    regular: Double = 0.01,
+    rank: Int = 64,
     useAdaGrad: Boolean = false,
     kryo: Boolean = false) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
     val defaultParams = Params()
     val parser = new OptionParser[Params]("MVM") {
-      head("MovieLensMVM: an example app for MVM.")
+      head("NetflixPrizeMVM: an example app for MVM.")
       opt[Int]("numIterations")
         .text(s"number of iterations, default: ${defaultParams.numIterations}")
         .action((x, c) => c.copy(numIterations = x))
@@ -91,7 +93,7 @@ object MovieLensMVM {
 
     parser.parse(args, defaultParams).map { params =>
       run(params)
-    }.getOrElse {
+    } getOrElse {
       System.exit(1)
     }
   }
@@ -116,45 +118,71 @@ object MovieLensMVM {
     Logger.getRootLogger.setLevel(Level.WARN)
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
-    val movieLens = sc.textFile(input).mapPartitions { iter =>
-      iter.filter(t => !t.startsWith("userId") && !t.isEmpty).map { line =>
-        val Array(userId, movieId, rating, timestamp) = line.split("::")
-        (userId.toInt, (movieId.toInt, rating.toDouble))
-      }
-    }.persist(StorageLevel.MEMORY_AND_DISK)
-    val maxMovieId = movieLens.map(_._2._1).max + 1
-    val maxUserId = movieLens.map(_._1).max + 1
-    val numFeatures = maxUserId + 2 * maxMovieId
 
-    /**
-     * The first view contains [0,maxUserId),The second view contains [maxUserId, maxMovieId + maxUserId)...
-     * The third contains [maxMovieId + maxUserId,numFeatures)  The last id equals the number of features
-     */
-    val views = Array(maxUserId, maxMovieId + maxUserId, numFeatures).map(_.toLong)
-
-    val dataSet = movieLens.map { case (userId, (movieId, rating)) =>
-      val sv = BSV.zeros[Double](maxMovieId)
-      sv(movieId) = rating
-      (userId, sv)
-    }.reduceByKey(_ :+= _).flatMap { case (userId, ratings) =>
-      val activeSize = ratings.activeSize
-      ratings.activeIterator.map { case (movieId, rating) =>
-        val sv = BSV.zeros[Double](numFeatures)
-        sv(userId) = 1.0
-        sv(movieId + maxUserId) = 1.0
-        ratings.activeKeysIterator.foreach { mId =>
-          sv(maxMovieId + maxUserId + mId) = 1.0 / math.sqrt(activeSize)
+    val probeFile = s"$input/probe.txt"
+    val dataSetFile = s"$input/training_set/*"
+    val probe = sc.wholeTextFiles(probeFile).flatMap { case (fileName, txt) =>
+      val ab = new ArrayBuffer[(Int, Int)]
+      var lastMovieId = -1
+      var lastUserId = -1
+      txt.split("\n").filter(_.nonEmpty).foreach { line =>
+        if (line.endsWith(":")) {
+          lastMovieId = line.split(":").head.toInt
+        } else {
+          lastUserId = line.toInt
+          val pair = (lastUserId, lastMovieId)
+          ab += pair
         }
-        new LabeledPoint(rating, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
+      }
+      ab.toSeq
+    }.collect().toSet
+
+    val nfPrize = sc.wholeTextFiles(dataSetFile).flatMap { case (fileName, txt) =>
+      val Array(movieId, csv) = txt.split(":")
+      csv.split("\n").filter(_.nonEmpty).map { line =>
+        val Array(userId, rating, timestamp) = line.split(",")
+        ((userId.toInt, movieId.toInt), rating.toDouble)
+      }
+    }.repartition(sc.defaultParallelism).persist(StorageLevel.MEMORY_AND_DISK)
+
+    val maxMovieId = nfPrize.map(_._1._1).max + 1
+    val maxUserId = nfPrize.map(_._1._2).max + 1
+    val numFeatures = maxUserId + maxMovieId
+
+    val testSet = nfPrize.mapPartitions { iter =>
+      iter.filter(t => probe.contains(t._1)).map {
+        case ((userId, movieId), rating) =>
+          val sv = BSV.zeros[Double](numFeatures)
+          sv(userId) = 1.0
+          sv(movieId + maxUserId) = 1.0
+          new LabeledPoint(rating, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
       }
     }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
-    dataSet.count()
-    movieLens.unpersist()
+    testSet.count()
 
+    val trainSet = nfPrize.mapPartitions { iter =>
+      iter.filter(t => !probe.contains(t._1)).map {
+        case ((userId, movieId), rating) =>
+          val sv = BSV.zeros[Double](numFeatures)
+          sv(userId) = 1.0
+          sv(movieId + maxUserId) = 1.0
+          new LabeledPoint(rating, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
+      }
+    }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
+    trainSet.count()
+    nfPrize.unpersist()
 
-    val model = MVM.trainRegression(dataSet, numIterations, stepSize, vs, regular, 0.0, rank, useAdaGrad, 1.0)
+    val vs = if (views.isEmpty) {
+      Array(maxUserId, numFeatures).map(_.toLong)
+    } else {
+      views.split(",").map(_.toLong)
+    }
+
+    import com.github.cloudml.zen.ml.recommendation._
+    val fm = new MVMRegression(trainSet, stepSize, vs, regular, 0.0, rank, useAdaGrad, 1, StorageLevel.MEMORY_AND_DISK)
+    fm.run(numIterations)
+    val model = fm.saveModel()
     model.save(sc, out)
     println(f"Test RMSE: ${model.loss(testSet)}%1.4f")
-    sc.stop()
   }
 }

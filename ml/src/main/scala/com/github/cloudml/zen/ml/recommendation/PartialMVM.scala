@@ -18,7 +18,7 @@
 package com.github.cloudml.zen.ml.recommendation
 
 import com.github.cloudml.zen.ml.DBHPartitioner
-import com.github.cloudml.zen.ml.recommendation.HigherOrderIndependentBSFM._
+import com.github.cloudml.zen.ml.recommendation.PartialMVM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.Utils
 import org.apache.commons.math3.primes.Primes
@@ -32,7 +32,7 @@ import org.apache.spark.storage.StorageLevel
 
 import scala.math._
 
-private[ml] abstract class HigherOrderIndependentBSFM extends Serializable with Logging {
+private[ml] abstract class PartialMVM extends Serializable with Logging {
 
   protected val checkpointInterval = 10
   protected var bias: Double = 0.0
@@ -69,15 +69,13 @@ private[ml] abstract class HigherOrderIndependentBSFM extends Serializable with 
 
   def stepSize: Double
 
-  def l2: (Double, Double, Double, Double)
+  def l2: (Double, Double, Double)
 
   def views: Array[Long]
 
-  def rank2: Int
+  def rank: Int
 
-  def rank3: Int
-
-  def halfLife: Int = 40
+  def halfLife: Int = 20
 
   def epsilon: Double = 1e-6
 
@@ -129,8 +127,8 @@ private[ml] abstract class HigherOrderIndependentBSFM extends Serializable with 
     }
   }
 
-  def saveModel(): HigherOrderIndependentBSFMModel = {
-    new HigherOrderIndependentBSFMModel(rank3, rank2, intercept, views, false, features)
+  def saveModel(): PartialMVMFMModel = {
+    new PartialMVMFMModel(rank, intercept, views, false, features)
   }
 
   protected[ml] def loss(q: VertexRDD[VD]): Double = {
@@ -152,7 +150,7 @@ private[ml] abstract class HigherOrderIndependentBSFM extends Serializable with 
       val featureId = ctx.srcId
       val viewId = featureId2viewId(featureId, views)
       if (mod == 1 || ((sampleId * thisPrimes) % mod) + thisMask == 0) {
-        val result = forwardInterval(rank3, rank2, views.length, viewId, ctx.attr, ctx.srcAttr)
+        val result = forwardInterval(rank, views.length, viewId, ctx.attr, ctx.srcAttr)
         ctx.sendToDst(result)
       }
     }, reduceInterval, TripletFields.Src).setName(s"margin-$iter").persist(storageLevel)
@@ -166,7 +164,7 @@ private[ml] abstract class HigherOrderIndependentBSFM extends Serializable with 
     val thisNumSamples = (1.0 / mask) * numSamples
     multi = multiplier(q).setName(s"multiplier-$iter").persist(storageLevel)
     val gradW0 = multi.map(_._2.last).sum() / thisNumSamples
-    val sampledArrayLen = (rank3 + rank2) * views.length + 2
+    val sampledArrayLen = (2 * rank) * views.length + 2
     val gradient = GraphImpl.fromExistingRDDs(multi, edges).aggregateMessages[Array[Double]](ctx => {
       // val sampleId = ctx.dstId
       val featureId = ctx.srcId
@@ -174,7 +172,7 @@ private[ml] abstract class HigherOrderIndependentBSFM extends Serializable with 
         val x = ctx.attr
         val arr = ctx.dstAttr
         val viewId = featureId2viewId(featureId, views)
-        val m = backwardInterval(rank3, rank2, viewId, x, arr, arr.last)
+        val m = backwardInterval(rank, viewId, x, arr, arr.last)
         ctx.sendToSrc(m)
       }
     }, reduceInterval, TripletFields.Dst).mapValues { gradients =>
@@ -189,7 +187,7 @@ private[ml] abstract class HigherOrderIndependentBSFM extends Serializable with 
     val (biasGrad, gradient) = delta
     val wStepSize = if (useAdaGrad) stepSize else stepSize / sqrt(iter)
     val l2StepSize = stepSize / sqrt(iter)
-    val (regB, regW, regV, regA) = l2
+    val (regB, regW, regV) = l2
     bias -= wStepSize * biasGrad + l2StepSize * regB * bias
     dataSet.vertices.leftJoin(gradient) { (_, attr, gradient) =>
       gradient match {
@@ -197,11 +195,7 @@ private[ml] abstract class HigherOrderIndependentBSFM extends Serializable with 
           val weight = attr
           val wd = weight.last / (numSamples + 1.0)
           var i = 0
-          while (i < rank3) {
-            weight(i) -= wStepSize * grad(i) + l2StepSize * regA * wd * weight(i)
-            i += 1
-          }
-          while (i < rank3 + rank2) {
+          while (i < rank) {
             weight(i) -= wStepSize * grad(i) + l2StepSize * regV * wd * weight(i)
             i += 1
           }
@@ -322,42 +316,40 @@ private[ml] abstract class HigherOrderIndependentBSFM extends Serializable with 
   }
 }
 
-class HigherOrderIndependentBSFMClassification(
+class PartialMVMClassification(
   @transient _dataSet: Graph[VD, ED],
   val stepSize: Double,
   val views: Array[Long],
-  val l2: (Double, Double, Double, Double),
-  val rank2: Int,
-  val rank3: Int,
+  val l2: (Double, Double, Double),
+  val rank: Int,
   val useAdaGrad: Boolean,
   val miniBatchFraction: Double,
-  val storageLevel: StorageLevel) extends HigherOrderIndependentBSFM {
+  val storageLevel: StorageLevel) extends PartialMVM {
 
   def this(
     input: RDD[(VertexId, LabeledPoint)],
     stepSize: Double = 1e-2,
     views: Array[Long],
-    l2Reg: (Double, Double, Double, Double) = (1e-3, 1e-3, 1e-3, 1e-3),
+    l2Reg: (Double, Double, Double) = (1e-3, 1e-3, 1e-3),
     rank2: Int = 20,
-    rank3: Int = 20,
     useAdaGrad: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
-    this(initializeDataSet(input, rank2, rank3, storageLevel), stepSize, views, l2Reg, rank2, rank3,
+    this(initializeDataSet(input, rank2, storageLevel), stepSize, views, l2Reg, rank2,
       useAdaGrad, miniBatchFraction, storageLevel)
   }
 
   setDataSet(_dataSet)
   assert(views.length == 3)
-  assert(rank2 > 1, s"rank $rank2 less than 2")
+  assert(rank > 1, s"rank $rank less than 2")
 
   override protected def predict(arr: Array[Double]): Double = {
-    val result = predictInterval(rank3, rank2, views.length, bias, arr)
+    val result = predictInterval(rank, views.length, bias, arr)
     1.0 / (1.0 + math.exp(-result))
   }
 
-  override def saveModel(): HigherOrderIndependentBSFMModel = {
-    new HigherOrderIndependentBSFMModel(rank3, rank2, intercept, views, true, features)
+  override def saveModel(): PartialMVMFMModel = {
+    new PartialMVMFMModel(rank, intercept, views, true, features)
   }
 
   override protected def multiplier(q: VertexRDD[VD]): VertexRDD[VD] = {
@@ -366,7 +358,7 @@ class HigherOrderIndependentBSFMClassification(
         case Some(m) =>
           val y = data.head
           val diff = predict(m) - y
-          val ret = sumInterval(rank3, rank2, views.length, m)
+          val ret = sumInterval(rank, views.length, m)
           ret(ret.length - 1) = diff
           ret
         case _ => data
@@ -375,40 +367,37 @@ class HigherOrderIndependentBSFMClassification(
   }
 }
 
-class HigherOrderIndependentBSFMRegression(
+class PartialMVMRegression(
   @transient _dataSet: Graph[VD, ED],
   val stepSize: Double,
   val views: Array[Long],
-  val l2: (Double, Double, Double, Double),
-  val rank2: Int,
-  val rank3: Int,
+  val l2: (Double, Double, Double),
+  val rank: Int,
   val useAdaGrad: Boolean,
   val miniBatchFraction: Double,
-  val storageLevel: StorageLevel) extends HigherOrderIndependentBSFM {
-
+  val storageLevel: StorageLevel) extends PartialMVM {
   def this(
     input: RDD[(VertexId, LabeledPoint)],
     stepSize: Double = 1e-2,
     views: Array[Long],
-    l2Reg: (Double, Double, Double, Double) = (1e-3, 1e-3, 1e-3, 1e-3),
+    l2Reg: (Double, Double, Double) = (1e-3, 1e-3, 1e-3),
     rank2: Int = 20,
-    rank3: Int = 20,
     useAdaGrad: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
-    this(initializeDataSet(input, rank2, rank3, storageLevel), stepSize, views, l2Reg, rank2, rank3,
+    this(initializeDataSet(input, rank2, storageLevel), stepSize, views, l2Reg, rank2,
       useAdaGrad, miniBatchFraction, storageLevel)
   }
 
   setDataSet(_dataSet)
   assert(views.length == 3)
-  assert(rank2 > 1, s"rank $rank2 less than 2")
+  assert(rank > 1, s"rank $rank less than 2")
 
   // val max = samples.map(_._2.head).max
   // val min = samples.map(_._2.head).min
 
   override protected def predict(arr: Array[Double]): Double = {
-    var result = predictInterval(rank3, rank2, views.length, bias, arr)
+    val result = predictInterval(rank, views.length, bias, arr)
     // result = Math.max(result, min)
     // result = Math.min(result, max)
     result
@@ -420,7 +409,7 @@ class HigherOrderIndependentBSFMRegression(
         case Some(m) =>
           val y = data.head
           val diff = predict(m) - y
-          val ret = sumInterval(rank3, rank2, views.length, m)
+          val ret = sumInterval(rank, views.length, m)
           ret(ret.length - 1) = 2.0 * diff
           ret
         case _ => data
@@ -429,7 +418,7 @@ class HigherOrderIndependentBSFMRegression(
   }
 }
 
-object HigherOrderIndependentBSFM {
+object PartialMVM {
   private[ml] type ED = Double
   private[ml] type VD = Array[Double]
 
@@ -451,18 +440,17 @@ object HigherOrderIndependentBSFM {
     numIterations: Int,
     stepSize: Double,
     views: Array[Long],
-    l2: (Double, Double, Double, Double),
+    l2: (Double, Double, Double),
     rank2: Int,
-    rank3: Int,
     useAdaGrad: Boolean = true,
     miniBatchFraction: Double = 1.0,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): HigherOrderIndependentBSFMModel = {
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): PartialMVMFMModel = {
     val data = input.map { case (id, LabeledPoint(label, features)) =>
       assert(id >= 0.0, s"sampleId $id less than 0")
       val newLabel = if (label > 0.0) 1.0 else 0.0
       (id, LabeledPoint(newLabel, features))
     }
-    val lfm = new HigherOrderIndependentBSFMClassification(data, stepSize, views, l2, rank2, rank3,
+    val lfm = new PartialMVMClassification(data, stepSize, views, l2, rank2,
       useAdaGrad, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
@@ -486,17 +474,16 @@ object HigherOrderIndependentBSFM {
     numIterations: Int,
     stepSize: Double,
     views: Array[Long],
-    l2: (Double, Double, Double, Double),
+    l2: (Double, Double, Double),
     rank2: Int,
-    rank3: Int,
     useAdaGrad: Boolean = true,
     miniBatchFraction: Double = 1.0,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): HigherOrderIndependentBSFMModel = {
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): PartialMVMFMModel = {
     val data = input.map { case (id, labeledPoint) =>
       assert(id >= 0.0, s"sampleId $id less than 0")
       (id, labeledPoint)
     }
-    val lfm = new HigherOrderIndependentBSFMRegression(data, stepSize, views, l2, rank2, rank3,
+    val lfm = new PartialMVMRegression(data, stepSize, views, l2, rank2,
       useAdaGrad, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
@@ -506,7 +493,6 @@ object HigherOrderIndependentBSFM {
   private[ml] def initializeDataSet(
     input: RDD[(VertexId, LabeledPoint)],
     rank2: Int,
-    rank3: Int,
     storageLevel: StorageLevel): Graph[VD, ED] = {
     val edges = input.flatMap { case (sampleId, labelPoint) =>
       // sample id
@@ -525,10 +511,10 @@ object HigherOrderIndependentBSFM {
 
     val features = edges.map(_.srcId).distinct().map { featureId =>
       // parameter point
-      val parms = Array.fill(rank3 + rank2 + 2) {
+      val parms = Array.fill(rank2 + 2) {
         Utils.random.nextGaussian() * 1e-1
       }
-      parms(rank3 + rank2) = 0.0
+      parms(rank2) = 0.0
       (featureId, parms)
     }.join(inDegrees).map { case (featureId, (parms, deg)) =>
       parms(parms.length - 1) = deg
@@ -575,29 +561,29 @@ object HigherOrderIndependentBSFM {
     -(id + 1L)
   }
 
-  private[ml] def predictInterval(rank3: Int, rank2: Int, viewSize: Int, bias: Double, arr: VD): ED = {
+  private[ml] def predictInterval(rank2: Int, viewSize: Int, bias: Double, arr: VD): ED = {
     val wx = arr.last
     var sum2order = 0.0
     var sum3order = 0.0
     var i = 0
-    while (i < rank3) {
+    while (i < rank2) {
       var multi = 1.0
       var viewId = 0
       while (viewId < viewSize) {
-        multi *= arr(i + viewId * (rank3 + rank2))
+        multi *= arr(i + viewId * (2 * rank2))
         viewId += 1
       }
       sum3order += multi
       i += 1
     }
 
-    while (i < rank3 + rank2) {
+    while (i < 2 * rank2) {
       var allSum = 0.0
       var viewSumP2 = 0.0
       var viewId = 0
       while (viewId < viewSize) {
-        viewSumP2 += pow(arr(i + viewId * (rank3 + rank2)), 2)
-        allSum += arr(i + viewId * (rank3 + rank2))
+        viewSumP2 += pow(arr(i + viewId * (2 * rank2)), 2)
+        allSum += arr(i + viewId * (2 * rank2))
         viewId += 1
       }
       sum2order += pow(allSum, 2) - viewSumP2
@@ -615,81 +601,80 @@ object HigherOrderIndependentBSFM {
     a
   }
 
-  private[ml] def forwardInterval(rank3: Int, rank2: Int, viewSize: Int, viewId: Int, x: ED, w: VD): VD = {
-    val arr = new Array[Double]((rank3 + rank2) * viewSize + 1)
-    forwardInterval(rank3, rank2, viewId, arr, x, w)
+  private[ml] def forwardInterval(rank2: Int, viewSize: Int, viewId: Int, x: ED, w: VD): VD = {
+    val arr = new Array[Double]((2 * rank2) * viewSize + 1)
+    forwardInterval(rank2, viewId, arr, x, w)
   }
 
-  private[ml] def forwardInterval(rank3: Int, rank2: Int, viewId: Int, arr: Array[Double], z: ED, w: VD): VD = {
+  private[ml] def forwardInterval(rank2: Int, viewId: Int, arr: Array[Double], z: ED, w: VD): VD = {
     var i = 0
-    val offset = viewId * (rank3 + rank2)
-    while (i < rank3) {
+    val offset = viewId * (2 * rank2)
+    while (i < rank2) {
       arr(i + offset) += z * w(i)
       i += 1
     }
 
-    while (i < rank3 + rank2) {
-      arr(i + offset) += z * w(i)
+    while (i < rank2) {
+      arr(i + offset) += z * w(i - rank2)
       i += 1
     }
-    arr(arr.length - 1) += z * w(rank3 + rank2)
+    arr(arr.length - 1) += z * w(rank2)
     arr
   }
 
   private[ml] def backwardInterval(
-    rank3: Int,
     rank2: Int,
     viewId: Int,
     x: ED,
     arr: VD,
     multi: ED): VD = {
-    val m = new Array[Double](rank3 + rank2 + 1)
+    val m = new Array[Double](rank2 + 1)
     var i = 0
-    while (i < rank3) {
-      m(i) = multi * x * arr(i + viewId * (rank3 + rank2))
+    while (i < rank2) {
+      m(i) += multi * x * arr(i + viewId * (2 * rank2))
       i += 1
     }
-    while (i < rank3 + rank2) {
-      m(i) = multi * x * arr(i + viewId * (rank3 + rank2))
+    while (i < 2 * rank2) {
+      m(i - rank2) += multi * x * arr(i + viewId * (2 * rank2))
       i += 1
     }
-    m(rank3 + rank2) = x * multi
+    m(rank2) = x * multi
     m
   }
 
-  private[ml] def sumInterval(rank3: Int, rank2: Int, viewSize: Int, arr: Array[Double]): VD = {
-    val m3 = new Array[Double](rank3)
+  private[ml] def sumInterval(rank2: Int, viewSize: Int, arr: Array[Double]): VD = {
+    val m3 = new Array[Double](rank2)
     val m2 = new Array[Double](rank2)
 
     var i = 0
-    while (i < rank3) {
+    while (i < rank2) {
       var multi = 1.0
       var viewId = 0
       while (viewId < viewSize) {
-        multi *= arr(i + viewId * (rank3 + rank2))
+        multi *= arr(i + viewId * (2 * rank2))
         viewId += 1
       }
       m3(i) += multi
       i += 1
     }
-    while (i < rank3 + rank2) {
+    while (i < 2 * rank2) {
       var multi = 0.0
       var viewId = 0
       while (viewId < viewSize) {
-        multi += arr(i + viewId * (rank3 + rank2))
+        multi += arr(i + viewId * (2 * rank2))
         viewId += 1
       }
-      m2(i - rank3) += multi
+      m2(i - rank2) += multi
       i += 1
     }
 
     i = 0
-    val ret = new Array[Double]((rank3 + rank2) * viewSize + 2)
-    while (i < rank3) {
+    val ret = new Array[Double]((2 * rank2) * viewSize + 2)
+    while (i < rank2) {
       var viewId = 0
       while (viewId < viewSize) {
-        val vm = arr(i + viewId * (rank3 + rank2))
-        ret(i + viewId * (rank3 + rank2)) = if (vm == 0.0) {
+        val vm = arr(i + viewId * (2 * rank2))
+        ret(i + viewId * (2 * rank2)) = if (vm == 0.0) {
           0.0
         } else {
           m3(i) / vm
@@ -698,15 +683,15 @@ object HigherOrderIndependentBSFM {
       }
       i += 1
     }
-    while (i < rank3 + rank2) {
+    while (i < 2 * rank2) {
       var viewId = 0
       while (viewId < viewSize) {
-        ret(i + viewId * (rank3 + rank2)) = m2(i - rank3) - arr(i + viewId * (rank3 + rank2))
+        ret(i + viewId * (2 * rank2)) = m2(i - rank2) - arr(i + viewId * (2 * rank2))
         viewId += 1
       }
       i += 1
     }
-    ret(viewSize * (rank3 + rank2)) = arr(viewSize * (rank3 + rank2))
+    ret(viewSize * (2 * rank2)) = arr(viewSize * (2 * rank2))
     ret
   }
 }

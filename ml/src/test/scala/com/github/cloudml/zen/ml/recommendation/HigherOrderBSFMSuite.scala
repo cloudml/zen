@@ -140,7 +140,7 @@ class HigherOrderBSFMSuite extends FunSuite with SharedSparkContext with Matcher
     trainSet.persist(StorageLevel.DISK_ONLY).count()
     testSet.persist(StorageLevel.DISK_ONLY).count()
 
-    val fm = new HigherOrderIndependentBSFMRegression(trainSet, stepSize, views, l2, rank, rank,
+    val fm = new ThreeWayFMRegression(trainSet, stepSize, views, l2, rank, rank,
       useAdaGrad, miniBatchFraction)
 
 
@@ -199,7 +199,7 @@ class HigherOrderBSFMSuite extends FunSuite with SharedSparkContext with Matcher
     //    val model = fm.saveModel()
     //    println(f"Test loss: ${model.loss(testSet)}%1.4f")
 
-    val fm = new HigherOrderIndependentBSFMRegression(trainSet, stepSize, views,
+    val fm = new ThreeWayFMRegression(trainSet, stepSize, views,
       (regParam, regParam, regParam, regParam), rank, rank, useAdaGrad, miniBatchFraction)
     fm.run(numIterations)
     val model = fm.saveModel()

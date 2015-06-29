@@ -17,7 +17,7 @@
 
 package com.github.cloudml.zen.ml.recommendation
 
-import com.github.cloudml.zen.ml.recommendation.HigherOrderIndependentBSFM._
+import com.github.cloudml.zen.ml.recommendation.PartialMVM._
 import com.github.cloudml.zen.ml.util.LoaderUtils
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import org.apache.spark.SparkContext
@@ -32,9 +32,8 @@ import org.json4s.jackson.JsonMethods._
 
 import scala.math._
 
-class HigherOrderIndependentBSFMModel(
-  val rank3: Int,
-  val rank2: Int,
+class PartialMVMFMModel(
+  val rank: Int,
   val intercept: ED,
   val views: Array[Long],
   val classification: Boolean,
@@ -49,9 +48,9 @@ class HigherOrderIndependentBSFMModel(
     }.join(factors).map { case (featureId, ((sampleId, x), w)) =>
       val viewSize = views.length
       val viewId = featureId2viewId(featureId, views)
-      (sampleId, forwardInterval(rank3, rank2, viewSize, viewId, x, w))
+      (sampleId, forwardInterval(rank, viewSize, viewId, x, w))
     }.reduceByKey(reduceInterval).map { case (sampleId, arr) =>
-      var result = predictInterval(rank3, rank2, views.length, intercept, arr)
+      var result = predictInterval(rank, views.length, intercept, arr)
       if (classification) {
         result = 1.0 / (1.0 + math.exp(-result))
       }
@@ -70,15 +69,15 @@ class HigherOrderIndependentBSFMModel(
   }
 
   override def save(sc: SparkContext, path: String): Unit = {
-    HigherOrderIndependentBSFMModel.SaveLoadV1_0.save(sc, path, rank3, rank2, intercept, views, classification, factors)
+    PartialMVMFMModel.SaveLoadV1_0.save(sc, path, rank, intercept, views, classification, factors)
   }
 
-  override protected def formatVersion: String = HigherOrderIndependentBSFMModel.SaveLoadV1_0.formatVersionV1_0
+  override protected def formatVersion: String = PartialMVMFMModel.SaveLoadV1_0.formatVersionV1_0
 }
 
-object HigherOrderIndependentBSFMModel extends Loader[HigherOrderIndependentBSFMModel] {
+object PartialMVMFMModel extends Loader[PartialMVMFMModel] {
 
-  override def load(sc: SparkContext, path: String): HigherOrderIndependentBSFMModel = {
+  override def load(sc: SparkContext, path: String): PartialMVMFMModel = {
     val (loadedClassName, version, metadata) = LoaderUtils.loadMetadata(sc, path)
     val versionV1_0 = SaveLoadV1_0.formatVersionV1_0
     val classNameV1_0 = SaveLoadV1_0.classNameV1_0
@@ -87,7 +86,6 @@ object HigherOrderIndependentBSFMModel extends Loader[HigherOrderIndependentBSFM
       val classification = (metadata \ "classification").extract[Boolean]
       val intercept = (metadata \ "intercept").extract[Double]
       val views = (metadata \ "views").extract[String].split(",").map(_.toLong)
-      val rank3 = (metadata \ "rank3").extract[Int]
       val rank2 = (metadata \ "rank2").extract[Int]
       val dataPath = LoaderUtils.dataPath(path)
       val sqlContext = new SQLContext(sc)
@@ -100,7 +98,7 @@ object HigherOrderIndependentBSFMModel extends Loader[HigherOrderIndependentBSFM
         case Row(featureId: Long, factors: Seq[Double]) =>
           (featureId, factors.toArray)
       }
-      new HigherOrderIndependentBSFMModel(rank3, rank2, intercept, views, classification, factors)
+      new PartialMVMFMModel(rank2, intercept, views, classification, factors)
     } else {
       throw new Exception(
         s"FMModel.load did not recognize model with (className, format version):" +
@@ -112,12 +110,11 @@ object HigherOrderIndependentBSFMModel extends Loader[HigherOrderIndependentBSFM
 
   private object SaveLoadV1_0 {
     val formatVersionV1_0 = "1.0"
-    val classNameV1_0 = "com.github.cloudml.zen.ml.recommendation.HigherOrderIndependentBSFMModel"
+    val classNameV1_0 = "com.github.cloudml.zen.ml.recommendation.PartialMVMFMModel"
 
     def save(
       sc: SparkContext,
       path: String,
-      rank3: Int,
       rank2: Int,
       intercept: Double,
       views: Array[Long],
@@ -125,7 +122,7 @@ object HigherOrderIndependentBSFMModel extends Loader[HigherOrderIndependentBSFM
       factors: RDD[(Long, Array[Double])]): Unit = {
       val metadata = compact(render
         (("class" -> classNameV1_0) ~ ("version" -> formatVersionV1_0) ~ ("intercept" -> intercept) ~
-          ("rank2" -> rank2) ~ ("rank3" -> rank3) ~ ("views" -> views.mkString(",")) ~
+          ("rank2" -> rank2) ~ ("views" -> views.mkString(",")) ~
           ("classification" -> classification)))
       sc.parallelize(Seq(metadata), 1).saveAsTextFile(LoaderUtils.metadataPath(path))
 

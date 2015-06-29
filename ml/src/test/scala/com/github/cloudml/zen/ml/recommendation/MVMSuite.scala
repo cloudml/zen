@@ -499,7 +499,7 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     trainSet.persist(StorageLevel.DISK_ONLY).count()
     testSet.persist(StorageLevel.DISK_ONLY).count()
 
-    val fm = new HigherOrderIndependentBSFMRegression(trainSet, stepSize, views, l2, rank, rank,
+    val fm = new ThreeWayFMRegression(trainSet, stepSize, views, l2, rank, rank,
       useAdaGrad, miniBatchFraction)
 
 

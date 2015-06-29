@@ -25,7 +25,7 @@ import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.{EdgeRDDImpl, GraphImpl}
 import org.apache.spark.mllib.classification.LogisticRegressionModel
 import org.apache.spark.mllib.linalg.{DenseVector => SDV}
-import org.apache.spark.mllib.regression.LabeledPoint
+import org.apache.spark.mllib.regression.{GeneralizedLinearModel, LabeledPoint}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{HashPartitioner, Logging}
@@ -143,7 +143,7 @@ abstract class LogisticRegression(
 
   protected def loss(q: VertexRDD[VD]): Double
 
-  def saveModel(): LogisticRegressionModel = {
+  def saveModel(): GeneralizedLinearModel = {
     val numFeatures = features.map(_._1).max().toInt + 1
     val featureData = new Array[Double](numFeatures)
     features.toLocalIterator.foreach { case (index, value) =>
@@ -474,7 +474,7 @@ object LogisticRegression {
     stepSize: Double,
     regParam: Double,
     useAdaGrad: Boolean = false,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): LogisticRegressionModel = {
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): GeneralizedLinearModel = {
     val data = input.map { case (id, LabeledPoint(label, features)) =>
       assert(id >= 0.0, s"sampleId $id less than 0")
       val newLabel = if (label > 0.0) 1.0 else 0.0
@@ -482,7 +482,7 @@ object LogisticRegression {
     }
     val lr = new LogisticRegressionSGD(data, stepSize, regParam, useAdaGrad, storageLevel)
     lr.run(numIterations)
-    lr.saveModel
+    lr.saveModel()
   }
 
   /**
@@ -506,7 +506,7 @@ object LogisticRegression {
     regParam: Double,
     epsilon: Double = 1e-3,
     useAdaGrad: Boolean = false,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): LogisticRegressionModel = {
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): GeneralizedLinearModel = {
     val data = input.map { case (id, LabeledPoint(label, features)) =>
       assert(id >= 0.0, s"sampleId $id less than 0")
       val newLabel = if (label > 0.0) 1.0 else -1.0

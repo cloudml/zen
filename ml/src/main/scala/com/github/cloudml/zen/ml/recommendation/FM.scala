@@ -17,10 +17,12 @@
 
 package com.github.cloudml.zen.ml.recommendation
 
+import java.util.{Random => JavaRandom}
+
 import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.recommendation.FM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
-import com.github.cloudml.zen.ml.util.Utils
+import com.github.cloudml.zen.ml.util.{XORShiftRandom, Utils}
 import org.apache.commons.math3.primes.Primes
 import org.apache.spark.{SparkContext, Logging}
 import org.apache.spark.graphx._
@@ -81,6 +83,10 @@ private[ml] abstract class FM extends Serializable with Logging {
   def rank: Int
 
   def useAdaGrad: Boolean
+
+  def halfLife: Int = 20
+
+  def epsilon: Double = 1e-6
 
   def storageLevel: StorageLevel
 
@@ -143,17 +149,28 @@ private[ml] abstract class FM extends Serializable with Logging {
   }
 
   protected[ml] def forward(iter: Int): VertexRDD[Array[Double]] = {
+    val random: JavaRandom = new XORShiftRandom
+    random.setSeed(17425170 - iter - innerIter)
+    val seed = random.nextLong()
     val mod = mask
-    val thisMask = iter % mod
-    val thisPrimes = primes
     dataSet.aggregateMessages[Array[Double]](ctx => {
       val sampleId = ctx.dstId
-      // val featureId = ctx.srcId
-      if (mod == 1 || ((sampleId * thisPrimes) % mod) + thisMask == 0) {
+      val featureId = ctx.srcId
+      if (mod == 1 || isSampled(random, seed, sampleId, iter, mod)) {
         val result = forwardInterval(rank, ctx.attr, ctx.srcAttr)
         ctx.sendToDst(result)
       }
     }, forwardReduceInterval, TripletFields.Src).setName(s"margin-$iter").persist(storageLevel)
+  }
+
+  @inline private def isSampled(
+    random: JavaRandom,
+    seed: Long,
+    sampleId: Long,
+    iter: Int,
+    mod: Int): Boolean = {
+    random.setSeed(seed * sampleId)
+    random.nextInt(mod) == iter % mod
   }
 
   protected def predict(arr: Array[Double]): Double
@@ -161,13 +178,17 @@ private[ml] abstract class FM extends Serializable with Logging {
   protected def multiplier(q: VertexRDD[VD]): VertexRDD[VD]
 
   protected def backward(q: VertexRDD[VD], iter: Int): (Double, VertexRDD[Array[Double]]) = {
+    val random: JavaRandom = new XORShiftRandom
+    random.setSeed(17425170 - iter - innerIter)
+    val seed = random.nextLong()
+    val mod = mask
     val thisNumSamples = (1.0 / mask) * numSamples
     multi = multiplier(q).setName(s"multiplier-$iter").persist(storageLevel)
     val gradW0 = multi.map(_._2.last).sum() / thisNumSamples
     val gradient = GraphImpl.fromExistingRDDs(multi, edges).aggregateMessages[Array[Double]](ctx => {
-      // val sampleId = ctx.dstId
-      // val featureId = ctx.srcId
-      if (ctx.dstAttr.length == 2) {
+      val sampleId = ctx.dstId
+      val featureId = ctx.srcId
+      if (mod == 1 || isSampled(random, seed, sampleId, iter, mod)) {
         val x = ctx.attr
         val Array(sumM, multi) = ctx.dstAttr
         val factors = ctx.srcAttr
@@ -208,8 +229,9 @@ private[ml] abstract class FM extends Serializable with Logging {
     gradient: (Double, VertexRDD[Array[Double]]),
     iter: Int): (Double, VertexRDD[Array[Double]]) = {
     if (useAdaGrad) {
-      val (newW0Grad, newW0Sum, delta) = adaGrad(gradientSum, gradient, 1e-6, 1.0)
-      // val (newW0Grad, newW0Sum, delta) = equilibratedGradientDescent(gradientSum, gradient, 1e-8, iter)
+      val rho = math.exp(-math.log(2.0) / halfLife)
+      val (newW0Grad, newW0Sum, delta) = adaGrad(gradientSum, gradient, epsilon, rho)
+      // val (newW0Grad, newW0Sum, delta) = esgd(gradientSum, gradient, epsilon, iter)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
 
       gradient._2.unpersist(blocking = false)
@@ -263,7 +285,7 @@ private[ml] abstract class FM extends Serializable with Logging {
     (newW0Grad, newW0Sum, newGradSumWithoutW0)
   }
 
-  protected def equilibratedGradientDescent(
+  protected def esgd(
     gradientSum: (Double, VertexRDD[Array[Double]]),
     gradient: (Double, VertexRDD[Array[Double]]),
     epsilon: Double,
@@ -335,7 +357,7 @@ class FMClassification(
   }
 
   setDataSet(_dataSet)
-  assert(rank > 1, s"rank $rank less than 2")
+  // assert(rank > 1, s"rank $rank less than 2")
 
   override protected def predict(arr: Array[Double]): Double = {
     val result = predictInterval(rank, bias, arr)
@@ -381,7 +403,7 @@ class FMRegression(
   }
 
   setDataSet(_dataSet)
-  assert(rank > 1, s"rank $rank less than 2")
+  // assert(rank > 1, s"rank $rank less than 2")
 
   // val max = samples.map(_._2.head).max
   // val min = samples.map(_._2.head).min
