@@ -31,7 +31,6 @@ object MovieLensMVM {
   case class Params(
     input: String = null,
     out: String = null,
-    views: String = null,
     numIterations: Int = 40,
     stepSize: Double = 0.1,
     regular: Double = 0.05,
@@ -59,13 +58,6 @@ object MovieLensMVM {
         .text(
           s"L2 regularization, default: ${defaultParams.regular}".stripMargin)
         .action((x, c) => c.copy(regular = x))
-      opt[String]("views")
-        .text(
-          s"""
-             |'id1,id2,id3 ...'  views. The first view contains [0,id1),The second view contains [id1,id2)...
-             |The last id equals the number of features
-           """.stripMargin)
-        .action((x, c) => c.copy(views = x))
       opt[Unit]("adagrad")
         .text("use AdaGrad")
         .action((_, c) => c.copy(useAdaGrad = true))
@@ -97,16 +89,7 @@ object MovieLensMVM {
   }
 
   def run(params: Params): Unit = {
-    val Params(
-    input,
-    out,
-    views,
-    numIterations,
-    stepSize,
-    regular,
-    rank,
-    useAdaGrad,
-    kryo) = params
+    val Params(input, out, numIterations, stepSize, regular, rank, useAdaGrad, kryo) = params
     val checkpointDir = s"$out/checkpoint"
     val conf = new SparkConf().setAppName(s"MVM with $params")
     if (kryo) {
@@ -152,7 +135,7 @@ object MovieLensMVM {
     movieLens.unpersist()
 
 
-    val model = MVM.trainRegression(dataSet, numIterations, stepSize, vs, regular, 0.0, rank, useAdaGrad, 1.0)
+    val model = MVM.trainRegression(dataSet, numIterations, stepSize, views, regular, 0.0, rank, useAdaGrad, 1.0)
     model.save(sc, out)
     println(f"Test RMSE: ${model.loss(testSet)}%1.4f")
     sc.stop()
