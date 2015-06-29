@@ -106,7 +106,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
     dataSet.vertices.filter(t => t._1 >= 0)
   }
 
-  // Factorization Machines
+  // Multi-View Machine
   def run(iterations: Int): Unit = {
     for (iter <- 1 to iterations) {
       logInfo(s"Start train (Iteration $iter/$iterations)")
