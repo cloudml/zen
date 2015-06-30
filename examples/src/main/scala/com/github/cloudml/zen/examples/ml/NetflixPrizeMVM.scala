@@ -128,8 +128,8 @@ object NetflixPrizeMVM {
       }
     }.repartition(sc.defaultParallelism).persist(StorageLevel.MEMORY_AND_DISK)
 
-    val maxMovieId = nfPrize.map(_._1._1).max + 1
-    val maxUserId = nfPrize.map(_._1._2).max + 1
+    val maxUserId = nfPrize.map(_._1._1).max + 1
+    val maxMovieId = nfPrize.map(_._1._2).max + 1
     val numFeatures = maxUserId + maxMovieId
 
     val testSet = nfPrize.mapPartitions { iter =>
