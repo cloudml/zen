@@ -17,25 +17,20 @@
 
 package com.github.cloudml.zen.ml.recommendation
 
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum => brzSum}
+import com.github.cloudml.zen.ml.regression.LinearRegression
 import com.github.cloudml.zen.ml.util._
-import org.apache.spark.mllib.recommendation.{ALS, Rating}
+import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, Vector => SV}
 import org.apache.spark.mllib.regression.LabeledPoint
-import com.google.common.io.Files
-import org.apache.spark.mllib.util.MLUtils
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, Vector => BV}
-import org.apache.spark.mllib.linalg.{DenseVector => SDV, Vector => SV, SparseVector => SSV}
-import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
+import org.scalatest.{FunSuite, Matchers}
 
-import org.scalatest.{Matchers, FunSuite}
+import scala.math._
 
-class HigherOrderBSFMSuite extends FunSuite with SharedSparkContext with Matchers {
-
+class HigherOrderFMSuite extends FunSuite with SharedSparkContext with Matchers {
 
   ignore("movieLens 1m regression") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-
-    import com.github.cloudml.zen.ml.recommendation._
     val dataSetFile = s"/input/lbs/recommend/toona/ml-1m/ratings.dat"
     val checkpointDir = "/input/lbs/recommend/toona/als/checkpointDir"
     sc.setCheckpointDir(checkpointDir)
@@ -93,8 +88,6 @@ class HigherOrderBSFMSuite extends FunSuite with SharedSparkContext with Matcher
 
   ignore("movieLens 100k SVD++ regression ") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-
-    import com.github.cloudml.zen.ml.recommendation._
     val dataSetFile = s"$sparkHome/data/ml-100k/u.data"
     val checkpointDir = s"$sparkHome/tmp"
     sc.setCheckpointDir(checkpointDir)
@@ -152,8 +145,6 @@ class HigherOrderBSFMSuite extends FunSuite with SharedSparkContext with Matcher
 
   test("movieLens 100k regression ") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-
-    import com.github.cloudml.zen.ml.recommendation._
     val dataSetFile = s"$sparkHome/data/ml-100k/u.data"
     val checkpointDir = s"$sparkHome/tmp"
     sc.setCheckpointDir(checkpointDir)
@@ -183,9 +174,9 @@ class HigherOrderBSFMSuite extends FunSuite with SharedSparkContext with Matcher
 
     val stepSize = 0.1
     val numIterations = 50
-    val regParam = 0.1
+    val regParam = 1e-2
 
-    val rank = 4
+    val rank = 10
     val useAdaGrad = true
     val views = Array(maxUserId, maxUserId + maxMovieId, numFeatures).map(_.toLong)
     val miniBatchFraction = 1
@@ -195,15 +186,23 @@ class HigherOrderBSFMSuite extends FunSuite with SharedSparkContext with Matcher
 
     //    val fm = new HigherOrderBSFMRegression(trainSet, stepSize, views, (regParam, regParam, regParam), rank,
     //      useAdaGrad, miniBatchFraction)
+
+    // val fm = new ThreeWayFMRegression(trainSet, stepSize, views,
+    //   (regParam, regParam, regParam, regParam), rank, rank, useAdaGrad, miniBatchFraction)
+
+    val lr = new LinearRegression(trainSet, stepSize, regParam, useAdaGrad, StorageLevel.MEMORY_AND_DISK)
+    lr.run(numIterations)
+    val model = lr.saveModel()
+    val sum = testSet.map { case (_, LabeledPoint(label, features)) =>
+      pow(label - model.predict(features), 2)
+    }.reduce(_ + _)
+    println(f"Test loss: ${sqrt(sum / testSet.count())}%1.4f")
+
+
+    //    val fm = new MVMRegression(trainSet, stepSize, views, regParam, 0.0, rank, useAdaGrad, miniBatchFraction)
     //    fm.run(numIterations)
     //    val model = fm.saveModel()
-    //    println(f"Test loss: ${model.loss(testSet)}%1.4f")
-
-    val fm = new ThreeWayFMRegression(trainSet, stepSize, views,
-      (regParam, regParam, regParam, regParam), rank, rank, useAdaGrad, miniBatchFraction)
-    fm.run(numIterations)
-    val model = fm.saveModel()
-    println(f"Test loss: ${model.loss(testSet)}%1.4f")
+    //  println(f"Test loss: ${model.loss(testSet)}%1.4f")
 
   }
 }

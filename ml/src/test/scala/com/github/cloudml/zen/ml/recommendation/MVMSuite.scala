@@ -161,6 +161,55 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
 
   }
 
+  ignore("movieLens 1m user ID, movie ID, day") {
+    val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
+
+    import com.github.cloudml.zen.ml.recommendation._
+    val dataSetFile = s"/input/lbs/recommend/toona/ml-1m/ratings.dat"
+    val checkpointDir = "/input/lbs/recommend/toona/als/checkpointDir"
+    sc.setCheckpointDir(checkpointDir)
+    val movieLens = sc.textFile(dataSetFile, 2).mapPartitions { iter =>
+      iter.filter(t => !t.startsWith("userId") && !t.isEmpty).map { line =>
+        val Array(userId, movieId, rating, timestamp) = line.split("::")
+        (userId.toInt, movieId.toInt, rating.toDouble, timestamp.toInt / (60 * 60 * 24))
+      }
+    }.repartition(72).persist(StorageLevel.MEMORY_AND_DISK)
+    val maxMovieId = movieLens.map(_._2).max + 1
+    val maxUserId = movieLens.map(_._1).max + 1
+    val maxDay = movieLens.map(_._4).max()
+    val minDay = movieLens.map(_._4).min()
+    val day = maxDay - minDay + 1
+    val numFeatures = maxUserId + maxMovieId + day
+
+    val dataSet = movieLens.map { case (userId, movieId, rating, timestamp) =>
+      val sv = BSV.zeros[Double](numFeatures)
+      sv(userId) = 1.0
+      sv(movieId + maxUserId) = 1.0
+      sv(timestamp - minDay + maxUserId + maxMovieId) = 1.0
+      new LabeledPoint(rating, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
+    }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
+    dataSet.count()
+    movieLens.unpersist()
+
+    val stepSize = 0.05
+    val numIterations = 50
+    val regParam = 0.1
+    val rank = 20
+    val useAdaGrad = true
+    val views = Array(maxUserId, maxUserId + maxMovieId, numFeatures).map(_.toLong)
+    val miniBatchFraction = 1
+    val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
+    trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
+    testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
+
+    val fm = new MVMRegression(trainSet, stepSize, views, regParam, 0.0, rank, useAdaGrad, miniBatchFraction)
+    fm.run(numIterations)
+    val model = fm.saveModel()
+    println(f"Test loss: ${model.loss(testSet)}%1.4f")
+
+
+  }
+
   ignore("movieLens 1m regression") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
 
@@ -259,7 +308,7 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
   }
 
   ignore("Netflix Prize time regression") {
-    val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
+
     val dataSetFile = s"/input/lbs/recommend/toona/nf_prize_dataset/training_set/*"
     val checkpointDir = "/input/lbs/recommend/toona/als/checkpointDir"
     sc.setCheckpointDir(checkpointDir)
@@ -292,7 +341,6 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     val stepSize = 0.1
     val numIterations = 200
     val regParam = 0.1
-    val l2 = (regParam, regParam, regParam)
     val rank = 20
     val useAdaGrad = true
     val miniBatchFraction = 1
@@ -302,23 +350,17 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     testSet.persist(StorageLevel.DISK_ONLY).count()
     dataSet.unpersist()
 
-
+    import com.github.cloudml.zen.ml.recommendation._
     val fm = new MVMRegression(trainSet, stepSize, views, regParam, 0.0,
       rank, useAdaGrad, miniBatchFraction, StorageLevel.DISK_ONLY)
-
-
     fm.run(numIterations)
     val model = fm.saveModel()
-    MVMModel.load(sc, "/input/lbs/recommend/toona/nf_prize_dataset/model/")
+    // val model =  MVMModel.load(sc, "/input/lbs/recommend/toona/nf_prize_dataset/model/")
     println(f"Test RMSE: ${model.loss(testSet)}%1.4f")
-
-    // val fm = new FMRegression(trainSet, stepSize, l2, rank, useAdaGrad, miniBatchFraction)
-
 
   }
 
   ignore("Netflix Prize regression") {
-    val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
 
     val dataSetFile = s"/input/lbs/recommend/toona/nf_prize_dataset/training_set/*"
     val probeFile = "/input/lbs/recommend/toona/nf_prize_dataset/probe.txt"
@@ -349,8 +391,8 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
       }
     }.repartition(144).persist(StorageLevel.MEMORY_AND_DISK)
 
-    val maxMovieId = nfPrize.map(_._1._1).max + 1
-    val maxUserId = nfPrize.map(_._1._2).max + 1
+    val maxUserId = nfPrize.map(_._1._1).max + 1
+    val maxMovieId = nfPrize.map(_._1._2).max + 1
     val numFeatures = maxUserId + maxMovieId
 
     val testSet = nfPrize.mapPartitions { iter =>
@@ -391,7 +433,8 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     val model = fm.saveModel()
     println(f"Test RMSE: ${model.loss(testSet)}%1.4f")
 
-    MVMModel.load(sc, "/input/lbs/recommend/toona/nf_prize_dataset/model_mvm/")
+
+    // MVMModel.load(sc, "/input/lbs/recommend/toona/nf_prize_dataset/model_mvm/")
 
   }
 

@@ -512,7 +512,7 @@ object PartialMVM {
     val features = edges.map(_.srcId).distinct().map { featureId =>
       // parameter point
       val parms = Array.fill(rank2 + 2) {
-        Utils.random.nextGaussian() * 1e-1
+        Utils.random.nextGaussian() * 1e-2
       }
       parms(rank2) = 0.0
       (featureId, parms)
