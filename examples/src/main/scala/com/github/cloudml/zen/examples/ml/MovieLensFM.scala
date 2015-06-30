@@ -86,21 +86,15 @@ object MovieLensFM {
 
     parser.parse(args, defaultParams).map { params =>
       run(params)
-    } getOrElse {
+    }.getOrElse {
       System.exit(1)
     }
   }
 
   def run(params: Params): Unit = {
-    val Params(
-    input,
-    out,
-    numIterations,
-    stepSize,
-    regular,
-    rank,
-    useAdaGrad,
-    kryo) = params
+    val Params(input, out, numIterations, stepSize, regular, rank, useAdaGrad, kryo) = params
+    val regs = regular.split(",").map(_.toDouble)
+    val l2 = (regs(0), regs(1), regs(2))
     val conf = new SparkConf().setAppName(s"FM with $params")
     if (kryo) {
       GraphXUtils.registerKryoClasses(conf)
@@ -108,6 +102,8 @@ object MovieLensFM {
     }
     Logger.getRootLogger.setLevel(Level.WARN)
     val sc = new SparkContext(conf)
+    val checkpointDir = s"$out/checkpoint"
+    sc.setCheckpointDir(checkpointDir)
     val movieLens = sc.textFile(input).mapPartitions { iter =>
       iter.filter(t => !t.startsWith("userId") && !t.isEmpty).map { line =>
         val Array(userId, movieId, rating, timestamp) = line.split("::")
@@ -135,10 +131,14 @@ object MovieLensFM {
     }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
     dataSet.count()
     movieLens.unpersist()
+    val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
+    trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
+    testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
+    dataSet.unpersist()
 
-    val regs = regular.split(",").map(_.toDouble)
-    val l2 = (regs(0), regs(1), regs(2))
     val model = FM.trainRegression(dataSet, numIterations, stepSize, l2, rank, useAdaGrad, 1.0)
     model.save(sc, out)
+    println(f"Test RMSE: ${model.loss(testSet)}%1.4f")
+    sc.stop()
   }
 }
