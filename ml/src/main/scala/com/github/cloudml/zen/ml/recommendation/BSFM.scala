@@ -90,6 +90,10 @@ private[ml] abstract class BSFM extends Serializable with Logging {
 
   def miniBatchFraction: Double
 
+  def halfLife: Int = 40
+
+  def epsilon: Double = 1e-6 / (numSamples + 1)
+
   def intercept: Double = {
     bias
   }
@@ -121,7 +125,7 @@ private[ml] abstract class BSFM extends Serializable with Logging {
       vertices.count()
       dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      println(s"Train (Iteration $iter/$iterations) cost:               ${loss(margin)}")
+      logInfo(s"Train (Iteration $iter/$iterations) cost:               ${loss(margin)}")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
 
       previousVertices.unpersist(blocking = false)
@@ -215,8 +219,9 @@ private[ml] abstract class BSFM extends Serializable with Logging {
     gradient: (Double, VertexRDD[Array[Double]]),
     iter: Int): (Double, VertexRDD[Array[Double]]) = {
     if (useAdaGrad) {
-      val (newW0Grad, newW0Sum, delta) = adaGrad(gradientSum, gradient, 1e-6, 1.0)
-      // val (newW0Grad, newW0Sum, delta) = equilibratedGradientDescent(gradientSum, gradient, 1e-4, iter)
+      val rho = math.exp(-math.log(2.0) / halfLife)
+      val (newW0Grad, newW0Sum, delta) = adaGrad(gradientSum, gradient, epsilon, rho)
+      // val (newW0Grad, newW0Sum, delta) = esgd(gradientSum, gradient, 1e-4, iter)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
 
       gradient._2.unpersist(blocking = false)

@@ -23,7 +23,6 @@ import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.recommendation.FM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.{XORShiftRandom, Utils}
-import org.apache.commons.math3.primes.Primes
 import org.apache.spark.{SparkContext, Logging}
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.{EdgeRDDImpl, GraphImpl}
@@ -54,8 +53,7 @@ private[ml] abstract class FM extends Serializable with Logging {
   @transient protected var gradientSum: (Double, VertexRDD[Array[Double]]) = null
   @transient protected var vertices: VertexRDD[VD] = null
   @transient protected var edges: EdgeRDD[ED] = null
-  @transient private var innerIter = 1
-  @transient private var primes = Primes.nextPrime(117)
+  @transient protected var innerIter = 1
 
   def setDataSet(data: Graph[VD, ED]): this.type = {
     vertices = data.vertices
@@ -84,9 +82,9 @@ private[ml] abstract class FM extends Serializable with Logging {
 
   def useAdaGrad: Boolean
 
-  def halfLife: Int = 20
+  def halfLife: Int = 40
 
-  def epsilon: Double = 1e-6
+  def epsilon: Double = 1e-6 / (numSamples + 1)
 
   def storageLevel: StorageLevel
 
@@ -112,18 +110,18 @@ private[ml] abstract class FM extends Serializable with Logging {
   def run(iterations: Int): Unit = {
     for (iter <- 1 to iterations) {
       logInfo(s"Start train (Iteration $iter/$iterations)")
-      primes = Primes.nextPrime(primes + 1)
       val startedAt = System.nanoTime()
       val previousVertices = vertices
       val margin = forward(iter)
-      var gradient = backward(margin, iter)
+      var (thisNumSamples, costSum, gradient) = backward(margin, iter)
       gradient = updateGradientSum(gradient, iter)
       vertices = updateWeight(gradient, iter)
       checkpointVertices()
       vertices.count()
       dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
+      val rmse = sqrt(costSum / thisNumSamples)
+      logInfo(s"(Iteration $iter/$iterations) RMSE:                     $rmse")
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      logInfo(s"Train (Iteration $iter/$iterations) cost:               ${loss(margin)}")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
 
       previousVertices.unpersist(blocking = false)
@@ -142,7 +140,6 @@ private[ml] abstract class FM extends Serializable with Logging {
     val thisNumSamples = (1.0 / mask) * numSamples
     val sum = samples.join(q).map { case (_, (y, m)) =>
       val pm = predict(m)
-      // if (Utils.random.nextDouble() < 0.001) println(f"$pm%1.2f : ${y(0)}")
       pow(pm - y(0), 2)
     }.reduce(_ + _)
     sqrt(sum / thisNumSamples)
@@ -155,39 +152,29 @@ private[ml] abstract class FM extends Serializable with Logging {
     val mod = mask
     dataSet.aggregateMessages[Array[Double]](ctx => {
       val sampleId = ctx.dstId
-      val featureId = ctx.srcId
+      // val featureId = ctx.srcId
       if (mod == 1 || isSampled(random, seed, sampleId, iter, mod)) {
         val result = forwardInterval(rank, ctx.attr, ctx.srcAttr)
         ctx.sendToDst(result)
       }
-    }, forwardReduceInterval, TripletFields.Src).setName(s"margin-$iter").persist(storageLevel)
-  }
-
-  @inline private def isSampled(
-    random: JavaRandom,
-    seed: Long,
-    sampleId: Long,
-    iter: Int,
-    mod: Int): Boolean = {
-    random.setSeed(seed * sampleId)
-    random.nextInt(mod) == iter % mod
+    }, reduceInterval, TripletFields.Src).setName(s"margin-$iter").persist(storageLevel)
   }
 
   protected def predict(arr: Array[Double]): Double
 
-  protected def multiplier(q: VertexRDD[VD]): VertexRDD[VD]
+  protected def multiplier(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD])
 
-  protected def backward(q: VertexRDD[VD], iter: Int): (Double, VertexRDD[Array[Double]]) = {
-    val random: JavaRandom = new XORShiftRandom
+  protected def backward(q: VertexRDD[VD], iter: Int): (Long, Double, (Double, VertexRDD[Array[Double]])) = {
+    val (thisNumSamples, costSum, thisMulti) = multiplier(q, iter)
+    multi = thisMulti
+    val random: JavaRandom = new XORShiftRandom()
     random.setSeed(17425170 - iter - innerIter)
     val seed = random.nextLong()
     val mod = mask
-    val thisNumSamples = (1.0 / mask) * numSamples
-    multi = multiplier(q).setName(s"multiplier-$iter").persist(storageLevel)
     val gradW0 = multi.map(_._2.last).sum() / thisNumSamples
     val gradient = GraphImpl.fromExistingRDDs(multi, edges).aggregateMessages[Array[Double]](ctx => {
       val sampleId = ctx.dstId
-      val featureId = ctx.srcId
+      // val featureId = ctx.srcId
       if (mod == 1 || isSampled(random, seed, sampleId, iter, mod)) {
         val x = ctx.attr
         val Array(sumM, multi) = ctx.dstAttr
@@ -195,11 +182,11 @@ private[ml] abstract class FM extends Serializable with Logging {
         val m = backwardInterval(rank, x, sumM, multi, factors)
         ctx.sendToSrc(m) // send the multi directly
       }
-    }, forwardReduceInterval, TripletFields.All).mapValues { gradients =>
-      gradients.map(_ / thisNumSamples) // / numSamples
+    }, reduceInterval, TripletFields.All).mapValues { gradients =>
+      gradients.map(_ / thisNumSamples)
     }
     gradient.setName(s"gradient-$iter").persist(storageLevel)
-    (gradW0, gradient)
+    (thisNumSamples, costSum, (gradW0, gradient))
   }
 
   // Updater for L2 regularized problems
@@ -357,6 +344,7 @@ class FMClassification(
   }
 
   setDataSet(_dataSet)
+
   // assert(rank > 1, s"rank $rank less than 2")
 
   override protected def predict(arr: Array[Double]): Double = {
@@ -368,8 +356,12 @@ class FMClassification(
     new FMModel(rank, intercept, true, features)
   }
 
-  override protected def multiplier(q: VertexRDD[VD]): VertexRDD[VD] = {
-    dataSet.vertices.leftJoin(q) { (vid, data, deg) =>
+  override protected def multiplier(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD]) = {
+    val random: JavaRandom = new XORShiftRandom()
+    random.setSeed(17425170 - iter - innerIter)
+    val seed = random.nextLong()
+    val mod = mask
+    val multi = dataSet.vertices.leftJoin(q) { (vid, data, deg) =>
       deg match {
         case Some(m) =>
           val y = data.head
@@ -378,6 +370,13 @@ class FMClassification(
         case _ => data
       }
     }
+    multi.setName(s"multiplier-$iter").persist(storageLevel)
+    val Array(numSamples, costSum) = multi.filter { case (id, _) =>
+      isSampleId(id) && (mod == 1 || isSampled(random, seed, id, iter, mod))
+    }.map { case (_, arr) =>
+      Array(1.0, pow(arr.last, 2.0))
+    }.reduce(reduceInterval)
+    (numSamples.toLong, costSum, multi)
   }
 }
 
@@ -403,6 +402,7 @@ class FMRegression(
   }
 
   setDataSet(_dataSet)
+
   // assert(rank > 1, s"rank $rank less than 2")
 
   // val max = samples.map(_._2.head).max
@@ -415,17 +415,27 @@ class FMRegression(
     result
   }
 
-  override protected def multiplier(q: VertexRDD[VD]): VertexRDD[VD] = {
-    dataSet.vertices.leftJoin(q) { (vid, data, deg) =>
+  override protected def multiplier(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD]) = {
+    val random: JavaRandom = new XORShiftRandom()
+    random.setSeed(17425170 - iter - innerIter)
+    val seed = random.nextLong()
+    val mod = mask
+    val multi = dataSet.vertices.leftJoin(q) { (vid, data, deg) =>
       deg match {
         case Some(m) =>
           val y = data.head
-          // + Utils.random.nextGaussian()
           val diff = predict(m) - y
           Array(sumInterval(rank, m), diff * 2.0)
         case _ => data
       }
     }
+    multi.setName(s"multiplier-$iter").persist(storageLevel)
+    val Array(numSamples, costSum) = multi.filter { case (id, _) =>
+      isSampleId(id) && (mod == 1 || isSampled(random, seed, id, iter, mod))
+    }.map { case (_, arr) =>
+      Array(1.0, pow(arr.last / 2.0, 2.0))
+    }.reduce(reduceInterval)
+    (numSamples.toLong, costSum, multi)
   }
 }
 
@@ -500,7 +510,6 @@ object FM {
     input: RDD[(VertexId, LabeledPoint)],
     rank: Int,
     storageLevel: StorageLevel): Graph[VD, ED] = {
-    val numFeatures = input.first()._2.features.size
     val edges = input.flatMap { case (sampleId, labelPoint) =>
       // sample id
       val newId = newSampleId(sampleId)
@@ -519,7 +528,7 @@ object FM {
     } ++ edges.map(_.srcId).distinct().map { featureId =>
       // parameter point
       val parms = Array.fill(rank + 1) {
-        Utils.random.nextGaussian() * 1e-1
+        Utils.random.nextGaussian() * 1e-2
       }
       parms(0) = 0.0
       (featureId, parms)
@@ -534,8 +543,22 @@ object FM {
     newDataSet
   }
 
-  private[ml] def newSampleId(id: Long): VertexId = {
+  @inline private[ml] def newSampleId(id: Long): VertexId = {
     -(id + 1L)
+  }
+
+  @inline private[ml] def isSampleId(id: Long): Boolean = {
+    id < 0
+  }
+
+  @inline private[ml] def isSampled(
+    random: JavaRandom,
+    seed: Long,
+    sampleId: Long,
+    iter: Int,
+    mod: Int): Boolean = {
+    random.setSeed(seed * sampleId)
+    random.nextInt(mod) == iter % mod
   }
 
   /**
@@ -553,7 +576,7 @@ object FM {
     bias + arr(0) + 0.5 * sum
   }
 
-  private[ml] def forwardReduceInterval(a: VD, b: VD): VD = {
+  private[ml] def reduceInterval(a: VD, b: VD): VD = {
     var i = 0
     while (i < a.length) {
       a(i) += b(i)

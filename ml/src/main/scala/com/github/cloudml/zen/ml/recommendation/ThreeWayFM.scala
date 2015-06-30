@@ -77,9 +77,9 @@ private[ml] abstract class ThreeWayFM extends Serializable with Logging {
 
   def rank3: Int
 
-  def halfLife: Int = 20
+  def halfLife: Int = 40
 
-  def epsilon: Double = 1e-6
+  def epsilon: Double = 1e-6 / (numSamples + 1)
 
   def useAdaGrad: Boolean
 
@@ -118,7 +118,7 @@ private[ml] abstract class ThreeWayFM extends Serializable with Logging {
       vertices.count()
       dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      println(s"Train (Iteration $iter/$iterations) cost:               ${loss(margin)}")
+      logInfo(s"Train (Iteration $iter/$iterations) cost:               ${loss(margin)}")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
 
       previousVertices.unpersist(blocking = false)

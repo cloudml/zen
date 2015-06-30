@@ -74,9 +74,9 @@ private[ml] abstract class TF extends Serializable with Logging {
 
   def elasticNetParam: Double
 
-  def halfLife: Int = 20
+  def halfLife: Int = 40
 
-  def epsilon: Double = 1e-6
+  def epsilon: Double = 1e-6 / (numSamples + 1)
 
   def rank: Int
 

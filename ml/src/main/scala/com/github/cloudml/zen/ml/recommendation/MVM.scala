@@ -88,9 +88,9 @@ private[ml] abstract class MVM extends Serializable with Logging {
 
   def elasticNetParam: Double
 
-  def halfLife: Int = 20
+  def halfLife: Int = 40
 
-  def epsilon: Double = 1e-6
+  def epsilon: Double = 1e-6 / (numSamples + 1)
 
   def rank: Int
 
@@ -155,16 +155,6 @@ private[ml] abstract class MVM extends Serializable with Logging {
         ctx.sendToDst(result)
       }
     }, reduceInterval, TripletFields.Src).setName(s"margin-$iter").persist(storageLevel)
-  }
-
-  @inline private def isSampled(
-    random: JavaRandom,
-    seed: Long,
-    sampleId: Long,
-    iter: Int,
-    mod: Int): Boolean = {
-    random.setSeed(seed * sampleId)
-    random.nextInt(mod) == iter % mod
   }
 
   protected def predict(arr: Array[Double]): Double
@@ -583,8 +573,22 @@ object MVM {
     viewId.toInt
   }
 
-  private[ml] def newSampleId(id: Long): VertexId = {
+  @inline private[ml] def newSampleId(id: Long): VertexId = {
     -(id + 1L)
+  }
+
+  @inline private[ml] def isSampleId(id: Long): Boolean = {
+    id < 0
+  }
+
+  @inline private[ml] def isSampled(
+    random: JavaRandom,
+    seed: Long,
+    sampleId: Long,
+    iter: Int,
+    mod: Int): Boolean = {
+    random.setSeed(seed * sampleId)
+    random.nextInt(mod) == iter % mod
   }
 
   /**

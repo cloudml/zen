@@ -45,7 +45,7 @@ class FMModel(
       }
     }.join(factors).map { case (featureId, ((sampleId, x), w)) =>
       (sampleId, forwardInterval(k, x, w))
-    }.reduceByKey(forwardReduceInterval).map { case (sampleId, arr) =>
+    }.reduceByKey(reduceInterval).map { case (sampleId, arr) =>
       var result = predictInterval(k, intercept, arr)
       if (classification) {
         result = 1.0 / (1.0 + math.exp(-result))
