@@ -33,7 +33,7 @@ object MovieLensMVM {
     out: String = null,
     numIterations: Int = 40,
     stepSize: Double = 0.1,
-    regular: String = "0.01,0.01,0.01",
+    regular: Double = 0.05,
     rank: Int = 20,
     useAdaGrad: Boolean = false,
     kryo: Boolean = false) extends AbstractParams[Params]
@@ -54,12 +54,9 @@ object MovieLensMVM {
       opt[Double]("stepSize")
         .text(s"stepSize, default: ${defaultParams.stepSize}")
         .action((x, c) => c.copy(stepSize = x))
-      opt[String]("regular")
+      opt[Double]("regular")
         .text(
-          s"""
-             |'r0,r1,r2' for SGD and ALS: r0=bias regularization,
-             |r1=1-way regularization, r2=2-way regularization, default: ${defaultParams.regular} (auto)
-           """.stripMargin)
+          s"L2 regularization, default: ${defaultParams.regular}".stripMargin)
         .action((x, c) => c.copy(regular = x))
       opt[Unit]("adagrad")
         .text("use AdaGrad")
@@ -92,15 +89,8 @@ object MovieLensMVM {
   }
 
   def run(params: Params): Unit = {
-    val Params(
-    input,
-    out,
-    numIterations,
-    stepSize,
-    regular,
-    rank,
-    useAdaGrad,
-    kryo) = params
+    val Params(input, out, numIterations, stepSize, regular, rank, useAdaGrad, kryo) = params
+    val checkpointDir = s"$out/checkpoint"
     val conf = new SparkConf().setAppName(s"MVM with $params")
     if (kryo) {
       GraphXUtils.registerKryoClasses(conf)
@@ -108,6 +98,7 @@ object MovieLensMVM {
     }
     Logger.getRootLogger.setLevel(Level.WARN)
     val sc = new SparkContext(conf)
+    sc.setCheckpointDir(checkpointDir)
     val movieLens = sc.textFile(input).mapPartitions { iter =>
       iter.filter(t => !t.startsWith("userId") && !t.isEmpty).map { line =>
         val Array(userId, movieId, rating, timestamp) = line.split("::")
@@ -117,6 +108,13 @@ object MovieLensMVM {
     val maxMovieId = movieLens.map(_._2._1).max + 1
     val maxUserId = movieLens.map(_._1).max + 1
     val numFeatures = maxUserId + 2 * maxMovieId
+
+    /**
+     * The first view contains [0,maxUserId),The second view contains [maxUserId, maxMovieId + maxUserId)...
+     * The third contains [maxMovieId + maxUserId,numFeatures)  The last id equals the number of features
+     */
+    val views = Array(maxUserId, maxMovieId + maxUserId, numFeatures).map(_.toLong)
+
     val dataSet = movieLens.map { case (userId, (movieId, rating)) =>
       val sv = BSV.zeros[Double](maxMovieId)
       sv(movieId) = rating
@@ -136,9 +134,7 @@ object MovieLensMVM {
     dataSet.count()
     movieLens.unpersist()
 
-    val regs = regular.split(",").map(_.toDouble)
-    val l2 = (regs(0), regs(1), regs(2))
-    val model = MVM.trainRegression(dataSet, numIterations, stepSize, l2, rank, useAdaGrad, 1.0)
+    val model = MVM.trainRegression(dataSet, numIterations, stepSize, views, regular, 0.0, rank, useAdaGrad, 1.0)
     model.save(sc, out)
   }
 }

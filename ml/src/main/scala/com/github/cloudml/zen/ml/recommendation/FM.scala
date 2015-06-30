@@ -485,7 +485,7 @@ object FM {
       val features = labelPoint.features
       features.activeIterator.filter(_._2 != 0.0).map { case (featureId, value) =>
         Edge(featureId, newId, value)
-      } ++ Array(Edge(numFeatures, newId, 1D))
+      }
     }.persist(storageLevel)
     edges.count()
 
