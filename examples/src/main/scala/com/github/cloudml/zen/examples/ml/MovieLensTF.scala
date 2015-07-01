@@ -24,7 +24,7 @@ import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{Logging, SparkConf, SparkContext}
 import scopt.OptionParser
 
-object MovieLensMVM extends Logging {
+object MovieLensTF extends Logging {
 
   case class Params(
     input: String = null,
@@ -38,8 +38,8 @@ object MovieLensMVM extends Logging {
 
   def main(args: Array[String]) {
     val defaultParams = Params()
-    val parser = new OptionParser[Params]("MVM") {
-      head("MovieLensMVM: an example app for MVM.")
+    val parser = new OptionParser[Params]("TF") {
+      head("MovieLensTF: an example app for TF.")
       opt[Int]("numIterations")
         .text(s"number of iterations, default: ${defaultParams.numIterations}")
         .action((x, c) => c.copy(numIterations = x))
@@ -69,13 +69,13 @@ object MovieLensMVM extends Logging {
         .action((x, c) => c.copy(out = x))
       note(
         """
-          | For example, the following command runs this app on a synthetic dataset:
+          |For example, the following command runs this app on a synthetic dataset:
           |
           | bin/spark-submit --class com.github.cloudml.zen.examples.ml.MovieLensMVM \
           | examples/target/scala-*/zen-examples-*.jar \
-          | --rank 20 --numIterations 50 --regular 0.01,0.01,0.01 --kryo \
+          | --rank 10 --numIterations 50 --regular 0.01,0.01,0.01 --kryo \
           | data/mllib/sample_movielens_data.txt
-          | data/mllib/MVM_model
+          | data/mllib/TF_model
         """.stripMargin)
     }
 
@@ -89,7 +89,7 @@ object MovieLensMVM extends Logging {
   def run(params: Params): Unit = {
     val Params(input, out, numIterations, stepSize, regular, rank, useAdaGrad, kryo) = params
     val checkpointDir = s"$out/checkpoint"
-    val conf = new SparkConf().setAppName(s"MVM with $params")
+    val conf = new SparkConf().setAppName(s"TF with $params")
     if (kryo) {
       GraphXUtils.registerKryoClasses(conf)
       // conf.set("spark.kryoserializer.buffer.mb", "8")

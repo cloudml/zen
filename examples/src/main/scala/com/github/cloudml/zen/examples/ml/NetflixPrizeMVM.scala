@@ -23,12 +23,12 @@ import org.apache.spark.graphx.GraphXUtils
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.storage.StorageLevel
-import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.{Logging, SparkConf, SparkContext}
 import scopt.OptionParser
 
 import scala.collection.mutable.ArrayBuffer
 
-object NetflixPrizeMVM {
+object NetflixPrizeMVM  extends Logging{
 
   case class Params(
     input: String = null,
@@ -165,6 +165,9 @@ object NetflixPrizeMVM {
     fm.run(numIterations)
     val model = fm.saveModel()
     model.save(sc, out)
-    println(f"Test RMSE: ${model.loss(testSet)}%1.4f")
+    val rmse = model.loss(testSet)
+    logInfo(f"Test RMSE: $rmse%1.4f")
+    sc.stop()
+    println(f"Test RMSE: $rmse%1.4f")
   }
 }

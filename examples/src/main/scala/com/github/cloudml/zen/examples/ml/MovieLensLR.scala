@@ -17,14 +17,17 @@
 package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
-import com.github.cloudml.zen.ml.recommendation.MVM
+import com.github.cloudml.zen.ml.regression.LinearRegression
 import org.apache.spark.graphx.GraphXUtils
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
+import org.apache.spark.mllib.regression.{LabeledPoint, LinearRegressionModel}
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{Logging, SparkConf, SparkContext}
 import scopt.OptionParser
 
-object MovieLensMVM extends Logging {
+import scala.math._
+
+object MovieLensLR extends Logging {
 
   case class Params(
     input: String = null,
@@ -32,20 +35,16 @@ object MovieLensMVM extends Logging {
     numIterations: Int = 40,
     stepSize: Double = 0.1,
     regular: Double = 0.05,
-    rank: Int = 20,
     useAdaGrad: Boolean = true,
     kryo: Boolean = true) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
     val defaultParams = Params()
-    val parser = new OptionParser[Params]("MVM") {
-      head("MovieLensMVM: an example app for MVM.")
+    val parser = new OptionParser[Params]("LinearRegression") {
+      head("MovieLensLR: an example app for LinearRegression.")
       opt[Int]("numIterations")
         .text(s"number of iterations, default: ${defaultParams.numIterations}")
         .action((x, c) => c.copy(numIterations = x))
-      opt[Int]("rank")
-        .text(s"dim of 3-way interactions, default: ${defaultParams.rank}")
-        .action((x, c) => c.copy(rank = x))
       opt[Unit]("kryo")
         .text("use Kryo serialization")
         .action((_, c) => c.copy(kryo = true))
@@ -71,11 +70,11 @@ object MovieLensMVM extends Logging {
         """
           | For example, the following command runs this app on a synthetic dataset:
           |
-          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.MovieLensMVM \
+          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.MovieLensLR \
           | examples/target/scala-*/zen-examples-*.jar \
-          | --rank 20 --numIterations 50 --regular 0.01,0.01,0.01 --kryo \
+          | --rank 10 --numIterations 50 --regular 0.01,0.01,0.01 --kryo \
           | data/mllib/sample_movielens_data.txt
-          | data/mllib/MVM_model
+          | data/mllib/LR_model
         """.stripMargin)
     }
 
@@ -87,25 +86,29 @@ object MovieLensMVM extends Logging {
   }
 
   def run(params: Params): Unit = {
-    val Params(input, out, numIterations, stepSize, regular, rank, useAdaGrad, kryo) = params
+    val Params(input, out, numIterations, stepSize, regParam, useAdaGrad, kryo) = params
     val checkpointDir = s"$out/checkpoint"
-    val conf = new SparkConf().setAppName(s"MVM with $params")
+    val conf = new SparkConf().setAppName(s"LinearRegression with $params")
     if (kryo) {
       GraphXUtils.registerKryoClasses(conf)
       // conf.set("spark.kryoserializer.buffer.mb", "8")
     }
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
-    val (dataSet, views) = MovieLensUtils.genSamplesWithTime(sc, input)
+    val (dataSet, _) = MovieLensUtils.genSamplesWithTime(sc, input)
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
     trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
     testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
-    dataSet.unpersist()
 
-    val model = MVM.trainRegression(trainSet, numIterations, stepSize, views,
-      regular, 0.0, rank, useAdaGrad, 1.0)
-    model.save(sc, out)
-    val rmse = model.loss(testSet)
+    val lr = new LinearRegression(trainSet, stepSize, regParam, useAdaGrad, StorageLevel.MEMORY_AND_DISK)
+    lr.run(numIterations)
+    val model = lr.saveModel()
+    val lm = new LinearRegressionModel(model.weights, model.intercept)
+    lm.save(sc, out)
+    val sum = testSet.map { case (_, LabeledPoint(label, features)) =>
+      pow(label - model.predict(features), 2)
+    }.reduce(_ + _)
+    val rmse = sqrt(sum / testSet.count())
     logInfo(f"Test RMSE: $rmse%1.4f")
     sc.stop()
     println(f"Test RMSE: $rmse%1.4f")
