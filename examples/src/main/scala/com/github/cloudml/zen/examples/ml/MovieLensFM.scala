@@ -104,9 +104,11 @@ object MovieLensFM {
     val sc = new SparkContext(conf)
     val checkpointDir = s"$out/checkpoint"
     sc.setCheckpointDir(checkpointDir)
+    val line = sc.textFile(input).first()
+    val splitString = if (line.contains(",")) "," else "::"
     val movieLens = sc.textFile(input).mapPartitions { iter =>
       iter.filter(t => !t.startsWith("userId") && !t.isEmpty).map { line =>
-        val Array(userId, movieId, rating, timestamp) = line.split("::")
+        val Array(userId, movieId, rating, timestamp) = line.split(splitString)
         (userId.toInt, (movieId.toInt, rating.toDouble))
       }
     }.persist(StorageLevel.MEMORY_AND_DISK)
