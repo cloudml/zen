@@ -98,7 +98,6 @@ object NetflixPrizeMVM  extends Logging{
       GraphXUtils.registerKryoClasses(conf)
       // conf.set("spark.kryoserializer.buffer.mb", "8")
     }
-    Logger.getRootLogger.setLevel(Level.WARN)
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
 
