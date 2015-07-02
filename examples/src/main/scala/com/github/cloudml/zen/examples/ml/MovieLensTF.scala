@@ -100,12 +100,7 @@ object MovieLensTF extends Logging {
     }
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
-    val (dataSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
-    val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
-    trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
-    testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
-    dataSet.unpersist()
-
+    val (trainSet, testSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
     val model = MVM.trainRegression(trainSet, numIterations, stepSize, views,
       regular, 0.0, rank, useAdaGrad, 1.0)
     model.save(sc, out)

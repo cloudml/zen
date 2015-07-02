@@ -109,13 +109,8 @@ object MovieLensThreeWayFM extends Logging {
     val sc = new SparkContext(conf)
     val checkpointDir = s"$out/checkpoint"
     sc.setCheckpointDir(checkpointDir)
-    val (dataSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
-    val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
-    trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
-    testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
-    dataSet.unpersist()
-
-    val model = ThreeWayFM.trainRegression(dataSet, numIterations, stepSize, views, l2, rank2, rank3, useAdaGrad, 1.0)
+    val (trainSet, testSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
+    val model = ThreeWayFM.trainRegression(trainSet, numIterations, stepSize, views, l2, rank2, rank3, useAdaGrad, 1.0)
     model.save(sc, out)
     val rmse = model.loss(testSet)
     logInfo(f"Test RMSE: $rmse%1.4f")
