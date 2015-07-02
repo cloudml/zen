@@ -90,7 +90,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
 
   def halfLife: Int = 40
 
-  def epsilon: Double = 1e-6 / (numSamples + 1)
+  def epsilon: Double = 1e-6
 
   def rank: Int
 
@@ -126,7 +126,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
       dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
       val rmse = sqrt(costSum / thisNumSamples)
-      logInfo(s"(Iteration $iter/$iterations) RMSE:                     $rmse")
+      println(s"(Iteration $iter/$iterations) RMSE:                     $rmse")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
 
       previousVertices.unpersist(blocking = false)
@@ -176,12 +176,13 @@ private[ml] abstract class MVM extends Serializable with Logging {
         val arr = ctx.dstAttr
         val viewId = featureId2viewId(featureId, views)
         val m = backwardInterval(rank, viewId, x, arr, arr.last)
-        // send the multi directly
+        val deg = ctx.srcAttr.last
+        for (i <- m.indices) {
+          m(i) /= deg
+        }
         ctx.sendToSrc(m)
       }
-    }, reduceInterval, TripletFields.Dst).mapValues { gradients =>
-      gradients.map(_ / thisNumSamples)
-    }
+    }, reduceInterval, TripletFields.All)
     (thisNumSamples, costSum, gradient.setName(s"gradient-$iter").persist(storageLevel))
   }
 

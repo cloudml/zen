@@ -92,7 +92,7 @@ private[ml] abstract class BSFM extends Serializable with Logging {
 
   def halfLife: Int = 40
 
-  def epsilon: Double = 1e-6 / (numSamples + 1)
+  def epsilon: Double = 1e-6
 
   def intercept: Double = {
     bias
