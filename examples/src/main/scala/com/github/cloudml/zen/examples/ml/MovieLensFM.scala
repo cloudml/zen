@@ -115,7 +115,7 @@ object MovieLensFM extends Logging {
     model.save(sc, out)
     val rmse = model.loss(testSet)
     logInfo(f"Test RMSE: $rmse%1.4f")
-    sc.stop()
     println(f"Test RMSE: $rmse%1.4f")
+    sc.stop()
   }
 }
