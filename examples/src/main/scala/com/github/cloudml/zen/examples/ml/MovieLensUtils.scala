@@ -37,7 +37,7 @@ private[zen] object MovieLensUtils {
     var movieLens = sc.textFile(dataFile).mapPartitions { iter =>
       iter.filter(t => !t.startsWith("userId") && !t.isEmpty).map { line =>
         val Array(userId, movieId, rating, timestamp) = line.split(splitString)
-        (userId.toInt, movieId.toInt, rating.toDouble, timestamp.toInt / (60 * 60 * 24))
+        (userId.toInt, movieId.toInt, rating.toDouble, timestamp.toInt)
       }
     }
     if (numPartitions > 0) {
@@ -46,18 +46,19 @@ private[zen] object MovieLensUtils {
     }
     movieLens.persist(newLevel)
 
+    val daySeconds = 60 * 60 * 24
     val maxUserId = movieLens.map(_._1).max + 1
     val maxMovieId = movieLens.map(_._2).max + 1
-    val maxDay = movieLens.map(_._4).max()
-    val minDay = movieLens.map(_._4).min()
-    val day = maxDay - minDay + 1
-    val numFeatures = maxUserId + maxMovieId + day
+    val maxTime = movieLens.map(_._4 / daySeconds).max()
+    val minTime = movieLens.map(_._4 / daySeconds).min()
+    val maxDay = maxTime - minTime + 1
+    val numFeatures = maxUserId + maxMovieId + maxDay
 
     val dataSet = movieLens.map { case (userId, movieId, rating, timestamp) =>
       val sv = BSV.zeros[Double](numFeatures)
       sv(userId) = 1.0
       sv(movieId + maxUserId) = 1.0
-      sv(timestamp - minDay + maxUserId + maxMovieId) = 1.0
+      sv(timestamp / daySeconds - minTime + maxUserId + maxMovieId) = 1.0
       val gen = (1125899906842597L * timestamp).abs
       val labeledPoint = new LabeledPoint(rating,
         new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
