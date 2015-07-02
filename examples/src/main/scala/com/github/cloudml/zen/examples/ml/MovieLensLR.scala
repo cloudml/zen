@@ -114,7 +114,7 @@ object MovieLensLR extends Logging {
     }.reduce(_ + _)
     val rmse = sqrt(sum / testSet.count())
     logInfo(f"Test RMSE: $rmse%1.4f")
-    sc.stop()
     println(f"Test RMSE: $rmse%1.4f")
+    sc.stop()
   }
 }
