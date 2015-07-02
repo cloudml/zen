@@ -176,13 +176,11 @@ private[ml] abstract class MVM extends Serializable with Logging {
         val arr = ctx.dstAttr
         val viewId = featureId2viewId(featureId, views)
         val m = backwardInterval(rank, viewId, x, arr, arr.last)
-        val deg = ctx.srcAttr.last
-        for (i <- m.indices) {
-          m(i) /= deg
-        }
         ctx.sendToSrc(m)
       }
-    }, reduceInterval, TripletFields.All)
+    }, reduceInterval, TripletFields.Dst).mapValues { gradients =>
+      gradients.map(_ / thisNumSamples)
+    }
     (thisNumSamples, costSum, gradient.setName(s"gradient-$iter").persist(storageLevel))
   }
 
