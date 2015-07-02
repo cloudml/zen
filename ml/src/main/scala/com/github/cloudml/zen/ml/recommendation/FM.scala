@@ -318,6 +318,8 @@ private[ml] abstract class FM extends Serializable with Logging {
     val sc = vertices.sparkContext
     if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
       vertices.checkpoint()
+      System.gc()
+      System.runFinalization()
     }
   }
 }
