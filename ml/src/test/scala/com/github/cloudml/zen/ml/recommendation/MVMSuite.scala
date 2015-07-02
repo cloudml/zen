@@ -469,7 +469,7 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     movieLens.unpersist()
 
     val stepSize = 0.1
-    val numIterations = 50
+    val numIterations = 200
     val regParam = 0.05
     val l2 = (regParam, regParam, regParam)
     val rank = 10
@@ -479,11 +479,11 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
     testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
 
-    //    val fm = new MVMRegression(trainSet, stepSize, Array(maxUserId, numFeatures),
-    //      regParam, 0.0, rank, useAdaGrad, miniBatchFraction)
+    val fm = new MVMRegression(trainSet, stepSize, Array(maxUserId, numFeatures),
+      regParam, 0.0, rank, useAdaGrad, miniBatchFraction)
 
-    val fm = new FMRegression(trainSet, stepSize, l2, rank, useAdaGrad,
-      miniBatchFraction, StorageLevel.MEMORY_AND_DISK)
+    //    val fm = new FMRegression(trainSet, stepSize, l2, rank, useAdaGrad,
+    //      miniBatchFraction, StorageLevel.MEMORY_AND_DISK)
 
     //    val fm = new BSFMRegression(trainSet, stepSize, Array(maxUserId, numFeatures),
     //      l2, rank, useAdaGrad, miniBatchFraction)
