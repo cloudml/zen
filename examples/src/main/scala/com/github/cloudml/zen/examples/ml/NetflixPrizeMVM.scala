@@ -28,12 +28,13 @@ import scopt.OptionParser
 
 import scala.collection.mutable.ArrayBuffer
 
-object NetflixPrizeMVM  extends Logging{
+object NetflixPrizeMVM extends Logging {
 
   case class Params(
     input: String = null,
     out: String = null,
     numIterations: Int = 200,
+    numPartitions: Int = -1,
     stepSize: Double = 0.05,
     regular: Double = 0.01,
     rank: Int = 64,
@@ -47,6 +48,9 @@ object NetflixPrizeMVM  extends Logging{
       opt[Int]("numIterations")
         .text(s"number of iterations, default: ${defaultParams.numIterations}")
         .action((x, c) => c.copy(numIterations = x))
+      opt[Int]("numPartitions")
+        .text(s"number of partitions, default: ${defaultParams.numPartitions}")
+        .action((x, c) => c.copy(numPartitions = x))
       opt[Int]("rank")
         .text(s"dim of 2-way interactions, default: ${defaultParams.rank}")
         .action((x, c) => c.copy(rank = x))
@@ -91,7 +95,7 @@ object NetflixPrizeMVM  extends Logging{
   }
 
   def run(params: Params): Unit = {
-    val Params(input, out, numIterations, stepSize, regular, rank, useAdaGrad, kryo) = params
+    val Params(input, out, numIterations, numPartitions, stepSize, regular, rank, useAdaGrad, kryo) = params
     val checkpointDir = s"$out/checkpoint"
     val conf = new SparkConf().setAppName(s"MVM with $params")
     if (kryo) {
@@ -119,13 +123,17 @@ object NetflixPrizeMVM  extends Logging{
       ab.toSeq
     }.collect().toSet
 
-    val nfPrize = sc.wholeTextFiles(dataSetFile).flatMap { case (fileName, txt) =>
+    var nfPrize = sc.wholeTextFiles(dataSetFile).flatMap { case (fileName, txt) =>
       val Array(movieId, csv) = txt.split(":")
       csv.split("\n").filter(_.nonEmpty).map { line =>
         val Array(userId, rating, timestamp) = line.split(",")
         ((userId.toInt, movieId.toInt), rating.toDouble)
       }
-    }.repartition(sc.defaultParallelism).persist(StorageLevel.MEMORY_AND_DISK)
+    }
+    if (numPartitions > 0) {
+      nfPrize = nfPrize.repartition(numPartitions)
+    }
+    nfPrize.persist(StorageLevel.MEMORY_AND_DISK)
 
     val maxUserId = nfPrize.map(_._1._1).max + 1
     val maxMovieId = nfPrize.map(_._1._2).max + 1

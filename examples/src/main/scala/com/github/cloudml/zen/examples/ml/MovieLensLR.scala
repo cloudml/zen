@@ -33,6 +33,7 @@ object MovieLensLR extends Logging {
     input: String = null,
     out: String = null,
     numIterations: Int = 40,
+    numPartitions: Int = -1,
     stepSize: Double = 0.1,
     regular: Double = 0.05,
     useAdaGrad: Boolean = true,
@@ -45,6 +46,9 @@ object MovieLensLR extends Logging {
       opt[Int]("numIterations")
         .text(s"number of iterations, default: ${defaultParams.numIterations}")
         .action((x, c) => c.copy(numIterations = x))
+      opt[Int]("numPartitions")
+        .text(s"number of partitions, default: ${defaultParams.numPartitions}")
+        .action((x, c) => c.copy(numPartitions = x))
       opt[Unit]("kryo")
         .text("use Kryo serialization")
         .action((_, c) => c.copy(kryo = true))
@@ -86,7 +90,7 @@ object MovieLensLR extends Logging {
   }
 
   def run(params: Params): Unit = {
-    val Params(input, out, numIterations, stepSize, regParam, useAdaGrad, kryo) = params
+    val Params(input, out, numIterations, numPartitions, stepSize, regParam, useAdaGrad, kryo) = params
     val checkpointDir = s"$out/checkpoint"
     val conf = new SparkConf().setAppName(s"LinearRegression with $params")
     if (kryo) {
@@ -95,7 +99,7 @@ object MovieLensLR extends Logging {
     }
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
-    val (dataSet, _) = MovieLensUtils.genSamplesWithTime(sc, input)
+    val (dataSet, _) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
     trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
     testSet.persist(StorageLevel.MEMORY_AND_DISK).count()

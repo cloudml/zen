@@ -30,6 +30,7 @@ object MovieLensTF extends Logging {
     input: String = null,
     out: String = null,
     numIterations: Int = 40,
+    numPartitions: Int = -1,
     stepSize: Double = 0.1,
     regular: Double = 0.05,
     rank: Int = 20,
@@ -43,6 +44,9 @@ object MovieLensTF extends Logging {
       opt[Int]("numIterations")
         .text(s"number of iterations, default: ${defaultParams.numIterations}")
         .action((x, c) => c.copy(numIterations = x))
+      opt[Int]("numPartitions")
+        .text(s"number of partitions, default: ${defaultParams.numPartitions}")
+        .action((x, c) => c.copy(numPartitions = x))
       opt[Int]("rank")
         .text(s"dim of 3-way interactions, default: ${defaultParams.rank}")
         .action((x, c) => c.copy(rank = x))
@@ -87,7 +91,7 @@ object MovieLensTF extends Logging {
   }
 
   def run(params: Params): Unit = {
-    val Params(input, out, numIterations, stepSize, regular, rank, useAdaGrad, kryo) = params
+    val Params(input, out, numIterations, numPartitions, stepSize, regular, rank, useAdaGrad, kryo) = params
     val checkpointDir = s"$out/checkpoint"
     val conf = new SparkConf().setAppName(s"TF with $params")
     if (kryo) {
@@ -96,7 +100,7 @@ object MovieLensTF extends Logging {
     }
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
-    val (dataSet, views) = MovieLensUtils.genSamplesWithTime(sc, input)
+    val (dataSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
     trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
     testSet.persist(StorageLevel.MEMORY_AND_DISK).count()

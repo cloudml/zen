@@ -29,15 +29,21 @@ private[zen] object MovieLensUtils {
   def genSamplesWithTime(
     sc: SparkContext,
     dataFile: String,
+    numPartitions: Int = -1,
     newLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): (RDD[(Long, LabeledPoint)], Array[Long]) = {
     val line = sc.textFile(dataFile).first()
     val splitString = if (line.contains(",")) "," else "::"
-    val movieLens = sc.textFile(dataFile).mapPartitions { iter =>
+    var movieLens = sc.textFile(dataFile).mapPartitions { iter =>
       iter.filter(t => !t.startsWith("userId") && !t.isEmpty).map { line =>
         val Array(userId, movieId, rating, timestamp) = line.split(splitString)
         (userId.toInt, movieId.toInt, rating.toDouble, timestamp.toInt / (60 * 60 * 24))
       }
-    }.persist(newLevel)
+    }
+    if (numPartitions > 0) {
+      movieLens = movieLens.repartition(numPartitions)
+    }
+    movieLens.persist(newLevel)
+
     val maxUserId = movieLens.map(_._1).max + 1
     val maxMovieId = movieLens.map(_._2).max + 1
     val maxDay = movieLens.map(_._4).max()
