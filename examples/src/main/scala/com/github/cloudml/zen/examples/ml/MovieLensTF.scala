@@ -17,7 +17,7 @@
 package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
-import com.github.cloudml.zen.ml.recommendation.MVM
+import com.github.cloudml.zen.ml.recommendation.TF
 import org.apache.spark.graphx.GraphXUtils
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
 import org.apache.spark.storage.StorageLevel
@@ -75,7 +75,7 @@ object MovieLensTF extends Logging {
         """
           |For example, the following command runs this app on a synthetic dataset:
           |
-          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.MovieLensMVM \
+          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.MovieLensTF \
           | examples/target/scala-*/zen-examples-*.jar \
           | --rank 10 --numIterations 50 --regular 0.01,0.01,0.01 --kryo \
           | data/mllib/sample_movielens_data.txt
@@ -101,7 +101,7 @@ object MovieLensTF extends Logging {
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
     val (trainSet, testSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
-    val model = MVM.trainRegression(trainSet, numIterations, stepSize, views,
+    val model = TF.trainRegression(trainSet, numIterations, stepSize, views,
       regular, 0.0, rank, useAdaGrad, 1.0)
     model.save(sc, out)
     val rmse = model.loss(testSet)
