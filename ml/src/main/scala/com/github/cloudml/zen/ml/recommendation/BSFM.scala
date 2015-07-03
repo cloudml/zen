@@ -125,7 +125,7 @@ private[ml] abstract class BSFM extends Serializable with Logging {
       vertices.count()
       dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      logInfo(s"Train (Iteration $iter/$iterations) cost:               ${loss(margin)}")
+      logInfo(s"Train (Iteration $iter/$iterations) RMSE:               ${loss(margin)}")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
 
       previousVertices.unpersist(blocking = false)
@@ -321,6 +321,7 @@ private[ml] abstract class BSFM extends Serializable with Logging {
     val sc = vertices.sparkContext
     if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
       vertices.checkpoint()
+      vertices.count()
       System.gc()
       System.runFinalization()
     }

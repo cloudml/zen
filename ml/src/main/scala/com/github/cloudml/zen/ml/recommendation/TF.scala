@@ -298,6 +298,7 @@ private[ml] abstract class TF extends Serializable with Logging {
     val sc = vertices.sparkContext
     if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
       vertices.checkpoint()
+      vertices.count()
       System.gc()
       System.runFinalization()
     }
