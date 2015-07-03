@@ -101,7 +101,7 @@ object MovieLensThreeWayFM extends Logging {
     val Params(input, out, numIterations, numPartitions, stepSize, regular, rank2, rank3, useAdaGrad, kryo) = params
     val regs = regular.split(",").map(_.toDouble)
     val l2 = (regs(0), regs(1), regs(2), regs(3))
-    val conf = new SparkConf().setAppName(s"PartialMVM with $params")
+    val conf = new SparkConf().setAppName(s"ThreeWayFM with $params")
     if (kryo) {
       GraphXUtils.registerKryoClasses(conf)
       // conf.set("spark.kryoserializer.buffer.mb", "8")
