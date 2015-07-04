@@ -158,6 +158,7 @@ abstract class LogisticRegression(
     }
     if (useAdaGrad) {
       val delta = adaGrad(gradientSum, gradient, 1e-4, 1.0)
+      checkpointGradientSum(delta)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
 
       gradient.unpersist(blocking = false)
@@ -166,7 +167,6 @@ abstract class LogisticRegression(
 
       if (gradientSum != null) gradientSum.unpersist(blocking = false)
       gradientSum = delta.mapValues(_.last).setName(s"deltaSum-$iter").persist(storageLevel)
-      checkpointGradientSum()
       gradientSum.count()
       delta.unpersist(blocking = false)
       newGradient
@@ -260,19 +260,16 @@ abstract class LogisticRegression(
     val sc = vertices.sparkContext
     if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
       vertices.checkpoint()
-      vertices.count()
-      System.gc()
-      System.runFinalization()
     }
   }
 
-  protected def checkpointGradientSum(): Unit = {
-    val sc = gradientSum.sparkContext
+  protected def checkpointGradientSum(delta: VertexRDD[Array[Double]]): Unit = {
+    val sc = delta.sparkContext
     if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
-      if (gradientSum != null) gradientSum.checkpoint()
-      if (deltaSum != null) deltaSum.checkpoint()
+      delta.checkpoint()
     }
   }
+
 
   protected def unpersistVertices(): Unit = {
     if (previousVertices != null) previousVertices.unpersist(blocking = false)

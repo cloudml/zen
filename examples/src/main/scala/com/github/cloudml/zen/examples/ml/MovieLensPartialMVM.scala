@@ -105,6 +105,7 @@ object MovieLensPartialMVM extends Logging {
     val sc = new SparkContext(conf)
     val checkpointDir = s"$out/checkpoint"
     sc.setCheckpointDir(checkpointDir)
+    MovieLensUtils.gcCleaner(60 * 10, 60 * 10, "MovieLensPartialMVM")
     val (trainSet, testSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
     val model = PartialMVM.trainRegression(trainSet, numIterations, stepSize, views, l2, rank, useAdaGrad, 1.0)
     model.save(sc, out)

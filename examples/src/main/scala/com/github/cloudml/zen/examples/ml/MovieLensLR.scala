@@ -99,6 +99,7 @@ object MovieLensLR extends Logging {
     }
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
+    MovieLensUtils.gcCleaner(60 * 10, 60 * 10, "MovieLensLR")
 
     val (trainSet, testSet, _) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
     val lr = new LinearRegression(trainSet, stepSize, regParam, useAdaGrad, StorageLevel.MEMORY_AND_DISK)

@@ -17,14 +17,49 @@
 
 package com.github.cloudml.zen.examples.ml
 
+import java.util.{Timer, TimerTask}
+import java.lang.ref.WeakReference
 import breeze.linalg.{SparseVector => BSV}
-import org.apache.spark.SparkContext
+import org.apache.spark.{Logging, SparkContext}
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 
-private[zen] object MovieLensUtils {
+private[zen] object MovieLensUtils extends Logging {
+
+  def gcCleaner(delaydSeconds: Int, periodSeconds: Int, tag: String) {
+    val timer = new Timer(tag + " cleanup timer", true)
+    val task = new TimerTask {
+      override def run() {
+        try {
+          runGC
+          logInfo("Ran metadata cleaner for " + tag)
+        } catch {
+          case e: Exception => logError("Error running cleanup task for " + tag, e)
+        }
+      }
+
+      /** Run GC and make sure it actually has run */
+      def runGC() {
+        val weakRef = new WeakReference(new Object())
+        val startTime = System.currentTimeMillis
+        System.gc() // Make a best effort to run the garbage collection. It *usually* runs GC.
+        // Wait until a weak reference object has been GCed
+        System.runFinalization()
+        while (weakRef.get != null) {
+          System.gc()
+          System.runFinalization()
+          Thread.sleep(200)
+          if (System.currentTimeMillis - startTime > 10000) {
+            throw new Exception("automatically cleanup error")
+          }
+        }
+      }
+    }
+
+    timer.schedule(task, delaydSeconds * 1000, periodSeconds * 1000)
+  }
 
   def genSamplesWithTime(
     sc: SparkContext,

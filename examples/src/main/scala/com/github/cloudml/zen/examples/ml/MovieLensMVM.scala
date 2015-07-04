@@ -100,6 +100,7 @@ object MovieLensMVM extends Logging {
     }
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
+    MovieLensUtils.gcCleaner(60 * 10, 60 * 10, "MovieLensMVM")
     val (trainSet, testSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
     val model = MVM.trainRegression(trainSet, numIterations, stepSize, views,
       regular, 0.0, rank, useAdaGrad, 1.0)

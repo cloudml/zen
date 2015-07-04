@@ -219,6 +219,7 @@ private[ml] abstract class FM extends Serializable with Logging {
       val rho = math.exp(-math.log(2.0) / halfLife)
       val (newW0Grad, newW0Sum, delta) = adaGrad(gradientSum, gradient, epsilon, rho)
       // val (newW0Grad, newW0Sum, delta) = esgd(gradientSum, gradient, epsilon, iter)
+      checkpointGradientSum(delta)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
 
       gradient._2.unpersist(blocking = false)
@@ -228,7 +229,6 @@ private[ml] abstract class FM extends Serializable with Logging {
 
       if (gradientSum != null) gradientSum._2.unpersist(blocking = false)
       gradientSum = (newW0Sum, delta.mapValues(_._2).setName(s"gradientSum-$iter").persist(storageLevel))
-      checkpointGradientSum()
       gradientSum._2.count()
       delta.unpersist(blocking = false)
       (newW0Grad, newGradient)
@@ -307,10 +307,10 @@ private[ml] abstract class FM extends Serializable with Logging {
     (newW0Grad, newW0Sum, newGradSumWithoutW0)
   }
 
-  protected def checkpointGradientSum(): Unit = {
-    val sc = gradientSum._2.sparkContext
+  protected def checkpointGradientSum(delta: VertexRDD[(Array[Double], Array[Double])]): Unit = {
+    val sc = delta.sparkContext
     if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
-      gradientSum._2.checkpoint()
+      delta.checkpoint()
     }
   }
 
@@ -318,9 +318,6 @@ private[ml] abstract class FM extends Serializable with Logging {
     val sc = vertices.sparkContext
     if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
       vertices.checkpoint()
-      vertices.count()
-      System.gc()
-      System.runFinalization()
     }
   }
 }

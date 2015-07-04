@@ -79,7 +79,7 @@ object NetflixPrizeMVM extends Logging {
         """
           |For example, the following command runs this app on a synthetic dataset:
           |
-          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.MovieLensMVM \
+          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.NetflixPrizeMVM \
           |  examples/target/scala-*/zen-examples-*.jar \
           |  --rank 10 --numIterations 50 --regular 0.01,0.01,0.01 --kryo \
           |  data/mllib/sample_movielens_data.txt
@@ -104,7 +104,7 @@ object NetflixPrizeMVM extends Logging {
     }
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
-
+    MovieLensUtils.gcCleaner(60 * 10, 60 * 10, "NetflixPrizeMVM")
     val probeFile = s"$input/probe.txt"
     val dataSetFile = s"$input/training_set/*"
     val probe = sc.wholeTextFiles(probeFile).flatMap { case (fileName, txt) =>

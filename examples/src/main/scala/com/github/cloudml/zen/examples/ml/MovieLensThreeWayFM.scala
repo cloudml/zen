@@ -109,6 +109,7 @@ object MovieLensThreeWayFM extends Logging {
     val sc = new SparkContext(conf)
     val checkpointDir = s"$out/checkpoint"
     sc.setCheckpointDir(checkpointDir)
+    MovieLensUtils.gcCleaner(60 * 10, 60 * 10, "MovieLensThreeWayFM")
     val (trainSet, testSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
     val model = ThreeWayFM.trainRegression(trainSet, numIterations, stepSize, views, l2, rank2, rank3, useAdaGrad, 1.0)
     model.save(sc, out)

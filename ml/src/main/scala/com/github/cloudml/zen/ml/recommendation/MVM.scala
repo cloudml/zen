@@ -217,6 +217,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
       val rho = math.exp(-math.log(2.0) / halfLife)
       val delta = adaGrad(gradientSum, gradient, epsilon, rho, iter)
       // val delta = esgd(gradientSum, gradient, epsilon, 1.0, iter)
+      checkpointGradientSum(delta)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
 
       gradient.unpersist(blocking = false)
@@ -226,7 +227,6 @@ private[ml] abstract class MVM extends Serializable with Logging {
 
       if (gradientSum != null) gradientSum.unpersist(blocking = false)
       gradientSum = delta.mapValues(_._2).setName(s"gradientSum-$iter").persist(storageLevel)
-      checkpointGradientSum()
       gradientSum.count()
       delta.unpersist(blocking = false)
       newGradient
@@ -290,10 +290,10 @@ private[ml] abstract class MVM extends Serializable with Logging {
     newGradSum
   }
 
-  protected def checkpointGradientSum(): Unit = {
-    val sc = gradientSum.sparkContext
+  protected def checkpointGradientSum(delta: VertexRDD[(Array[Double], Array[Double])]): Unit = {
+    val sc = delta.sparkContext
     if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
-      gradientSum.checkpoint()
+      delta.checkpoint()
     }
   }
 
@@ -301,9 +301,6 @@ private[ml] abstract class MVM extends Serializable with Logging {
     val sc = vertices.sparkContext
     if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
       vertices.checkpoint()
-      vertices.count()
-      System.gc()
-      System.runFinalization()
     }
   }
 }
