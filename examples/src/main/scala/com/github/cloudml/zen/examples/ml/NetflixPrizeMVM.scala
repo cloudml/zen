@@ -132,6 +132,7 @@ object NetflixPrizeMVM extends Logging {
     }
     if (numPartitions > 0) {
       nfPrize = nfPrize.repartition(numPartitions)
+      nfPrize.count()
     }
     nfPrize.persist(StorageLevel.MEMORY_AND_DISK)
 
