@@ -18,6 +18,7 @@ package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.recommendation.ThreeWayFM
+import com.github.cloudml.zen.ml.util.SparkHacker
 import org.apache.spark.graphx.GraphXUtils
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
 import org.apache.spark.storage.StorageLevel
@@ -109,7 +110,7 @@ object MovieLensThreeWayFM extends Logging {
     val sc = new SparkContext(conf)
     val checkpointDir = s"$out/checkpoint"
     sc.setCheckpointDir(checkpointDir)
-    MovieLensUtils.gcCleaner(60 * 10, 60 * 10, "MovieLensThreeWayFM")
+    SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensThreeWayFM")
     val (trainSet, testSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
     val model = ThreeWayFM.trainRegression(trainSet, numIterations, stepSize, views, l2, rank2, rank3, useAdaGrad, 1.0)
     model.save(sc, out)

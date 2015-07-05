@@ -18,6 +18,7 @@ package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.regression.LinearRegression
+import com.github.cloudml.zen.ml.util.SparkHacker
 import org.apache.spark.graphx.GraphXUtils
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
 import org.apache.spark.mllib.regression.{LabeledPoint, LinearRegressionModel}
@@ -99,7 +100,7 @@ object MovieLensLR extends Logging {
     }
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
-    MovieLensUtils.gcCleaner(60 * 10, 60 * 10, "MovieLensLR")
+    SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensLR")
 
     val (trainSet, testSet, _) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
     val lr = new LinearRegression(trainSet, stepSize, regParam, useAdaGrad, StorageLevel.MEMORY_AND_DISK)

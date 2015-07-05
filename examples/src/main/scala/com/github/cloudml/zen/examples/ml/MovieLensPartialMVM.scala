@@ -18,6 +18,7 @@ package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.recommendation.PartialMVM
+import com.github.cloudml.zen.ml.util.SparkHacker
 import org.apache.spark.graphx.GraphXUtils
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
 import org.apache.spark.storage.StorageLevel
@@ -105,7 +106,7 @@ object MovieLensPartialMVM extends Logging {
     val sc = new SparkContext(conf)
     val checkpointDir = s"$out/checkpoint"
     sc.setCheckpointDir(checkpointDir)
-    MovieLensUtils.gcCleaner(60 * 10, 60 * 10, "MovieLensPartialMVM")
+    SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensPartialMVM")
     val (trainSet, testSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
     val model = PartialMVM.trainRegression(trainSet, numIterations, stepSize, views, l2, rank, useAdaGrad, 1.0)
     model.save(sc, out)

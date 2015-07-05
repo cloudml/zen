@@ -18,6 +18,7 @@ package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.recommendation.FM
+import com.github.cloudml.zen.ml.util.SparkHacker
 import org.apache.spark.graphx.GraphXUtils
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
 import org.apache.spark.storage.StorageLevel
@@ -105,7 +106,7 @@ object MovieLensFM extends Logging {
     val sc = new SparkContext(conf)
     val checkpointDir = s"$out/checkpoint"
     sc.setCheckpointDir(checkpointDir)
-    MovieLensUtils.gcCleaner(60 * 10, 60 * 10, "MovieLensFM")
+    SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensFM")
     val (trainSet, testSet, _) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
     val model = FM.trainRegression(trainSet, numIterations, stepSize, l2, rank, useAdaGrad, 1.0)
     model.save(sc, out)

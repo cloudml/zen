@@ -18,6 +18,7 @@ package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.recommendation._
+import com.github.cloudml.zen.ml.util.SparkHacker
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.graphx.GraphXUtils
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
@@ -104,7 +105,7 @@ object NetflixPrizeMVM extends Logging {
     }
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
-    MovieLensUtils.gcCleaner(60 * 10, 60 * 10, "NetflixPrizeMVM")
+    SparkHacker.gcCleaner(60 * 10, 60 * 10, "NetflixPrizeMVM")
     val probeFile = s"$input/probe.txt"
     val dataSetFile = s"$input/training_set/*"
     val probe = sc.wholeTextFiles(probeFile).flatMap { case (fileName, txt) =>
