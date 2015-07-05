@@ -36,7 +36,7 @@ private[zen] object MovieLensUtils extends Logging {
   (RDD[(Long, LabeledPoint)], RDD[(Long, LabeledPoint)], Array[Long]) = {
     val line = sc.textFile(dataFile).first()
     val splitString = if (line.contains(",")) "," else "::"
-    var movieLens = sc.textFile(dataFile).mapPartitions { iter =>
+    var movieLens = sc.textFile(dataFile, sc.defaultParallelism).mapPartitions { iter =>
       iter.filter(t => !t.startsWith("userId") && !t.isEmpty).map { line =>
         val Array(userId, movieId, rating, timestamp) = line.split(splitString)
         (userId.toInt, movieId.toInt, rating.toDouble, timestamp.toInt)

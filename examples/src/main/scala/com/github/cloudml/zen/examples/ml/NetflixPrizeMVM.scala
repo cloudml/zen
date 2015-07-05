@@ -108,7 +108,7 @@ object NetflixPrizeMVM extends Logging {
     SparkHacker.gcCleaner(60 * 10, 60 * 10, "NetflixPrizeMVM")
     val probeFile = s"$input/probe.txt"
     val dataSetFile = s"$input/training_set/*"
-    val probe = sc.wholeTextFiles(probeFile).flatMap { case (fileName, txt) =>
+    val probe = sc.wholeTextFiles(probeFile, sc.defaultParallelism).flatMap { case (fileName, txt) =>
       val ab = new ArrayBuffer[(Int, Int)]
       var lastMovieId = -1
       var lastUserId = -1
