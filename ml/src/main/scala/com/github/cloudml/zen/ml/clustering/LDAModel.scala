@@ -630,7 +630,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
     }
 
   }
-
+  
   def loadLocalLDAModel(filePath: String): LocalLDAModel = {
     val file: File = new File(filePath)
     require(file.exists, s"model file $filePath does not exist")
