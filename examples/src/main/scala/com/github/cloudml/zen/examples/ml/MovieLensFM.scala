@@ -35,7 +35,7 @@ object MovieLensFM extends Logging {
     stepSize: Double = 0.1,
     regular: String = "0.01,0.01,0.01",
     rank: Int = 20,
-    useAdaGrad: Boolean = true,
+    useAdaGrad: Boolean = false,
     kryo: Boolean = true) extends AbstractParams[Params]
 
   def main(args: Array[String]) {

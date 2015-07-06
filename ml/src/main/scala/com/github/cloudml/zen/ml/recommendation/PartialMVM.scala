@@ -81,6 +81,8 @@ private[ml] abstract class PartialMVM extends Serializable with Logging {
 
   def useAdaGrad: Boolean
 
+  def useWeightedLambda: Boolean
+
   def storageLevel: StorageLevel
 
   def miniBatchFraction: Double
@@ -193,7 +195,7 @@ private[ml] abstract class PartialMVM extends Serializable with Logging {
       gradient match {
         case Some(grad) =>
           val weight = attr
-          val wd = weight.last / (numSamples + 1.0)
+          val wd  = if (useWeightedLambda) weight.last / (numSamples + 1.0) else 1.0
           var i = 0
           while (i < rank) {
             weight(i) -= wStepSize * grad(i) + l2StepSize * regV * wd * weight(i)
@@ -323,6 +325,7 @@ class PartialMVMClassification(
   val l2: (Double, Double, Double),
   val rank: Int,
   val useAdaGrad: Boolean,
+  val useWeightedLambda: Boolean,
   val miniBatchFraction: Double,
   val storageLevel: StorageLevel) extends PartialMVM {
 
@@ -333,10 +336,11 @@ class PartialMVMClassification(
     l2Reg: (Double, Double, Double) = (1e-3, 1e-3, 1e-3),
     rank2: Int = 20,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
     this(initializeDataSet(input, rank2, storageLevel), stepSize, views, l2Reg, rank2,
-      useAdaGrad, miniBatchFraction, storageLevel)
+      useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
   }
 
   setDataSet(_dataSet)
@@ -374,6 +378,7 @@ class PartialMVMRegression(
   val l2: (Double, Double, Double),
   val rank: Int,
   val useAdaGrad: Boolean,
+  val useWeightedLambda: Boolean,
   val miniBatchFraction: Double,
   val storageLevel: StorageLevel) extends PartialMVM {
   def this(
@@ -383,10 +388,11 @@ class PartialMVMRegression(
     l2Reg: (Double, Double, Double) = (1e-3, 1e-3, 1e-3),
     rank2: Int = 20,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
     this(initializeDataSet(input, rank2, storageLevel), stepSize, views, l2Reg, rank2,
-      useAdaGrad, miniBatchFraction, storageLevel)
+      useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
   }
 
   setDataSet(_dataSet)
@@ -443,6 +449,7 @@ object PartialMVM {
     l2: (Double, Double, Double),
     rank2: Int,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): PartialMVMFMModel = {
     val data = input.map { case (id, LabeledPoint(label, features)) =>
@@ -451,7 +458,7 @@ object PartialMVM {
       (id, LabeledPoint(newLabel, features))
     }
     val lfm = new PartialMVMClassification(data, stepSize, views, l2, rank2,
-      useAdaGrad, miniBatchFraction, storageLevel)
+      useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
     model
@@ -477,6 +484,7 @@ object PartialMVM {
     l2: (Double, Double, Double),
     rank2: Int,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): PartialMVMFMModel = {
     val data = input.map { case (id, labeledPoint) =>
@@ -484,7 +492,7 @@ object PartialMVM {
       (id, labeledPoint)
     }
     val lfm = new PartialMVMRegression(data, stepSize, views, l2, rank2,
-      useAdaGrad, miniBatchFraction, storageLevel)
+      useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
     model

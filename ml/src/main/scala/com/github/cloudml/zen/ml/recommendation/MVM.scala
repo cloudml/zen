@@ -96,6 +96,8 @@ private[ml] abstract class MVM extends Serializable with Logging {
 
   def useAdaGrad: Boolean
 
+  def useWeightedLambda: Boolean
+
   def storageLevel: StorageLevel
 
   def miniBatchFraction: Double
@@ -194,7 +196,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
       gradient match {
         case Some(grad) =>
           val weight = attr
-          val wd = weight.last / (numSamples + 1.0)
+          val wd = if (useWeightedLambda) weight.last / (numSamples + 1.0) else 1.0
           var i = 0
           while (i < rank) {
             if (grad(i) != 0.0) {
@@ -313,6 +315,7 @@ class MVMClassification(
   val elasticNetParam: Double,
   val rank: Int,
   val useAdaGrad: Boolean,
+  val useWeightedLambda: Boolean,
   val miniBatchFraction: Double,
   val storageLevel: StorageLevel) extends MVM {
 
@@ -324,10 +327,11 @@ class MVMClassification(
     elasticNetParam: Double = 0,
     rank: Int = 20,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
     this(initializeDataSet(input, views, rank, storageLevel), stepSize, views, regParam,
-      elasticNetParam, rank, useAdaGrad, miniBatchFraction, storageLevel)
+      elasticNetParam, rank, useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
   }
 
   setDataSet(_dataSet)
@@ -374,6 +378,7 @@ class MVMRegression(
   val elasticNetParam: Double,
   val rank: Int,
   val useAdaGrad: Boolean,
+  val useWeightedLambda: Boolean,
   val miniBatchFraction: Double,
   val storageLevel: StorageLevel) extends MVM {
 
@@ -385,10 +390,11 @@ class MVMRegression(
     elasticNetParam: Double = 0,
     rank: Int = 20,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
     this(initializeDataSet(input, views, rank, storageLevel), stepSize, views, regParam, elasticNetParam, rank,
-      useAdaGrad, miniBatchFraction, storageLevel)
+      useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
   }
 
   setDataSet(_dataSet)
@@ -452,6 +458,7 @@ object MVM {
     elasticNetParam: Double,
     rank: Int,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): MVMModel = {
     val data = input.map { case (id, LabeledPoint(label, features)) =>
@@ -460,7 +467,7 @@ object MVM {
       (id, LabeledPoint(newLabel, features))
     }
     val lfm = new MVMClassification(data, stepSize, views, regParam, elasticNetParam, rank,
-      useAdaGrad, miniBatchFraction, storageLevel)
+      useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
     model
@@ -489,6 +496,7 @@ object MVM {
     elasticNetParam: Double,
     rank: Int,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): MVMModel = {
     val data = input.map { case (id, labeledPoint) =>
@@ -496,7 +504,7 @@ object MVM {
       (id, labeledPoint)
     }
     val lfm = new MVMRegression(data, stepSize, views, regParam, elasticNetParam,
-      rank, useAdaGrad, miniBatchFraction, storageLevel)
+      rank, useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
     model

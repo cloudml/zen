@@ -37,7 +37,7 @@ object MovieLensLR extends Logging {
     numPartitions: Int = -1,
     stepSize: Double = 0.1,
     regular: Double = 0.05,
-    useAdaGrad: Boolean = true,
+    useAdaGrad: Boolean = false,
     kryo: Boolean = true) extends AbstractParams[Params]
 
   def main(args: Array[String]) {

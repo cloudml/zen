@@ -70,7 +70,8 @@ class HigherOrderFMSuite extends FunSuite with SharedSparkContext with Matchers 
     val elasticNetParam = 0.0
     val rank = 20
     val useAdaGrad = true
-    val miniBatchFraction = 1
+    val useWeightedLambda = true
+    val miniBatchFraction = 1.0
     val views = Array(maxUserId, numFeatures).map(_.toLong)
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
     trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
@@ -78,7 +79,7 @@ class HigherOrderFMSuite extends FunSuite with SharedSparkContext with Matchers 
     dataSet.unpersist()
 
     val fm = new MVMRegression(trainSet, stepSize, views, regParam, elasticNetParam,
-      rank, useAdaGrad, miniBatchFraction, StorageLevel.MEMORY_AND_DISK)
+      rank, useAdaGrad, useWeightedLambda, miniBatchFraction, StorageLevel.MEMORY_AND_DISK)
 
     fm.run(numIterations)
     val model = fm.saveModel()
@@ -127,6 +128,7 @@ class HigherOrderFMSuite extends FunSuite with SharedSparkContext with Matchers 
     val l2 = (regParam, regParam, regParam, regParam)
     val rank = 2
     val useAdaGrad = true
+    val useWeightedLambda = true
     val views = Array(maxUserId, maxUserId + maxMovieId, numFeatures).map(_.toLong)
     val miniBatchFraction = 1
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
@@ -134,7 +136,7 @@ class HigherOrderFMSuite extends FunSuite with SharedSparkContext with Matchers 
     testSet.persist(StorageLevel.DISK_ONLY).count()
 
     val fm = new ThreeWayFMRegression(trainSet, stepSize, views, l2, rank, rank,
-      useAdaGrad, miniBatchFraction)
+      useAdaGrad, useWeightedLambda, miniBatchFraction)
 
 
     fm.run(numIterations)
@@ -179,7 +181,7 @@ class HigherOrderFMSuite extends FunSuite with SharedSparkContext with Matchers 
     val rank = 10
     val useAdaGrad = true
     val views = Array(maxUserId, maxUserId + maxMovieId, numFeatures).map(_.toLong)
-    val miniBatchFraction = 1
+    val miniBatchFraction = 1.0
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
     trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
     testSet.persist(StorageLevel.MEMORY_AND_DISK).count()

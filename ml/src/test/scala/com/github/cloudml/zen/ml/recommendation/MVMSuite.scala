@@ -95,11 +95,12 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     val regParam = 0.0
     val rank = 20
     val useAdaGrad = true
+    val useWeightedLambda = true
     val miniBatchFraction = 1.0
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
     val numFeatures = trainSet.first()._2.features.size.toLong
     val fm = new MVMRegression(trainSet.cache(), stepSize, Array(numFeatures / 2, numFeatures), regParam, regParam,
-      rank, useAdaGrad, miniBatchFraction)
+      rank, useAdaGrad, useWeightedLambda, miniBatchFraction)
     fm.run(numIterations)
     val model = fm.saveModel()
     println(f"Test loss: ${model.loss(testSet.cache())}%1.4f")
@@ -120,13 +121,14 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     val regParam = 1e-3
     val rank = 20
     val useAdaGrad = true
+    val useWeightedLambda = true
     val miniBatchFraction = 1
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
     trainSet.cache()
     testSet.cache()
     val numFeatures = trainSet.first()._2.features.size.toLong
     val fm = new MVMClassification(trainSet, stepSize, Array(20, numFeatures / 2, numFeatures),
-      regParam, regParam, rank, useAdaGrad, miniBatchFraction)
+      regParam, regParam, rank, useAdaGrad, useWeightedLambda, miniBatchFraction)
     fm.run(numIterations)
     val model = fm.saveModel()
     println(f"Test loss: ${model.loss(testSet.cache())}%1.4f")
@@ -196,13 +198,15 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     val regParam = 0.1
     val rank = 20
     val useAdaGrad = true
+    val useWeightedLambda = true
     val views = Array(maxUserId, maxUserId + maxMovieId, numFeatures).map(_.toLong)
     val miniBatchFraction = 1
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
     trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
     testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
 
-    val fm = new MVMRegression(trainSet, stepSize, views, regParam, 0.0, rank, useAdaGrad, miniBatchFraction)
+    val fm = new MVMRegression(trainSet, stepSize, views, regParam, 0.0, rank,
+      useAdaGrad, useWeightedLambda, miniBatchFraction)
     fm.run(numIterations)
     val model = fm.saveModel()
     println(f"Test loss: ${model.loss(testSet)}%1.4f")
@@ -343,6 +347,7 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     val regParam = 0.1
     val rank = 20
     val useAdaGrad = true
+    val useWeightedLambda = true
     val miniBatchFraction = 1
     val views = Array(maxUserId, numFeatures).map(_.toLong)
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
@@ -352,7 +357,7 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
 
     import com.github.cloudml.zen.ml.recommendation._
     val fm = new MVMRegression(trainSet, stepSize, views, regParam, 0.0,
-      rank, useAdaGrad, miniBatchFraction, StorageLevel.DISK_ONLY)
+      rank, useAdaGrad, useWeightedLambda, miniBatchFraction, StorageLevel.DISK_ONLY)
     fm.run(numIterations)
     val model = fm.saveModel()
     // val model =  MVMModel.load(sc, "/input/lbs/recommend/toona/nf_prize_dataset/model/")
@@ -423,12 +428,13 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     val regParam = 0.01
     val rank = 24
     val useAdaGrad = true
+    val useWeightedLambda = true
     val miniBatchFraction = 1
     val views = Array(maxUserId, numFeatures).map(_.toLong)
 
     import com.github.cloudml.zen.ml.recommendation._
     val fm = new MVMRegression(trainSet.filter(t => t._1 % 10 > 1), stepSize, views, regParam, 0.0,
-      rank, useAdaGrad, miniBatchFraction, StorageLevel.MEMORY_AND_DISK)
+      rank, useAdaGrad, useWeightedLambda, miniBatchFraction, StorageLevel.MEMORY_AND_DISK)
     fm.run(numIterations)
     val model = fm.saveModel()
     println(f"Test RMSE: ${model.loss(testSet)}%1.4f")
@@ -474,13 +480,14 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     val l2 = (regParam, regParam, regParam)
     val rank = 10
     val useAdaGrad = true
+    val useWeightedLambda = true
     val miniBatchFraction = 1
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
     trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
     testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
 
     val fm = new MVMRegression(trainSet, stepSize, Array(maxUserId, numFeatures),
-      regParam, 0.0, rank, useAdaGrad, miniBatchFraction)
+      regParam, 0.0, rank, useAdaGrad, useWeightedLambda, miniBatchFraction)
 
     //    val fm = new FMRegression(trainSet, stepSize, l2, rank, useAdaGrad,
     //      miniBatchFraction, StorageLevel.MEMORY_AND_DISK)
@@ -535,6 +542,7 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     val l2 = (regParam, regParam, regParam, regParam)
     val rank = 2
     val useAdaGrad = true
+    val useWeightedLambda = true
     val views = Array(maxUserId, maxUserId + maxMovieId, numFeatures).map(_.toLong)
     val miniBatchFraction = 1
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
@@ -542,8 +550,7 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     testSet.persist(StorageLevel.DISK_ONLY).count()
 
     val fm = new ThreeWayFMRegression(trainSet, stepSize, views, l2, rank, rank,
-      useAdaGrad, miniBatchFraction)
-
+      useAdaGrad, useWeightedLambda, miniBatchFraction)
 
     fm.run(numIterations)
     val model = fm.saveModel()

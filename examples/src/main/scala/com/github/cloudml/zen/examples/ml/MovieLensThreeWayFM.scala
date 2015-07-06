@@ -36,7 +36,8 @@ object MovieLensThreeWayFM extends Logging {
     regular: String = "0.01,0.01,0.01,0.01",
     rank2: Int = 10,
     rank3: Int = 10,
-    useAdaGrad: Boolean = true,
+    useAdaGrad: Boolean = false,
+    useWeightedLambda: Boolean = false,
     kryo: Boolean = true) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
@@ -71,6 +72,9 @@ object MovieLensThreeWayFM extends Logging {
       opt[Unit]("adagrad")
         .text("use AdaGrad")
         .action((_, c) => c.copy(useAdaGrad = true))
+      opt[Unit]("weightedLambda")
+        .text("use weighted lambda regularization")
+        .action((_, c) => c.copy(useWeightedLambda = true))
       arg[String]("<input>")
         .required()
         .text("input paths")
@@ -99,7 +103,8 @@ object MovieLensThreeWayFM extends Logging {
   }
 
   def run(params: Params): Unit = {
-    val Params(input, out, numIterations, numPartitions, stepSize, regular, rank2, rank3, useAdaGrad, kryo) = params
+    val Params(input, out, numIterations, numPartitions, stepSize, regular,
+    rank2, rank3, useAdaGrad, useWeightedLambda, kryo) = params
     val regs = regular.split(",").map(_.toDouble)
     val l2 = (regs(0), regs(1), regs(2), regs(3))
     val conf = new SparkConf().setAppName(s"ThreeWayFM with $params")
@@ -112,7 +117,8 @@ object MovieLensThreeWayFM extends Logging {
     sc.setCheckpointDir(checkpointDir)
     SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensThreeWayFM")
     val (trainSet, testSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
-    val model = ThreeWayFM.trainRegression(trainSet, numIterations, stepSize, views, l2, rank2, rank3, useAdaGrad, 1.0)
+    val model = ThreeWayFM.trainRegression(trainSet, numIterations, stepSize, views, l2, rank2, rank3,
+      useAdaGrad, useWeightedLambda, 1.0)
     model.save(sc, out)
     val rmse = model.loss(testSet)
     logInfo(f"Test RMSE: $rmse%1.4f")

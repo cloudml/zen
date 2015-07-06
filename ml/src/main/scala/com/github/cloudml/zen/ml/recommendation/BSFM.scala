@@ -86,6 +86,8 @@ private[ml] abstract class BSFM extends Serializable with Logging {
 
   def useAdaGrad: Boolean
 
+  def useWeightedLambda: Boolean
+
   def storageLevel: StorageLevel
 
   def miniBatchFraction: Double
@@ -202,7 +204,7 @@ private[ml] abstract class BSFM extends Serializable with Logging {
       gradient match {
         case Some(grad) =>
           val weight = attr
-          val wd = weight.last / (numSamples + 1.0)
+          val wd = if (useWeightedLambda) weight.last / (numSamples + 1.0) else 1.0
           var i = 0
           while (i < rank) {
             weight(i) -= wStepSize * (grad(i) + wd * regV * weight(i))
@@ -332,6 +334,7 @@ class BSFMClassification(
   val l2: (Double, Double, Double),
   val rank: Int,
   val useAdaGrad: Boolean,
+  val useWeightedLambda: Boolean,
   val miniBatchFraction: Double,
   val storageLevel: StorageLevel) extends BSFM {
 
@@ -342,10 +345,11 @@ class BSFMClassification(
     l2Reg: (Double, Double, Double) = (1e-3, 1e-3, 1e-3),
     rank: Int = 20,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
     this(initializeDataSet(input, views, rank, storageLevel), stepSize, views, l2Reg, rank,
-      useAdaGrad, miniBatchFraction, storageLevel)
+      useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
   }
 
   setDataSet(_dataSet)
@@ -382,6 +386,7 @@ class BSFMRegression(
   val l2: (Double, Double, Double),
   val rank: Int,
   val useAdaGrad: Boolean,
+  val useWeightedLambda: Boolean,
   val miniBatchFraction: Double,
   val storageLevel: StorageLevel) extends BSFM {
 
@@ -392,10 +397,11 @@ class BSFMRegression(
     l2Reg: (Double, Double, Double) = (1e-3, 1e-3, 1e-3),
     rank: Int = 20,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
     this(initializeDataSet(input, views, rank, storageLevel), stepSize, views, l2Reg, rank,
-      useAdaGrad, miniBatchFraction, storageLevel)
+      useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
   }
 
   setDataSet(_dataSet)
@@ -451,6 +457,7 @@ object BSFM {
     l2: (Double, Double, Double),
     rank: Int,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): BSFMModel = {
     val data = input.map { case (id, LabeledPoint(label, features)) =>
@@ -458,7 +465,8 @@ object BSFM {
       val newLabel = if (label > 0.0) 1.0 else 0.0
       (id, LabeledPoint(newLabel, features))
     }
-    val lfm = new BSFMClassification(data, stepSize, views, l2, rank, useAdaGrad, miniBatchFraction, storageLevel)
+    val lfm = new BSFMClassification(data, stepSize, views, l2, rank, useAdaGrad,
+      useWeightedLambda, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
     model
@@ -484,13 +492,15 @@ object BSFM {
     l2: (Double, Double, Double),
     rank: Int,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): BSFMModel = {
     val data = input.map { case (id, labeledPoint) =>
       assert(id >= 0.0, s"sampleId $id less than 0")
       (id, labeledPoint)
     }
-    val lfm = new BSFMRegression(data, stepSize, views, l2, rank, useAdaGrad, miniBatchFraction, storageLevel)
+    val lfm = new BSFMRegression(data, stepSize, views, l2, rank, useAdaGrad,
+      useWeightedLambda, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
     model

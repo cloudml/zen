@@ -82,6 +82,8 @@ private[ml] abstract class TF extends Serializable with Logging {
 
   def useAdaGrad: Boolean
 
+  def useWeightedLambda: Boolean
+
   def storageLevel: StorageLevel
 
   def miniBatchFraction: Double
@@ -191,7 +193,7 @@ private[ml] abstract class TF extends Serializable with Logging {
       gradient match {
         case Some(grad) =>
           val weight = attr
-          val wd = weight.last / (numSamples + 1.0)
+          val wd = if (useWeightedLambda) weight.last / (numSamples + 1.0) else 1.0
           var i = 0
           while (i < rank) {
             if (grad(i) != 0.0) {
@@ -310,6 +312,7 @@ class TFClassification(
   val elasticNetParam: Double,
   val rank: Int,
   val useAdaGrad: Boolean,
+  val useWeightedLambda: Boolean,
   val miniBatchFraction: Double,
   val storageLevel: StorageLevel) extends TF {
 
@@ -321,10 +324,11 @@ class TFClassification(
     elasticNetParam: Double = 0,
     rank: Int = 20,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
     this(initializeDataSet(input, views, rank, storageLevel), stepSize, views, regParam,
-      elasticNetParam, rank, useAdaGrad, miniBatchFraction, storageLevel)
+      elasticNetParam, rank, useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
   }
 
   setDataSet(_dataSet)
@@ -370,6 +374,7 @@ class TFRegression(
   val elasticNetParam: Double,
   val rank: Int,
   val useAdaGrad: Boolean,
+  val useWeightedLambda: Boolean,
   val miniBatchFraction: Double,
   val storageLevel: StorageLevel) extends TF {
 
@@ -381,10 +386,11 @@ class TFRegression(
     elasticNetParam: Double = 0,
     rank: Int = 20,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) {
     this(initializeDataSet(input, views, rank, storageLevel), stepSize, views, regParam, elasticNetParam, rank,
-      useAdaGrad, miniBatchFraction, storageLevel)
+      useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
   }
 
   setDataSet(_dataSet)
@@ -447,6 +453,7 @@ object TF {
     elasticNetParam: Double,
     rank: Int,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): TFModel = {
     val data = input.map { case (id, LabeledPoint(label, features)) =>
@@ -455,7 +462,7 @@ object TF {
       (id, LabeledPoint(newLabel, features))
     }
     val lfm = new TFClassification(data, stepSize, views, regParam, elasticNetParam, rank,
-      useAdaGrad, miniBatchFraction, storageLevel)
+      useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
     model
@@ -484,6 +491,7 @@ object TF {
     elasticNetParam: Double,
     rank: Int,
     useAdaGrad: Boolean = true,
+    useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): TFModel = {
     val data = input.map { case (id, labeledPoint) =>
@@ -491,7 +499,7 @@ object TF {
       (id, labeledPoint)
     }
     val lfm = new TFRegression(data, stepSize, views, regParam, elasticNetParam,
-      rank, useAdaGrad, miniBatchFraction, storageLevel)
+      rank, useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
     model

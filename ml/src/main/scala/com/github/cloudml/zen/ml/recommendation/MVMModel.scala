@@ -59,9 +59,14 @@ class MVMModel(
 
   def loss(data: RDD[(Long, LabeledPoint)]): Double = {
     val numSamples = data.count()
+    // val minTarget = data.map(_._2.label).min()
+    // val maxTarget = data.map(_._2.label).max()
     val perd = predict(data.map(t => (t._1, t._2.features)))
     val label = data.map(t => (t._1, t._2.label))
     val sum = label.join(perd).map { case (_, (l, p)) =>
+      // var r = Math.max(p, minTarget)
+      // r = Math.min(r, maxTarget)
+      // pow(l - r, 2)
       pow(l - p, 2)
     }.reduce(_ + _)
     sqrt(sum / numSamples)

@@ -42,6 +42,7 @@ object NetflixPrizeMVM extends Logging {
     regular: Double = 0.01,
     rank: Int = 64,
     useAdaGrad: Boolean = false,
+    useWeightedLambda: Boolean = false,
     kryo: Boolean = false) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
@@ -70,6 +71,9 @@ object NetflixPrizeMVM extends Logging {
       opt[Unit]("adagrad")
         .text("use AdaGrad")
         .action((_, c) => c.copy(useAdaGrad = true))
+      opt[Unit]("weightedLambda")
+        .text("use weighted lambda regularization")
+        .action((_, c) => c.copy(useWeightedLambda = true))
       arg[String]("<input>")
         .required()
         .text("input paths")
@@ -98,7 +102,8 @@ object NetflixPrizeMVM extends Logging {
   }
 
   def run(params: Params): Unit = {
-    val Params(input, out, numIterations, numPartitions, stepSize, regular, rank, useAdaGrad, kryo) = params
+    val Params(input, out, numIterations, numPartitions, stepSize, regular,
+    rank, useAdaGrad, useWeightedLambda, kryo) = params
     val checkpointDir = s"$out/checkpoint"
     val conf = new SparkConf().setAppName(s"MVM with $params")
     if (kryo) {
@@ -178,7 +183,7 @@ object NetflixPrizeMVM extends Logging {
      */
     val views = Array(maxUserId, numFeatures).map(_.toLong)
     val fm = new MVMRegression(trainSet, stepSize, views, regular, 0.0, rank,
-      useAdaGrad, 1.0, StorageLevel.MEMORY_AND_DISK)
+      useAdaGrad, useWeightedLambda, 1.0, StorageLevel.MEMORY_AND_DISK)
     fm.run(numIterations)
     val model = fm.saveModel()
     model.save(sc, out)

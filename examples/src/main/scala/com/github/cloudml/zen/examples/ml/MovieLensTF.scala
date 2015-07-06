@@ -35,7 +35,8 @@ object MovieLensTF extends Logging {
     stepSize: Double = 0.1,
     regular: Double = 0.05,
     rank: Int = 20,
-    useAdaGrad: Boolean = true,
+    useAdaGrad: Boolean = false,
+    useWeightedLambda: Boolean = false,
     kryo: Boolean = true) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
@@ -64,6 +65,9 @@ object MovieLensTF extends Logging {
       opt[Unit]("adagrad")
         .text("use AdaGrad")
         .action((_, c) => c.copy(useAdaGrad = true))
+      opt[Unit]("weightedLambda")
+        .text("use weighted lambda regularization")
+        .action((_, c) => c.copy(useWeightedLambda = true))
       arg[String]("<input>")
         .required()
         .text("input paths")
@@ -92,7 +96,8 @@ object MovieLensTF extends Logging {
   }
 
   def run(params: Params): Unit = {
-    val Params(input, out, numIterations, numPartitions, stepSize, regular, rank, useAdaGrad, kryo) = params
+    val Params(input, out, numIterations, numPartitions, stepSize, regular, rank,
+    useAdaGrad, useWeightedLambda, kryo) = params
     val checkpointDir = s"$out/checkpoint"
     val conf = new SparkConf().setAppName(s"TF with $params")
     if (kryo) {
@@ -104,7 +109,7 @@ object MovieLensTF extends Logging {
     SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensTF")
     val (trainSet, testSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
     val model = TF.trainRegression(trainSet, numIterations, stepSize, views,
-      regular, 0.0, rank, useAdaGrad, 1.0)
+      regular, 0.0, rank, useAdaGrad, useWeightedLambda, 1.0)
     model.save(sc, out)
     val rmse = model.loss(testSet)
     logInfo(f"Test RMSE: $rmse%1.4f")

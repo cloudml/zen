@@ -35,7 +35,8 @@ object MovieLensPartialMVM extends Logging {
     stepSize: Double = 0.1,
     regular: String = "0.01,0.01,0.01",
     rank: Int = 20,
-    useAdaGrad: Boolean = true,
+    useAdaGrad: Boolean = false,
+    useWeightedLambda: Boolean = false,
     kryo: Boolean = true) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
@@ -67,6 +68,9 @@ object MovieLensPartialMVM extends Logging {
       opt[Unit]("adagrad")
         .text("use AdaGrad")
         .action((_, c) => c.copy(useAdaGrad = true))
+      opt[Unit]("weightedLambda")
+        .text("use weighted lambda regularization")
+        .action((_, c) => c.copy(useWeightedLambda = true))
       arg[String]("<input>")
         .required()
         .text("input paths")
@@ -95,7 +99,8 @@ object MovieLensPartialMVM extends Logging {
   }
 
   def run(params: Params): Unit = {
-    val Params(input, out, numIterations, numPartitions, stepSize, regular, rank, useAdaGrad, kryo) = params
+    val Params(input, out, numIterations, numPartitions, stepSize, regular, rank,
+    useAdaGrad, useWeightedLambda, kryo) = params
     val regs = regular.split(",").map(_.toDouble)
     val l2 = (regs(0), regs(1), regs(2))
     val conf = new SparkConf().setAppName(s"PartialMVM with $params")
@@ -108,7 +113,8 @@ object MovieLensPartialMVM extends Logging {
     sc.setCheckpointDir(checkpointDir)
     SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensPartialMVM")
     val (trainSet, testSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
-    val model = PartialMVM.trainRegression(trainSet, numIterations, stepSize, views, l2, rank, useAdaGrad, 1.0)
+    val model = PartialMVM.trainRegression(trainSet, numIterations, stepSize, views, l2, rank,
+      useAdaGrad, useWeightedLambda, 1.0)
     model.save(sc, out)
     val rmse = model.loss(testSet)
     logInfo(f"Test RMSE: $rmse%1.4f")
