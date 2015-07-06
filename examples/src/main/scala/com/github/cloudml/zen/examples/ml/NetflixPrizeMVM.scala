@@ -84,8 +84,8 @@ object NetflixPrizeMVM extends Logging {
           |
           | bin/spark-submit --class com.github.cloudml.zen.examples.ml.NetflixPrizeMVM \
           |  examples/target/scala-*/zen-examples-*.jar \
-          |  --rank 10 --numIterations 50 --regular 0.01,0.01,0.01 --kryo \
-          |  data/mllib/sample_movielens_data.txt
+          |  --rank 20 --numIterations 200 --regular 0.01 --kryo \
+          |  data/mllib/nf_prize_dataset
           |  data/mllib/MVM_model
         """.stripMargin)
     }
