@@ -137,7 +137,7 @@ private[ml] abstract class BSFM extends Serializable with Logging {
   }
 
   def saveModel(): BSFMModel = {
-    new BSFMModel(rank, intercept, views, false, features)
+    new BSFMModel(rank, intercept, views, false, features.mapValues(arr => arr.slice(0, arr.length - 1)))
   }
 
   protected[ml] def loss(q: VertexRDD[VD]): Double = {
@@ -183,10 +183,10 @@ private[ml] abstract class BSFM extends Serializable with Logging {
         val arr = ctx.dstAttr
         val viewId = featureId2viewId(featureId, views)
         val m = backwardInterval(rank, viewId, x, arr, arr.last)
-        ctx.sendToSrc(m) // send the multi directly
+        ctx.sendToSrc(m)
       }
     }, forwardReduceInterval, TripletFields.Dst).mapValues { gradients =>
-      gradients.map(_ / thisNumSamples) // / numSamples
+      gradients.map(_ / thisNumSamples)
     }
     gradient.setName(s"gradient-$iter").persist(storageLevel)
     (gradW0, gradient)
@@ -196,19 +196,19 @@ private[ml] abstract class BSFM extends Serializable with Logging {
   protected def updateWeight(delta: (Double, VertexRDD[Array[Double]]), iter: Int): VertexRDD[VD] = {
     val (biasGrad, gradient) = delta
     val wStepSize = if (useAdaGrad) stepSize else stepSize / sqrt(iter)
-    val l2StepSize = stepSize / sqrt(iter)
     val (regB, regW, regV) = l2
-    bias -= wStepSize * biasGrad + l2StepSize * regB * bias
+    bias -= wStepSize * (biasGrad + regB * bias)
     dataSet.vertices.leftJoin(gradient) { (_, attr, gradient) =>
       gradient match {
         case Some(grad) =>
           val weight = attr
+          val wd = weight.last / (numSamples + 1.0)
           var i = 0
           while (i < rank) {
-            weight(i) -= wStepSize * grad(i) + l2StepSize * regV * weight(i)
+            weight(i) -= wStepSize * (grad(i) + wd * regV * weight(i))
             i += 1
           }
-          weight(rank) -= wStepSize * grad(rank) + l2StepSize * regW * weight(rank)
+          weight(rank) -= wStepSize * (grad(rank) + wd * regW * weight(rank))
           weight
         case None => attr
       }
@@ -357,7 +357,7 @@ class BSFMClassification(
   }
 
   override def saveModel(): BSFMModel = {
-    new BSFMModel(rank, intercept, views, true, features)
+    new BSFMModel(rank, intercept, views, true, features.mapValues(arr => arr.slice(0, arr.length - 1)))
   }
 
   override protected def multiplier(q: VertexRDD[VD]): VertexRDD[VD] = {
@@ -514,19 +514,26 @@ object BSFM {
     }.persist(storageLevel)
     edges.count()
 
-    val vertices = input.map { case (sampleId, labelPoint) =>
+    val inDegrees = edges.map(e => (e.srcId, 1L)).reduceByKey(_ + _).map {
+      case (featureId, deg) =>
+        (featureId, deg)
+    }
+    val features = edges.map(_.srcId).distinct().map { featureId =>
+      // parameter point
+      val parms = Array.fill(rank + 2) {
+        Utils.random.nextGaussian() * 1e-2
+      }
+      (featureId, parms)
+    }.join(inDegrees).map { case (featureId, (parms, deg)) =>
+      parms(parms.length - 1) = deg
+      (featureId, parms)
+    }
+    val vertices = (input.map { case (sampleId, labelPoint) =>
       val newId = newSampleId(sampleId)
       // label point
       val label = Array(labelPoint.label)
       (newId, label)
-    } ++ edges.map(_.srcId).distinct().map { featureId =>
-      // parameter point
-      val parms = Array.fill(rank + 1) {
-        Utils.random.nextGaussian() * 1e-1
-      }
-      parms(rank) = 0.0
-      (featureId, parms)
-    }
+    } ++ features).repartition(input.partitions.length)
     vertices.persist(storageLevel)
     vertices.count()
 
