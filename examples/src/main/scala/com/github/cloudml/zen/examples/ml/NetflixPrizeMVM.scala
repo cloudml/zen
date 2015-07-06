@@ -16,10 +16,12 @@
  */
 package com.github.cloudml.zen.examples.ml
 
+import java.text.SimpleDateFormat
+import java.util.{TimeZone, Locale}
+
 import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.recommendation._
 import com.github.cloudml.zen.ml.util.SparkHacker
-import org.apache.log4j.{Level, Logger}
 import org.apache.spark.graphx.GraphXUtils
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
 import org.apache.spark.mllib.regression.LabeledPoint
@@ -108,7 +110,7 @@ object NetflixPrizeMVM extends Logging {
     SparkHacker.gcCleaner(60 * 10, 60 * 10, "NetflixPrizeMVM")
     val probeFile = s"$input/probe.txt"
     val dataSetFile = s"$input/training_set/*"
-    val probe = sc.wholeTextFiles(probeFile, sc.defaultParallelism).flatMap { case (fileName, txt) =>
+    val probe = sc.wholeTextFiles(probeFile).flatMap { case (fileName, txt) =>
       val ab = new ArrayBuffer[(Int, Int)]
       var lastMovieId = -1
       var lastUserId = -1
@@ -124,29 +126,34 @@ object NetflixPrizeMVM extends Logging {
       ab.toSeq
     }.collect().toSet
 
-    var nfPrize = sc.wholeTextFiles(dataSetFile).flatMap { case (fileName, txt) =>
+    val simpleDateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.ROOT)
+    simpleDateFormat.setTimeZone(TimeZone.getTimeZone("GMT+08:00"))
+    var nfPrize = sc.wholeTextFiles(dataSetFile, sc.defaultParallelism).flatMap { case (fileName, txt) =>
       val Array(movieId, csv) = txt.split(":")
       csv.split("\n").filter(_.nonEmpty).map { line =>
         val Array(userId, rating, timestamp) = line.split(",")
-        ((userId.toInt, movieId.toInt), rating.toDouble)
+        val day = simpleDateFormat.parse(timestamp).getTime / (1000L * 60 * 60 * 24)
+        ((userId.toInt, movieId.toInt), rating.toDouble, day.toInt)
       }
     }
-    if (numPartitions > 0) {
-      nfPrize = nfPrize.repartition(numPartitions)
-      nfPrize.count()
-    }
+    if (numPartitions > 0) nfPrize = nfPrize.repartition(numPartitions)
     nfPrize.persist(StorageLevel.MEMORY_AND_DISK)
+    nfPrize.count()
 
     val maxUserId = nfPrize.map(_._1._1).max + 1
     val maxMovieId = nfPrize.map(_._1._2).max + 1
-    val numFeatures = maxUserId + maxMovieId
+    val maxTime = nfPrize.map(_._3).max()
+    val minTime = nfPrize.map(_._3).min()
+    val maxDay = maxTime - minTime + 1
+    val numFeatures = maxUserId + maxMovieId + maxDay
 
     val testSet = nfPrize.mapPartitions { iter =>
       iter.filter(t => probe.contains(t._1)).map {
-        case ((userId, movieId), rating) =>
+        case ((userId, movieId), rating, timestamp) =>
           val sv = BSV.zeros[Double](numFeatures)
           sv(userId) = 1.0
           sv(movieId + maxUserId) = 1.0
+          sv(timestamp - minTime + maxUserId + maxMovieId) = 1.0
           new LabeledPoint(rating, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
       }
     }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
@@ -154,10 +161,11 @@ object NetflixPrizeMVM extends Logging {
 
     val trainSet = nfPrize.mapPartitions { iter =>
       iter.filter(t => !probe.contains(t._1)).map {
-        case ((userId, movieId), rating) =>
+        case ((userId, movieId), rating, timestamp) =>
           val sv = BSV.zeros[Double](numFeatures)
           sv(userId) = 1.0
           sv(movieId + maxUserId) = 1.0
+          sv(timestamp - minTime + maxUserId + maxMovieId) = 1.0
           new LabeledPoint(rating, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
       }
     }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
@@ -170,7 +178,7 @@ object NetflixPrizeMVM extends Logging {
      */
     val views = Array(maxUserId, numFeatures).map(_.toLong)
     val fm = new MVMRegression(trainSet, stepSize, views, regular, 0.0, rank,
-      useAdaGrad, 1, StorageLevel.MEMORY_AND_DISK)
+      useAdaGrad, 1.0, StorageLevel.MEMORY_AND_DISK)
     fm.run(numIterations)
     val model = fm.saveModel()
     model.save(sc, out)
