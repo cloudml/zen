@@ -88,7 +88,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
 
   def elasticNetParam: Double
 
-  def halfLife: Int = 15
+  def halfLife: Int = 40
 
   def epsilon: Double = 1e-6
 
@@ -189,7 +189,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
   // Updater for elastic net regularized problems
   protected def updateWeight(delta: VertexRDD[Array[Double]], iter: Int): VertexRDD[VD] = {
     val gradient = delta
-    val thisIterStepSize = stepSize / sqrt(iter)
+    val thisIterStepSize = if (useAdaGrad) stepSize else stepSize / sqrt(iter)
     val shrinkageVal = elasticNetParam * regParam * thisIterStepSize
     val regParamL2 = (1.0 - elasticNetParam) * regParam
     dataSet.vertices.leftJoin(gradient) { (_, attr, gradient) =>
@@ -217,7 +217,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
     iter: Int): VertexRDD[Array[Double]] = {
     if (useAdaGrad) {
       val rho = math.exp(-math.log(2.0) / halfLife)
-      val delta = adaGrad(gradientSum, gradient, epsilon, rho, iter)
+      val delta = adaGrad(gradientSum, gradient, epsilon, 1.0, iter)
       // val delta = esgd(gradientSum, gradient, epsilon, 1.0, iter)
       checkpointGradientSum(delta)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
@@ -255,7 +255,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
       val newGradSum = new Array[Double](gradLen)
       val newGrad = new Array[Double](gradLen)
       for (i <- 0 until gradLen) {
-        newGradSum(i) = gs(i) * rho + (1 - rho) * pow(grad(i), 2)
+        newGradSum(i) = gs(i) * rho + pow(grad(i), 2)
         val div = epsilon + sqrt(newGradSum(i))
         newGrad(i) = grad(i) / div
       }
