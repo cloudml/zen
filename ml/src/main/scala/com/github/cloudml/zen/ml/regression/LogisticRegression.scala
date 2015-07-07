@@ -117,7 +117,7 @@ abstract class LogisticRegression(
       // gradient = updateDeltaSum(gradient, iter)
 
       val tis = thisIterStepSize(iter)
-      vertices = updateWeight(gradient, iter, tis, stepSize / sqrt(iter))
+      vertices = updateWeight(gradient, iter, tis, tis)
       checkpointVertices()
       vertices.count()
       dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
@@ -130,11 +130,7 @@ abstract class LogisticRegression(
   }
 
   protected def thisIterStepSize(iter: Int): Double = {
-    if (useAdaGrad) {
-      stepSize * min(iter / 11.0, 1.0)
-    } else {
-      stepSize / sqrt(iter)
-    }
+    stepSize / sqrt(iter)
   }
 
   protected def forward(iter: Int): VertexRDD[VD]
@@ -157,7 +153,9 @@ abstract class LogisticRegression(
       gradient.setName(s"gradient-$iter").persist(storageLevel)
     }
     if (useAdaGrad) {
-      val delta = adaGrad(gradientSum, gradient, 1e-4, 1.0)
+      val halfLife: Int = 15
+      val epsilon: Double = 1e-6
+      val delta = adaGrad(gradientSum, gradient, epsilon, halfLife)
       checkpointGradientSum(delta)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
 
@@ -230,7 +228,7 @@ abstract class LogisticRegression(
       gradientSum
     }
     delta.innerJoin(gradient) { (_, gradSum, grad) =>
-      val newGradSum = gradSum * rho + pow(grad, 2)
+      val newGradSum = gradSum * rho + (1 - rho) * pow(grad, 2)
       val newGrad = grad / (epsilon + sqrt(newGradSum))
       Array(newGrad, newGradSum)
     }

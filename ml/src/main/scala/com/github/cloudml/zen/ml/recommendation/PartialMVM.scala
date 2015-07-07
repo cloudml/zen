@@ -75,7 +75,7 @@ private[ml] abstract class PartialMVM extends Serializable with Logging {
 
   def rank: Int
 
-  def halfLife: Int = 40
+  def halfLife: Int = 15
 
   def epsilon: Double = 1e-6
 
@@ -187,7 +187,7 @@ private[ml] abstract class PartialMVM extends Serializable with Logging {
   // Updater for L2 regularized problems
   protected def updateWeight(delta: (Double, VertexRDD[Array[Double]]), iter: Int): VertexRDD[VD] = {
     val (biasGrad, gradient) = delta
-    val wStepSize = if (useAdaGrad) stepSize else stepSize / sqrt(iter)
+    val wStepSize = stepSize / sqrt(iter)
     val l2StepSize = stepSize / sqrt(iter)
     val (regB, regW, regV) = l2
     bias -= wStepSize * biasGrad + l2StepSize * regB * bias
@@ -195,7 +195,7 @@ private[ml] abstract class PartialMVM extends Serializable with Logging {
       gradient match {
         case Some(grad) =>
           val weight = attr
-          val wd  = if (useWeightedLambda) weight.last / (numSamples + 1.0) else 1.0
+          val wd = if (useWeightedLambda) weight.last / (numSamples + 1.0) else 1.0
           var i = 0
           while (i < rank) {
             weight(i) -= wStepSize * grad(i) + l2StepSize * regV * wd * weight(i)
@@ -251,7 +251,7 @@ private[ml] abstract class PartialMVM extends Serializable with Logging {
           val newGradSum = new Array[Double](gradLen)
           val newGrad = new Array[Double](gradLen)
           for (i <- 0 until gradLen) {
-            newGradSum(i) = gradSum(i) * rho + pow(grad(i), 2)
+            newGradSum(i) = gradSum(i) * rho + (1 - rho) * pow(grad(i), 2)
             newGrad(i) = grad(i) / (epsilon + sqrt(newGradSum(i)))
           }
           (newGrad, newGradSum)
