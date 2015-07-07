@@ -24,7 +24,7 @@ import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, Ve
 import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.clustering.LDA._
 import com.github.cloudml.zen.ml.clustering.LDAUtils._
-import com.github.cloudml.zen.ml.util.AliasTable
+import com.github.cloudml.zen.ml.util.{XORShiftRandom, AliasTable}
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.graphx._
@@ -86,7 +86,7 @@ abstract class LDA private[ml](
 
   def getCorpus: Graph[VD, ED] = corpus
 
-  @transient private var seed = new Random().nextInt()
+  @transient private var seed = new XORShiftRandom().nextInt()
   @transient private var innerIter = 1
   @transient private var totalTopicCounter: BDV[Count] = collectTotalTopicCounter(corpus)
 
@@ -402,7 +402,7 @@ object LDA {
     numDocs = docs.count()
     println(s"num docs in the corpus: $numDocs")
     val edges = docs.mapPartitionsWithIndex((pid, iter) => {
-      val gen = new Random(pid + 117)
+      val gen = new XORShiftRandom(pid + 117)
       iter.flatMap { case (docId, doc) =>
         if (computedModel == null) {
           initializeEdges(gen, doc, docId, numTopics)
@@ -579,7 +579,7 @@ class FastLDA(
     val parts = graph.edges.partitions.size
     val nweGraph = graph.mapTriplets(
       (pid, iter) => {
-        val gen = new Random(parts * innerIter + pid)
+        val gen = new XORShiftRandom(parts * innerIter + pid)
         // table is a per term data structure
         // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
         // so, use below simple cache to avoid calculating table each time
@@ -930,11 +930,6 @@ class LightLDA(
     val nq = q(vd, proposalTopic, false)
 
     val pi = (np * cq) / (cp * nq)
-    if (gen.nextDouble() < 1e-32) {
-      println(s"Pi: ${pi}")
-      println(s"($np * $cq) / ($cp * $nq)")
-    }
-
     if (gen.nextDouble() < math.min(1.0, pi)) proposalTopic else currentTopic
   }
 

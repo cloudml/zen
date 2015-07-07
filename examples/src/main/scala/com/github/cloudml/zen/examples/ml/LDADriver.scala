@@ -19,6 +19,7 @@ package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDA
+import com.github.cloudml.zen.ml.util.SparkHacker
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
@@ -90,14 +91,15 @@ object LDADriver {
   }
 
   def runTraining(sc: SparkContext,
-                  outputRootPath: String,
-                  numTopics: Int,
-                  totalIter: Int,
-                  alpha: Double,
-                  beta: Double,
-                  alphaAS: Double,
-                  trainingDocs: RDD[(Long, SV)],
-                  useDBHStrategy: Boolean): Double = {
+    outputRootPath: String,
+    numTopics: Int,
+    totalIter: Int,
+    alpha: Double,
+    beta: Double,
+    alphaAS: Double,
+    trainingDocs: RDD[(Long, SV)],
+    useDBHStrategy: Boolean): Double = {
+    SparkHacker.gcCleaner(15 * 60, 15 * 60, "LDA_gcCleaner")
     val trainingStartedTime = System.currentTimeMillis()
     //    val storage =  StorageLevel.DISK_ONLY
     val storage = StorageLevel.MEMORY_AND_DISK
@@ -128,15 +130,15 @@ object LDADriver {
   }
 
   def readDocsFromTxt(sc: SparkContext,
-                      docsPath: String,
-                      sampleRate: Double,
-                      partitionNum: Int): RDD[(Long, SV)] = {
+    docsPath: String,
+    sampleRate: Double,
+    partitionNum: Int): RDD[(Long, SV)] = {
     val rawDocs = sc.textFile(docsPath, partitionNum).sample(false, sampleRate)
     convertDocsToBagOfWords(sc, rawDocs)
   }
 
   def convertDocsToBagOfWords(sc: SparkContext,
-                              rawDocs: RDD[String]): RDD[(Long, SV)] = {
+    rawDocs: RDD[String]): RDD[(Long, SV)] = {
     rawDocs.cache()
     val wordsLength = rawDocs.mapPartitions { iter =>
       val iterator = iter.map { line =>

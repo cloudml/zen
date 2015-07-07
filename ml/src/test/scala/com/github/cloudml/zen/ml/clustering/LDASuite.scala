@@ -17,10 +17,11 @@
 
 package com.github.cloudml.zen.ml.clustering
 
+import java.io.File
 import java.util.Random
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import breeze.linalg.functions.euclideanDistance
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import breeze.stats.distributions.Poisson
 import com.github.cloudml.zen.ml.util.SharedSparkContext
 import com.github.cloudml.zen.ml.util.SparkUtils._
@@ -65,6 +66,19 @@ class LDASuite extends FunSuite with SharedSparkContext {
     assert(sameModel.alpha === ldaModel.alpha)
     assert(sameModel.beta === ldaModel.beta)
     assert(sameModel.alphaAS === ldaModel.alphaAS)
+
+    val localLdaModel = sameModel.toLocalLDAModel()
+    val tempDir2 = Files.createTempDir()
+    tempDir2.deleteOnExit()
+    val path2 = tempDir2.toString + File.separator + "lda.txt"
+    localLdaModel.save(path2)
+    val loadLdaModel = LDAModel.loadLocalLDAModel(path2)
+
+    assert(localLdaModel.ttc === loadLdaModel.ttc)
+    assert(localLdaModel.alpha === loadLdaModel.alpha)
+    assert(localLdaModel.beta === loadLdaModel.beta)
+    assert(localLdaModel.alphaAS === loadLdaModel.alphaAS)
+
   }
 
   test("LightLDA || Metropolis Hasting sampling") {
