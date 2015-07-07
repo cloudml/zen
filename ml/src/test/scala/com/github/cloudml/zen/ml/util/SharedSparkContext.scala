@@ -17,7 +17,7 @@
 
 package com.github.cloudml.zen.ml.util
 
-import org.apache.spark.SparkContext
+import org.apache.spark.{SparkConf, SparkContext}
 import org.scalatest.Suite
 import org.scalatest.BeforeAndAfterAll
 
@@ -30,7 +30,10 @@ trait SharedSparkContext extends BeforeAndAfterAll {
   def sc: SparkContext = _sc
 
   override def beforeAll() {
-    _sc = new SparkContext("local[3]", "test")
+    val conf = new SparkConf().setAppName(s"zen-test")
+    conf.set("spark.cleaner.referenceTracking.blocking", "true")
+    conf.set("spark.cleaner.referenceTracking.blocking.shuffle", "true")
+    _sc = new SparkContext("local[3]", "test", conf)
     super.beforeAll()
   }
 
