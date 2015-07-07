@@ -155,7 +155,8 @@ abstract class LogisticRegression(
     if (useAdaGrad) {
       val halfLife: Int = 15
       val epsilon: Double = 1e-6
-      val delta = adaGrad(gradientSum, gradient, epsilon, halfLife)
+      val rho = math.exp(-math.log(2.0) / halfLife)
+      val delta = adaGrad(gradientSum, gradient, epsilon, rho)
       checkpointGradientSum(delta)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
 
