@@ -108,47 +108,7 @@ object AdsMVM extends Logging {
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
     SparkHacker.gcCleaner(60 * 15, 60 * 15, "AdsMVM")
-    var adaDataSet = sc.textFile(input, sc.defaultParallelism).map { line =>
-      val arr = line.split(" ")
-      val Array(label, importance) = arr.head.split(":")
-      val features = arr.tail.map { sub =>
-        val Array(featureId, featureValue, viewId) = sub.split(":")
-        (featureId.toInt, featureValue.toDouble, viewId.toInt)
-      }
-      (importance.toInt, label.toDouble, features)
-    }
-
-    if (numPartitions > 0) adaDataSet = adaDataSet.repartition(numPartitions)
-    adaDataSet.persist(StorageLevel.MEMORY_AND_DISK)
-    adaDataSet.count()
-
-    val maxUnigramsId = adaDataSet.flatMap(_._3.filter(_._3 == 1).map(_._1)).max
-    val maxDisplayUrlId = adaDataSet.flatMap(_._3.filter(_._3 == 2).map(_._1)).max
-    val maxPositionId = adaDataSet.flatMap(_._3.filter(_._3 == 3).map(_._1)).max
-    val maxMatchTypeId = adaDataSet.flatMap(_._3.filter(_._3 == 4).map(_._1)).max
-    val numFeatures = maxMatchTypeId + 1
-
-    val dataSet = adaDataSet.flatMap { case (importance, label, features) =>
-      (0 until importance).map { i =>
-        val sv = BSV.zeros[Double](numFeatures)
-        features.foreach { case (featureId, featureValue, _) =>
-          sv(featureId) = featureValue
-        }
-        new LabeledPoint(label, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
-      }
-    }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
-
-    val testSet = dataSet.filter(_._2.features.hashCode() % 5 == 0)
-    val trainSet = dataSet.filter(_._2.features.hashCode() % 5 != 0)
-    trainSet.count()
-    testSet.count()
-    adaDataSet.unpersist()
-
-    /**
-     * [0,maxUnigramsId), [maxUnigramsId + 1,maxDisplayUrlId), [maxDisplayUrlId + 1,maxPositionId)
-     * [maxPositionId + 1, numFeatures)
-     */
-    val views = Array(maxUnigramsId + 1, maxDisplayUrlId + 1, maxPositionId + 1, numFeatures).map(_.toLong)
+    val (trainSet, testSet, views) = AdsUtils.genSamplesWithTime(sc, input, numPartitions)
     val fm = new MVMClassification(trainSet, stepSize, views, regular, 0.0, rank,
       useAdaGrad, useWeightedLambda, 1.0, StorageLevel.MEMORY_AND_DISK)
     fm.run(numIterations)

@@ -42,11 +42,12 @@ private[zen] object MovieLensUtils extends Logging {
         (userId.toInt, movieId.toInt, rating.toDouble, timestamp.toInt)
       }
     }
-    if (numPartitions > 0) {
-      movieLens = movieLens.repartition(numPartitions)
-      movieLens.count()
+    movieLens = if (numPartitions > 0) {
+      movieLens.repartition(numPartitions)
+    } else {
+      movieLens.repartition(sc.defaultParallelism)
     }
-    movieLens.persist(newLevel)
+    movieLens.persist(newLevel).count()
 
     val daySeconds = 60 * 60 * 24
     val maxUserId = movieLens.map(_._1).max + 1
