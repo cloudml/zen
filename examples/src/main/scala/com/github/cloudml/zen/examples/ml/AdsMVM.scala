@@ -149,7 +149,7 @@ object AdsMVM extends Logging {
      * [maxPositionId + 1, numFeatures)
      */
     val views = Array(maxUnigramsId + 1, maxDisplayUrlId + 1, maxPositionId + 1, numFeatures).map(_.toLong)
-    val fm = new MVMRegression(trainSet, stepSize, views, regular, 0.0, rank,
+    val fm = new MVMClassification(trainSet, stepSize, views, regular, 0.0, rank,
       useAdaGrad, useWeightedLambda, 1.0, StorageLevel.MEMORY_AND_DISK)
     fm.run(numIterations)
     val model = fm.saveModel()

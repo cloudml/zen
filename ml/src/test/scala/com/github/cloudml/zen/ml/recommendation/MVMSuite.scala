@@ -33,54 +33,6 @@ import org.scalatest.{FunSuite, Matchers}
 
 class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
 
-  ignore("binary classification") {
-    val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-    val dataSetFile = s"$sparkHome/data/binary_classification_data.txt"
-    val checkpoint = s"$sparkHome/tmp"
-    sc.setCheckpointDir(checkpoint)
-    val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile).zipWithIndex().map {
-      case (LabeledPoint(label, features), id) =>
-        val newLabel = if (label > 0.0) 1.0 else 0.0
-        (id, LabeledPoint(newLabel, features))
-    }
-    val stepSize = 0.1
-    val regParam = 1e-2
-    val l2 = (regParam, regParam, regParam)
-    val rank = 20
-    val useAdaGrad = true
-    val trainSet = dataSet.cache()
-    val fm = new FMClassification(trainSet, stepSize, l2, rank, useAdaGrad)
-
-    val maxIter = 10
-    val pps = new Array[Double](maxIter)
-    var i = 0
-    val startedAt = System.currentTimeMillis()
-    while (i < maxIter) {
-      fm.run(1)
-      val q = fm.forward(i)
-      pps(i) = fm.loss(q)
-      i += 1
-    }
-    println((System.currentTimeMillis() - startedAt) / 1e3)
-    pps.foreach(println)
-
-    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
-    assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.size > 0.05)
-    assert(pps.head - pps.last > 0)
-
-
-    val fmModel = fm.saveModel()
-    val tempDir = Files.createTempDir()
-    tempDir.deleteOnExit()
-    val path = tempDir.toURI.toString
-    fmModel.save(sc, path)
-    val sameModel = FMModel.load(sc, path)
-    assert(sameModel.k === fmModel.k)
-    assert(sameModel.classification === fmModel.classification)
-    assert(sameModel.factors.sortByKey().map(_._2).collect() ===
-      fmModel.factors.sortByKey().map(_._2).collect())
-  }
-
   ignore("regression") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
     val dataSetFile = s"$sparkHome/data/regression_data.txt"
@@ -444,7 +396,7 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
 
   }
 
-  test("movieLens 100k regression") {
+  ignore("movieLens 100k regression") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
     val dataSetFile = s"$sparkHome/data/ml-100k/u.data"
     val checkpointDir = s"$sparkHome/tmp"
@@ -500,6 +452,64 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     println(f"Test loss: ${model.loss(testSet)}%1.4f")
 
   }
+
+  test("movieLens 100k binary classification") {
+    val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
+    val dataSetFile = s"$sparkHome/data/ml-100k/u.data"
+    val checkpointDir = s"$sparkHome/tmp"
+    sc.setCheckpointDir(checkpointDir)
+
+    val movieLens = sc.textFile(dataSetFile, 2).mapPartitions { iter =>
+      iter.filter(t => !t.startsWith("userId") && !t.isEmpty).map { line =>
+        val Array(userId, movieId, rating, timestamp) = line.split("\t")
+        (userId.toInt, movieId.toInt, rating.toDouble, timestamp.toInt / (60 * 60 * 24))
+      }
+    }.repartition(72).persist(StorageLevel.MEMORY_AND_DISK)
+    val maxMovieId = movieLens.map(_._2).max + 1
+    val maxUserId = movieLens.map(_._1).max + 1
+    val maxDay = movieLens.map(_._4).max()
+    val minDay = movieLens.map(_._4).min()
+    val day = maxDay - minDay + 1
+    val numFeatures = maxUserId + maxMovieId + day
+
+    val dataSet = movieLens.map { case (userId, movieId, rating, timestamp) =>
+      val sv = BSV.zeros[Double](numFeatures)
+      sv(userId) = 1.0
+      sv(movieId + maxUserId) = 1.0
+      sv(timestamp - minDay + maxUserId + maxMovieId) = 1.0
+      new LabeledPoint(if (rating > 2.5) 1 else 0, new SSV(sv.length,
+        sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
+    }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
+    dataSet.count()
+    movieLens.unpersist()
+
+
+    val stepSize = 0.1
+    val numIterations = 50
+    val regParam = 0.1
+    val l2 = (regParam, regParam, regParam)
+    val rank = 4
+    val useAdaGrad = true
+    val useWeightedLambda = true
+    val views = Array(maxUserId, maxUserId + maxMovieId, numFeatures).map(_.toLong)
+    val miniBatchFraction = 1
+    val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
+
+    val fm = new FMClassification(trainSet, stepSize, l2,
+       rank, useAdaGrad, miniBatchFraction)
+
+    //    val fm = new FMRegression(trainSet, stepSize, l2, rank, useAdaGrad,
+    //      miniBatchFraction, StorageLevel.MEMORY_AND_DISK)
+
+    //    val fm = new BSFMRegression(trainSet, stepSize, Array(maxUserId, numFeatures),
+    //      l2, rank, useAdaGrad, miniBatchFraction)
+
+    fm.run(numIterations)
+    val model = fm.saveModel()
+    println(f"Test loss: ${model.loss(testSet)}%1.4f")
+
+  }
+
 
   ignore("movieLens 100k SVD++") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))

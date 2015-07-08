@@ -377,6 +377,15 @@ class BSFMClassification(
       }
     }
   }
+
+  override protected[ml] def loss(q: VertexRDD[VD]): Double = {
+    val thisNumSamples = (1.0 / mask) * numSamples
+    val sum = samples.join(q).map { case (_, (y, m)) =>
+      val z = predictInterval(rank, views.length, bias, m)
+      if (y(0) > 0.0) Utils.log1pExp(-z) else Utils.log1pExp(z)
+    }.reduce(_ + _)
+    sum / thisNumSamples
+  }
 }
 
 class BSFMRegression(

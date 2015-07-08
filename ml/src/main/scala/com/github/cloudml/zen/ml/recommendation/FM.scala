@@ -113,13 +113,12 @@ private[ml] abstract class FM extends Serializable with Logging {
       val startedAt = System.nanoTime()
       val previousVertices = vertices
       val margin = forward(iter)
-      var (thisNumSamples, costSum, gradient) = backward(margin, iter)
+      var (thisNumSamples, rmse, gradient) = backward(margin, iter)
       gradient = updateGradientSum(gradient, iter)
       vertices = updateWeight(gradient, iter)
       checkpointVertices()
       vertices.count()
       dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
-      val rmse = sqrt(costSum / thisNumSamples)
       logInfo(s"(Iteration $iter/$iterations) RMSE:                     $rmse")
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
@@ -134,15 +133,6 @@ private[ml] abstract class FM extends Serializable with Logging {
 
   def saveModel(): FMModel = {
     new FMModel(rank, intercept, false, features)
-  }
-
-  protected[ml] def loss(q: VertexRDD[VD]): Double = {
-    val thisNumSamples = (1.0 / mask) * numSamples
-    val sum = samples.join(q).map { case (_, (y, m)) =>
-      val pm = predict(m)
-      pow(pm - y(0), 2)
-    }.reduce(_ + _)
-    sqrt(sum / thisNumSamples)
   }
 
   protected[ml] def forward(iter: Int): VertexRDD[Array[Double]] = {
@@ -366,18 +356,21 @@ class FMClassification(
         case Some(m) =>
           val y = data.head
           val diff = predict(m) - y
-          Array(sumInterval(rank, m), diff)
-        case _ => data
+          val z = predictInterval(rank, bias, m)
+          val loss = if (y > 0.0) Utils.log1pExp(-z) else Utils.log1pExp(z)
+          (Array(sumInterval(rank, m), diff), loss)
+        case _ => (data, 0.0)
       }
     }
     multi.setName(s"multiplier-$iter").persist(storageLevel)
     val Array(numSamples, costSum) = multi.filter { case (id, _) =>
       isSampleId(id) && (mod == 1 || isSampled(random, seed, id, iter, mod))
-    }.map { case (_, arr) =>
-      Array(1.0, pow(arr.last, 2.0))
+    }.map { case (_, (arr, loss)) =>
+      Array(1D, loss)
     }.reduce(reduceInterval)
-    (numSamples.toLong, costSum, multi)
+    (numSamples.toLong, costSum / numSamples, multi.mapValues(_._1))
   }
+
 }
 
 class FMRegression(
@@ -435,7 +428,7 @@ class FMRegression(
     }.map { case (_, arr) =>
       Array(1.0, pow(arr.last / 2.0, 2.0))
     }.reduce(reduceInterval)
-    (numSamples.toLong, costSum, multi)
+    (numSamples.toLong, sqrt(costSum / numSamples), multi)
   }
 }
 

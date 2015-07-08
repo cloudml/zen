@@ -25,54 +25,6 @@ import org.apache.spark.mllib.util.MLUtils
 import org.scalatest.{Matchers, FunSuite}
 
 class FMSuite extends FunSuite with SharedSparkContext with Matchers {
-  test("binary classification") {
-    val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-    val dataSetFile = s"${sparkHome}/data/binary_classification_data.txt"
-    val checkpoint = s"$sparkHome/tmp"
-    sc.setCheckpointDir(checkpoint)
-    val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile).zipWithIndex().map {
-      case (LabeledPoint(label, features), id) =>
-        val newLabel = if (label > 0.0) 1.0 else 0.0
-        (id, LabeledPoint(newLabel, features))
-    }
-    val stepSize = 0.1
-    val regParam = 1e-2
-    val l2 = (regParam, regParam, regParam)
-    val rank = 20
-    val useAdaGrad = true
-    val trainSet = dataSet.cache()
-    val fm = new FMClassification(trainSet, stepSize, l2, rank, useAdaGrad)
-
-    val maxIter = 10
-    val pps = new Array[Double](maxIter)
-    var i = 0
-    val startedAt = System.currentTimeMillis()
-    while (i < maxIter) {
-      fm.run(1)
-      val q = fm.forward(i)
-      pps(i) = fm.loss(q)
-      i += 1
-    }
-    println((System.currentTimeMillis() - startedAt) / 1e3)
-    pps.foreach(println)
-
-    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
-    assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.size > 0.05)
-    assert(pps.head - pps.last > 0)
-
-
-    val fmModel = fm.saveModel()
-    val tempDir = Files.createTempDir()
-    tempDir.deleteOnExit()
-    val path = tempDir.toURI.toString
-    fmModel.save(sc, path)
-    val sameModel = FMModel.load(sc, path)
-    assert(sameModel.k === fmModel.k)
-    assert(sameModel.intercept === fmModel.intercept)
-    assert(sameModel.classification === fmModel.classification)
-    assert(sameModel.factors.sortByKey().map(_._2).collect() ===
-      fmModel.factors.sortByKey().map(_._2).collect())
-  }
 
   ignore("regression") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))

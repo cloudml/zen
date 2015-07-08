@@ -21,11 +21,13 @@ import com.github.cloudml.zen.ml.recommendation.PartialMVM._
 import com.github.cloudml.zen.ml.util.LoaderUtils
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import org.apache.spark.SparkContext
+import org.apache.spark.mllib.evaluation.{BinaryClassificationMetrics, RegressionMetrics}
 import org.apache.spark.mllib.linalg.{Vector => SV}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.mllib.util.{Loader, Saveable}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Row, SQLContext}
+import org.apache.spark.storage.StorageLevel
 import org.json4s.DefaultFormats
 import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods._
@@ -59,13 +61,30 @@ class PartialMVMFMModel(
   }
 
   def loss(data: RDD[(Long, LabeledPoint)]): Double = {
-    val numSamples = data.count()
+    // val minTarget = data.map(_._2.label).min()
+    // val maxTarget = data.map(_._2.label).max()
     val perd = predict(data.map(t => (t._1, t._2.features)))
     val label = data.map(t => (t._1, t._2.label))
-    val sum = label.join(perd).map { case (_, (l, p)) =>
-      pow(l - p, 2)
-    }.reduce(_ + _)
-    sqrt(sum / numSamples)
+    val scoreAndLabels = label.join(perd).map { case (_, (label, score)) =>
+      // var r = Math.max(score, minTarget)
+      // r = Math.min(r, maxTarget)
+      // pow(l - r, 2)
+      (score, label)
+    }
+    scoreAndLabels.persist(StorageLevel.MEMORY_AND_DISK)
+    val ret = if (classification) auc(scoreAndLabels) else rmse(scoreAndLabels)
+    scoreAndLabels.unpersist(blocking = false)
+    ret
+  }
+
+  def rmse(scoreAndLabels: RDD[(Double, Double)]): Double = {
+    val metrics = new RegressionMetrics(scoreAndLabels)
+    metrics.rootMeanSquaredError
+  }
+
+  def auc(scoreAndLabels: RDD[(Double, Double)]): Double = {
+    val metrics = new BinaryClassificationMetrics(scoreAndLabels)
+    metrics.areaUnderROC()
   }
 
   override def save(sc: SparkContext, path: String): Unit = {

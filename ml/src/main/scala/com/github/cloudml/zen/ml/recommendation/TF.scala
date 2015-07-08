@@ -106,14 +106,13 @@ private[ml] abstract class TF extends Serializable with Logging {
       val startedAt = System.nanoTime()
       val previousVertices = vertices
       val margin = forward(iter)
-      var (thisNumSamples, costSum, gradient) = backward(margin, iter)
+      var (thisNumSamples, rmse, gradient) = backward(margin, iter)
       gradient = updateGradientSum(gradient, iter)
       vertices = updateWeight(gradient, iter)
       checkpointVertices()
       vertices.count()
       dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      val rmse = sqrt(costSum / thisNumSamples)
       logInfo(s"(Iteration $iter/$iterations) RMSE:                     $rmse")
       logInfo(s"End  train (Iteration $iter/$iterations) takes:         $elapsedSeconds")
 
@@ -350,18 +349,21 @@ class TFClassification(
           val y = data.head
           // val diff = predict(m) - y
           val arr = sumInterval(rank, m)
-          val diff = arr.last - y
+          val sum = arr.last
+          val z = predict(m)
+          val diff = z - y
+          val loss = if (y > 0.0) Utils.log1pExp(-sum) else Utils.log1pExp(sum)
           arr(arr.length - 1) = diff
-          arr
-        case _ => data
+          (arr, loss)
+        case _ => (data, 0.0)
       }
     }
     multi.setName(s"multiplier-$iter").persist(storageLevel)
-    val Array(numSamples, costSum) = multi.filter(t => t._2.length == rank * views.length + 1).map {
-      case (_, arr) =>
-        Array(1D, pow(arr.last, 2))
+    val Array(numSamples, costSum) = multi.filter(t => t._2._1.length == rank * views.length + 1).map {
+      case (_, (arr, loss)) =>
+        Array(1D, loss)
     }.reduce(reduceInterval)
-    (numSamples.toLong, costSum, multi)
+    (numSamples.toLong, costSum / numSamples, multi.mapValues(_._1))
   }
 
 }
@@ -423,7 +425,7 @@ class TFRegression(
       case (_, arr) =>
         Array(1D, pow(arr.last / 2.0, 2))
     }.reduce(reduceInterval)
-    (numSamples.toLong, costSum, multi)
+    (numSamples.toLong, sqrt(costSum / numSamples), multi)
   }
 }
 

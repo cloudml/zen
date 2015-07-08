@@ -195,7 +195,7 @@ private[ml] abstract class PartialMVM extends Serializable with Logging {
       gradient match {
         case Some(grad) =>
           val weight = attr
-          val wd  = if (useWeightedLambda) weight.last / (numSamples + 1.0) else 1.0
+          val wd = if (useWeightedLambda) weight.last / (numSamples + 1.0) else 1.0
           var i = 0
           while (i < rank) {
             weight(i) -= wStepSize * grad(i) + l2StepSize * regV * wd * weight(i)
@@ -368,6 +368,15 @@ class PartialMVMClassification(
         case _ => data
       }
     }
+  }
+
+  override protected[ml] def loss(q: VertexRDD[VD]): Double = {
+    val thisNumSamples = (1.0 / mask) * numSamples
+    val sum = samples.join(q).map { case (_, (y, m)) =>
+      val z = predictInterval(rank, views.length, bias, m)
+      if (y(0) > 0.0) Utils.log1pExp(-z) else Utils.log1pExp(z)
+    }.reduce(_ + _)
+    sum / thisNumSamples
   }
 }
 
