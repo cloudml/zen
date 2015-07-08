@@ -67,7 +67,7 @@ object AdsMVM extends Logging {
       opt[Double]("fraction")
         .text(
           s"the sampling fraction, default: ${defaultParams.fraction}")
-        .action((x, c) => c.copy(regular = x))
+        .action((x, c) => c.copy(fraction = x))
       opt[Unit]("adagrad")
         .text("use AdaGrad")
         .action((_, c) => c.copy(useAdaGrad = true))
