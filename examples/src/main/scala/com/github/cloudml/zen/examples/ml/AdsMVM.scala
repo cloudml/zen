@@ -108,7 +108,7 @@ object AdsMVM extends Logging {
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
     SparkHacker.gcCleaner(60 * 15, 60 * 15, "AdsMVM")
-    var adaDataSet = sc.textFile(input, sc.defaultParallelism).map { line =>
+    var adaDataSet = sc.textFile(input, sc.defaultParallelism).sample(false, 0.1).map { line =>
       val arr = line.split(" ")
       val Array(label, importance) = arr.head.split(":")
       val features = arr.tail.map { sub =>
