@@ -178,10 +178,10 @@ object NetflixPrizeMVM extends Logging {
     nfPrize.unpersist()
 
     /**
-     * The first view contains [0,maxUserId),The second view contains [maxUserId,numFeatures)...
+     * The first view contains [0,maxUserId),The second view contains [maxUserId, maxMovieId + maxUserId)...
      * The last id equals the number of features
      */
-    val views = Array(maxUserId, numFeatures).map(_.toLong)
+    val views = Array(maxUserId, maxMovieId + maxUserId, numFeatures).map(_.toLong)
     val fm = new MVMRegression(trainSet, stepSize, views, regular, 0.0, rank,
       useAdaGrad, useWeightedLambda, 1.0, StorageLevel.MEMORY_AND_DISK)
     fm.run(numIterations)

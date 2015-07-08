@@ -60,7 +60,7 @@ object MovieLensMVM extends Logging {
         .action((x, c) => c.copy(stepSize = x))
       opt[Double]("regular")
         .text(
-          s"L2 regularization, default: ${defaultParams.regular}".stripMargin)
+          s"L2 regularization, default: ${defaultParams.regular}")
         .action((x, c) => c.copy(regular = x))
       opt[Unit]("adagrad")
         .text("use AdaGrad")
@@ -82,7 +82,7 @@ object MovieLensMVM extends Logging {
           |
           | bin/spark-submit --class com.github.cloudml.zen.examples.ml.MovieLensMVM \
           | examples/target/scala-*/zen-examples-*.jar \
-          | --rank 20 --numIterations 50 --regular 0.01,0.01,0.01 --kryo \
+          | --rank 20 --numIterations 50 --regular 0.01 --kryo \
           | data/mllib/sample_movielens_data.txt
           | data/mllib/MVM_model
         """.stripMargin)

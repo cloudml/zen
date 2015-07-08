@@ -190,7 +190,7 @@ object NetflixPrizeThreeWayFM extends Logging {
      * The first view contains [0,maxUserId),The second view contains [maxUserId,numFeatures)...
      * The last id equals the number of features
      */
-    val views = Array(maxUserId, numFeatures).map(_.toLong)
+    val views = Array(maxUserId, maxMovieId + maxUserId, numFeatures).map(_.toLong)
     val model = ThreeWayFM.trainRegression(trainSet, numIterations, stepSize, views, l2, rank2, rank3,
       useAdaGrad, useWeightedLambda, 1.0)
     model.save(sc, out)

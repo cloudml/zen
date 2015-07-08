@@ -178,10 +178,6 @@ object NetflixPrizeFM extends Logging {
     trainSet.count()
     nfPrize.unpersist()
 
-    /**
-     * The first view contains [0,maxUserId),The second view contains [maxUserId,numFeatures)...
-     * The last id equals the number of features
-     */
     val model = FM.trainRegression(trainSet, numIterations, stepSize, l2, rank, useAdaGrad, 1.0)
     model.save(sc, out)
     val rmse = model.loss(testSet)
