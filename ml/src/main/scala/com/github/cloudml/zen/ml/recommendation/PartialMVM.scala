@@ -165,7 +165,7 @@ private[ml] abstract class PartialMVM extends Serializable with Logging {
   protected def backward(q: VertexRDD[VD], iter: Int): (Double, VertexRDD[Array[Double]]) = {
     val thisNumSamples = (1.0 / mask) * numSamples
     multi = multiplier(q).setName(s"multiplier-$iter").persist(storageLevel)
-    val gradW0 = multi.map(_._2.last).sum() / thisNumSamples
+    val gradW0 = multi.filter(t => isSampleId(t._1)).map(_._2.last).sum() / thisNumSamples
     val sampledArrayLen = (2 * rank) * views.length + 2
     val gradient = GraphImpl.fromExistingRDDs(multi, edges).aggregateMessages[Array[Double]](ctx => {
       // val sampleId = ctx.dstId
@@ -574,8 +574,12 @@ object PartialMVM {
     viewId.toInt
   }
 
-  private[ml] def newSampleId(id: Long): VertexId = {
+  @inline private[ml] def newSampleId(id: Long): VertexId = {
     -(id + 1L)
+  }
+
+  @inline private[ml] def isSampleId(id: Long): Boolean = {
+    id < 0
   }
 
   private[ml] def predictInterval(rank2: Int, viewSize: Int, bias: Double, arr: VD): ED = {
