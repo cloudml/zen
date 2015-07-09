@@ -24,7 +24,7 @@ import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, Ve
 import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.clustering.LDA._
 import com.github.cloudml.zen.ml.clustering.LDAUtils._
-import com.github.cloudml.zen.ml.util.AliasTable
+import com.github.cloudml.zen.ml.util.{XORShiftRandom, AliasTable}
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.graphx._
@@ -86,7 +86,7 @@ abstract class LDA private[ml](
 
   def getCorpus: Graph[VD, ED] = corpus
 
-  @transient private var seed = new Random().nextInt()
+  @transient private var seed = new XORShiftRandom().nextInt()
   @transient private var innerIter = 1
   @transient private var totalTopicCounter: BDV[Count] = collectTotalTopicCounter(corpus)
 
@@ -96,7 +96,7 @@ abstract class LDA private[ml](
 
   private def checkpoint(corpus: Graph[VD, ED]): Unit = {
     val sc = corpus.edges.sparkContext
-    if (innerIter % 10 == 0 && sc.getCheckpointDir.isDefined) {
+    if (innerIter % 12 == 0 && sc.getCheckpointDir.isDefined) {
       corpus.checkpoint()
     }
   }
@@ -148,7 +148,11 @@ abstract class LDA private[ml](
     alphaAS: Double,
     beta: Double): Graph[VD, ED]
 
-  def saveModel(totalIter: Int = 1): DistributedLDAModel = {
+  /**
+   * Save the term-topic related model
+   * @param totalIter
+   */
+  def saveTermModel(totalIter: Int = 1): DistributedLDAModel = {
     var termTopicCounter: RDD[(VertexId, VD)] = null
     for (iter <- 1 to totalIter) {
       logInfo(s"Save TopicModel (Iteration $iter/$totalIter)")
@@ -172,6 +176,36 @@ abstract class LDA private[ml](
     ttc.persist(storageLevel)
     val gtc = ttc.map(_._2).aggregate(BDV.zeros[Double](numTopics))(_ :+= _, _ :+= _)
     new DistributedLDAModel(gtc, ttc, numTopics, numTerms, alpha, beta, alphaAS)
+  }
+
+  /**
+   * save doc-topic related model
+   * @param totalIter
+   */
+  def saveDocModel(totalIter: Int = 1): DistributedLDAModel = {
+    var docTopicCounter: RDD[(VertexId, VD)] = null
+    for (iter <- 1 to totalIter) {
+      logInfo(s"Save TopicModel (Iteration $iter/$totalIter)")
+      var previousDocTopicCounter = docTopicCounter
+      gibbsSampling(iter)
+      val newDocTopicCounter = docVertices
+      docTopicCounter = Option(docTopicCounter).map(_.join(newDocTopicCounter).map {
+        case (term, (a, b)) =>
+          (term, a :+ b)
+      }).getOrElse(newDocTopicCounter)
+
+      docTopicCounter.persist(storageLevel).count()
+      Option(previousDocTopicCounter).foreach(_.unpersist(blocking = false))
+      previousDocTopicCounter = docTopicCounter
+    }
+    val dtc = docTopicCounter.mapValues(c => {
+      val nc = new BSV[Double](c.index.slice(0, c.used), c.data.slice(0, c.used).map(_.toDouble), c.length)
+      nc :/= totalIter.toDouble
+      nc
+    })
+    dtc.persist(storageLevel)
+    val gtc = dtc.map(_._2).aggregate(BDV.zeros[Double](numTopics))(_ :+= _, _ :+= _)
+    new DistributedLDAModel(gtc, dtc, numTopics, numTerms, alpha, beta, alphaAS)
   }
 
   def runGibbsSampling(iterations: Int): Unit = {
@@ -313,15 +347,18 @@ object LDA {
     beta: Double = 0.01,
     alphaAS: Double = 0.1,
     useLightLDA: Boolean = false,
-    useDBHStrategy: Boolean = false): DistributedLDAModel = {
+    useDBHStrategy: Boolean = false,
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): (DistributedLDAModel, DistributedLDAModel) = {
     require(totalIter > 0, "totalIter is less than 0")
     val lda = if (useLightLDA) {
-      new LightLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy)
+      new LightLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy, storageLevel)
     } else {
-      new FastLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy)
+      new FastLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy, storageLevel)
     }
     lda.runGibbsSampling(totalIter - 1)
-    lda.saveModel(1)
+    val termModel = lda.saveTermModel(1)
+    val docModel = lda.saveDocModel(1)
+    (termModel, docModel)
   }
 
   /**
@@ -353,7 +390,7 @@ object LDA {
     }
     broadcastModel.unpersist(blocking = false)
     lda.runGibbsSampling(totalIter - 1)
-    lda.saveModel(1)
+    lda.saveTermModel(1)
   }
 
   private[ml] def initializeCorpus(
@@ -365,7 +402,7 @@ object LDA {
     numDocs = docs.count()
     println(s"num docs in the corpus: $numDocs")
     val edges = docs.mapPartitionsWithIndex((pid, iter) => {
-      val gen = new Random(pid + 117)
+      val gen = new XORShiftRandom(pid + 117)
       iter.flatMap { case (docId, doc) =>
         if (computedModel == null) {
           initializeEdges(gen, doc, docId, numTopics)
@@ -429,6 +466,7 @@ object LDA {
     }
   }
 
+  // make docId always be negative, so that the doc vertex always be the dest vertex
   private def genNewDocId(docId: Long): Long = {
     -(docId + 1L)
   }
@@ -523,6 +561,7 @@ class FastLDA(
     useDBHStrategy: Boolean,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK,
     computedModel: Broadcast[LocalLDAModel] = null) {
+    // docs.first()._2.size means the numTerms of the corpus
     this(initializeCorpus(docs, numTopics, storageLevel, computedModel),
       numTopics, docs.first()._2.size, alpha, beta, alphaAS, storageLevel, useDBHStrategy)
   }
@@ -540,7 +579,7 @@ class FastLDA(
     val parts = graph.edges.partitions.size
     val nweGraph = graph.mapTriplets(
       (pid, iter) => {
-        val gen = new Random(parts * innerIter + pid)
+        val gen = new XORShiftRandom(parts * innerIter + pid)
         // table is a per term data structure
         // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
         // so, use below simple cache to avoid calculating table each time
@@ -891,11 +930,6 @@ class LightLDA(
     val nq = q(vd, proposalTopic, false)
 
     val pi = (np * cq) / (cp * nq)
-    if (gen.nextDouble() < 1e-32) {
-      println(s"Pi: ${pi}")
-      println(s"($np * $cq) / ($cp * $nq)")
-    }
-
     if (gen.nextDouble() < math.min(1.0, pi)) proposalTopic else currentTopic
   }
 

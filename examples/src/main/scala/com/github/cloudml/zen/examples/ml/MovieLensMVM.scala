@@ -17,7 +17,7 @@
 package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
-import com.github.cloudml.zen.ml.recommendation.FM
+import com.github.cloudml.zen.ml.recommendation.MVM
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.graphx.GraphXUtils
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
@@ -26,22 +26,22 @@ import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{SparkConf, SparkContext}
 import scopt.OptionParser
 
-object MovieLensFM {
+object MovieLensMVM {
 
   case class Params(
     input: String = null,
     out: String = null,
     numIterations: Int = 40,
     stepSize: Double = 0.1,
-    regular: String = "0.01,0.01,0.01",
+    regular: Double = 0.05,
     rank: Int = 20,
     useAdaGrad: Boolean = false,
     kryo: Boolean = false) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
     val defaultParams = Params()
-    val parser = new OptionParser[Params]("FM") {
-      head("MovieLensFM: an example app for FM.")
+    val parser = new OptionParser[Params]("MVM") {
+      head("MovieLensMVM: an example app for MVM.")
       opt[Int]("numIterations")
         .text(s"number of iterations, default: ${defaultParams.numIterations}")
         .action((x, c) => c.copy(numIterations = x))
@@ -54,12 +54,9 @@ object MovieLensFM {
       opt[Double]("stepSize")
         .text(s"stepSize, default: ${defaultParams.stepSize}")
         .action((x, c) => c.copy(stepSize = x))
-      opt[String]("regular")
+      opt[Double]("regular")
         .text(
-          s"""
-             |'r0,r1,r2' for SGD and ALS: r0=bias regularization,
-             |r1=1-way regularization, r2=2-way regularization, default: ${defaultParams.regular} (auto)
-           """.stripMargin)
+          s"L2 regularization, default: ${defaultParams.regular}".stripMargin)
         .action((x, c) => c.copy(regular = x))
       opt[Unit]("adagrad")
         .text("use AdaGrad")
@@ -76,11 +73,11 @@ object MovieLensFM {
         """
           |For example, the following command runs this app on a synthetic dataset:
           |
-          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.MovieLensFM \
+          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.MovieLensMVM \
           |  examples/target/scala-*/zen-examples-*.jar \
           |  --rank 10 --numIterations 50 --regular 0.01,0.01,0.01 --kryo \
           |  data/mllib/sample_movielens_data.txt
-          |  data/mllib/fm_model
+          |  data/mllib/MVM_model
         """.stripMargin)
     }
 
@@ -93,9 +90,7 @@ object MovieLensFM {
 
   def run(params: Params): Unit = {
     val Params(input, out, numIterations, stepSize, regular, rank, useAdaGrad, kryo) = params
-    val regs = regular.split(",").map(_.toDouble)
-    val l2 = (regs(0), regs(1), regs(2))
-    val conf = new SparkConf().setAppName(s"FM with $params")
+    val conf = new SparkConf().setAppName(s"MVM with $params")
     if (kryo) {
       GraphXUtils.registerKryoClasses(conf)
       // conf.set("spark.kryoserializer.buffer.mb", "8")
@@ -113,6 +108,13 @@ object MovieLensFM {
     val maxMovieId = movieLens.map(_._2._1).max + 1
     val maxUserId = movieLens.map(_._1).max + 1
     val numFeatures = maxUserId + 2 * maxMovieId
+
+    /**
+     * The first view contains [0,maxUserId),The second view contains [maxUserId, maxMovieId + maxUserId)...
+     * The third contains [maxMovieId + maxUserId,numFeatures)  The last id equals the number of features
+     */
+    val views = Array(maxUserId, maxMovieId + maxUserId, numFeatures).map(_.toLong)
+
     val dataSet = movieLens.map { case (userId, (movieId, rating)) =>
       val sv = BSV.zeros[Double](maxMovieId)
       sv(movieId) = rating
@@ -135,8 +137,7 @@ object MovieLensFM {
     trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
     testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
     dataSet.unpersist()
-
-    val model = FM.trainRegression(dataSet, numIterations, stepSize, l2, rank, useAdaGrad, 1.0)
+    val model = MVM.trainRegression(trainSet, numIterations, stepSize, views, regular, rank, useAdaGrad, 1.0)
     model.save(sc, out)
     println(f"Test RMSE: ${model.loss(testSet)}%1.4f")
     sc.stop()

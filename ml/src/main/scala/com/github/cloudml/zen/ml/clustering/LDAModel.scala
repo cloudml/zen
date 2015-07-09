@@ -16,16 +16,19 @@
  */
 package com.github.cloudml.zen.ml.clustering
 
+import java.io._
 import java.lang.ref.SoftReference
 import java.util.Random
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, norm => brzNorm, sum => brzSum}
 import com.github.cloudml.zen.ml.DBHPartitioner
-import com.github.cloudml.zen.ml.clustering.LDAModel.{Count, DocId, ED, VD, WordId}
+import com.github.cloudml.zen.ml.clustering.LDAModel.{Count, DocId, ED, VD}
 import com.github.cloudml.zen.ml.clustering.LDAUtils._
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.{AliasTable, LoaderUtils}
-import org.apache.hadoop.io.{Text, NullWritable}
+import com.google.common.base.Charsets
+import com.google.common.io.Files
+import org.apache.hadoop.io.{NullWritable, Text}
 import org.apache.hadoop.mapred.TextOutputFormat
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.GraphImpl
@@ -35,7 +38,7 @@ import org.apache.spark.mllib.util.{Loader, MLUtils, Saveable}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.collection.AppendOnlyMap
-import org.apache.spark.{HashPartitioner, Logging, SparkContext}
+import org.apache.spark.{Logging, SparkContext}
 import org.json4s.DefaultFormats
 import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods._
@@ -171,6 +174,20 @@ class LocalLDAModel private[ml](
 
     }
     w.get()
+  }
+
+  def save(path: String): Unit = {
+    val file = new File(path)
+    require(!file.exists, s"model file $path does exist")
+    Files.touch(file)
+    val fw = Files.newWriter(file, Charsets.UTF_8)
+    fw.write(s"$numTopics $numTerms $alpha $beta $alphaAS \n")
+    ttc.zipWithIndex.foreach { case (sv, index) =>
+      val line = s"${index} ${sv.activeIterator.filter(_._2 != 0.0).map(t => s"${t._1}:${t._2}").mkString(" ")}\n"
+      fw.write(line)
+    }
+    fw.flush()
+    fw.close()
   }
 
 }
@@ -586,7 +603,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
       val numTopics = (metadata \ "numTopics").extract[Int]
       val numTerms = (metadata \ "numTerms").extract[Long]
       val isTransposed = (metadata \ "isTransposed").extract[Boolean]
-      val rdd = SaveLoadV1_0.loadData(sc, path, classNameV1_0, numTopics, numTerms)
+      val rdd = SaveLoadV1_0.loadData(sc, path, isTransposed, classNameV1_0, numTopics, numTerms)
 
       val ttc = if (isTransposed) {
         rdd.flatMap { case (topicId, vector) =>
@@ -614,6 +631,37 @@ object LDAModel extends Loader[DistributedLDAModel] {
 
   }
 
+  def loadLocalLDAModel(filePath: String): LocalLDAModel = {
+    val file: File = new File(filePath)
+    require(file.exists, s"model file $filePath does not exist")
+    require(file.isFile, s"model file $filePath is not a normal file")
+    val lines = Files.readLines(file, Charsets.UTF_8)
+    val Array(numTopics, numTerms, alpha, beta, alphaAS) = lines.get(0).split(" ")
+    val ttc = Array.fill(numTerms.toInt) {
+      BSV.zeros[Double](numTopics.toInt)
+    }
+    val iter = lines.listIterator(1)
+    while (iter.hasNext) {
+      val line = iter.next.trim
+      if (!line.isEmpty && !line.startsWith("#")) {
+        val its = line.split(" ")
+        val offset = its.head.toInt
+        val sv = ttc(offset)
+        its.tail.foreach { s =>
+          val Array(index, value) = s.split(":")
+          sv(index.toInt) = value.toDouble
+        }
+        sv.compact()
+
+      }
+    }
+    val gtc = BDV.zeros[Double](numTopics.toInt)
+    ttc.foreach { tc =>
+      gtc :+= tc
+    }
+    new LocalLDAModel(gtc, ttc, alpha.toDouble, beta.toDouble, alphaAS.toDouble)
+  }
+
   private[ml] object SaveLoadV1_0 {
 
     val formatVersionV1_0 = "1.0"
@@ -622,16 +670,21 @@ object LDAModel extends Loader[DistributedLDAModel] {
     def loadData(
       sc: SparkContext,
       path: String,
+      isTransposed: Boolean,
       modelClass: String,
       numTopics: Int,
       numTerms: Long): RDD[(VertexId, VD)] = {
       val dataPath = LoaderUtils.dataPath(path)
-      val dataRDD = MLUtils.loadLibSVMFile(sc, dataPath, numTopics)
-      val dataArray = dataRDD.take(1)
-      assert(dataArray.size == 1, s"Unable to load $modelClass data from: $dataPath")
-      val ttc = new Array[BSV[Double]](numTerms.toInt)
-      dataRDD.map { case LabeledPoint(termId, vector) =>
-        (termId.toLong, toBreeze(vector).asInstanceOf[BSV[Double]])
+      val numSize = if (isTransposed) numTerms.toInt else numTopics
+      sc.textFile(dataPath).map { line =>
+        val sv = BSV.zeros[Double](numSize)
+        val arr = line.split("\t")
+        arr.tail.foreach { sub =>
+          val Array(index, value) = sub.split(":")
+          sv(index.toInt) = value.toDouble
+        }
+        sv.compact()
+        (arr.head.toLong, sv)
       }
     }
 
@@ -666,8 +719,8 @@ object LDAModel extends Loader[DistributedLDAModel] {
       }
 
       // save model with the topic or word-term descending order
-      rdd.map{ case(id, vector) =>
-        val list =  vector.activeIterator.toList.sortWith((a, b) => a._2 > b._2)
+      rdd.map { case (id, vector) =>
+        val list = vector.activeIterator.toList.sortWith((a, b) => a._2 > b._2)
         (NullWritable.get(), new Text(id + "\t" + list.map(item => item._1 + ":" + item._2).mkString("\t")))
       }.saveAsHadoopFile[TextOutputFormat[NullWritable, Text]](LoaderUtils.dataPath(path))
     }

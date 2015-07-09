@@ -81,7 +81,7 @@ object BinaryClassification {
 
     parser.parse(args, defaultParams).map { params =>
       run(params)
-    } getOrElse {
+    }.getOrElse {
       System.exit(1)
     }
   }
@@ -98,6 +98,7 @@ object BinaryClassification {
     val dataSet = MLUtils.loadLibSVMFile(sc, input).zipWithUniqueId().map(_.swap).cache()
     val model = LogisticRegression.trainMIS(dataSet, numIterations, stepSize, l1, epsilon, useAdaGrad)
     model.save(sc, out)
+    sc.stop()
   }
 
 }

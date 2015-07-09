@@ -33,13 +33,13 @@ import org.apache.spark.storage.StorageLevel
 import scala.math._
 
 /**
- * Multi-view Machines 公式定义:
+ * Multi-view Machines :
  * \hat{y}(x) :=\sum_{i_1 =1}^{I_i +1} ...\sum_{i_m =1}^{I_m +1}
  * (\prod_{v=1}^{m} z_{i_v}^{(v)})(\sum_{f=1}^{k}\prod_{v=1}^{m}a_{i_{v,j}}^{(v)})
  * :=  \sum_{f}^{k}(\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)}) ..
  * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
  *
- * 其导数是:
+ * derivative of the model :
  * \frac{\partial \hat{y}(x|\Theta )}{\partial\theta} :=z_{i_{v}}^{(v)}
  * (\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)}) ...
  * (\sum_{i_{v-1} =1}^{I_{v-1}+1}z_{i_{v-1}}^{({v-1})}a_{i_{v-1},j}^{({v-1})})
@@ -106,7 +106,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
     dataSet.vertices.filter(t => t._1 >= 0)
   }
 
-  // Factorization Machines
+  // Multi-View Machine
   def run(iterations: Int): Unit = {
     for (iter <- 1 to iterations) {
       logInfo(s"Start train (Iteration $iter/$iterations)")
@@ -412,15 +412,15 @@ object MVM {
   private[ml] type VD = Array[Double]
 
   /**
-   * MVM 分类
-   * @param input 训练数据
-   * @param numIterations 迭代次数
-   * @param stepSize  学习步长推荐 1e-2- 1e-1
-   * @param regL2   L2范数
-   * @param rank   特征分解向量的维度推荐 10-20
-   * @param useAdaGrad 使用 AdaGrad训练
-   * @param miniBatchFraction  每次迭代采样比例
-   * @param storageLevel   缓存级别
+   * MVM Clustering
+   * @param input train data
+   * @param numIterations
+   * @param stepSize  we recommend the step size: 1e-2- 1e-1
+   * @param regL2   L2 regularization
+   * @param rank   we recommend the rank of eigenvector: 10-20
+   * @param useAdaGrad use AdaGrad to train
+   * @param miniBatchFraction
+   * @param storageLevel  cache storage level
    * @return
    */
   def trainClassification(
@@ -446,15 +446,15 @@ object MVM {
   }
 
   /**
-   * MVM 回归
-   * @param input 训练数据
-   * @param numIterations 迭代次数
-   * @param stepSize  学习步长推荐 1e-2- 1e-1
-   * @param regL2   L2范数
-   * @param rank   特征分解向量的维度推荐 10-20
-   * @param useAdaGrad 使用 AdaGrad训练
-   * @param miniBatchFraction  每次迭代采样比例
-   * @param storageLevel   缓存级别
+   * MVM Regression
+   * @param input train data
+   * @param numIterations
+   * @param stepSize  we recommend the step size: 1e-2- 1e-1
+   * @param regL2   L2 regularization
+   * @param rank   we recommend the rank of eigenvector: 10-20
+   * @param useAdaGrad use AdaGrad to train
+   * @param miniBatchFraction
+   * @param storageLevel  cache storage level
    * @return
    */
 
@@ -544,7 +544,7 @@ object MVM {
   }
 
   /**
-   * arr(k + v * rank)= (\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)}) ..
+   * arr(k + v * rank)= (\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)})
    * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
    */
   private[ml] def predictInterval(rank: Int, arr: VD): ED = {
@@ -579,8 +579,8 @@ object MVM {
   }
 
   /**
-   * arr的长度是rank * viewSize
-   * f属于 [viewId * rank ,(viewId +1) * rank)时
+   * arr = rank * viewSize
+   * when f belongs to [viewId * rank ,(viewId +1) * rank)
    * arr[f] = z_{i_v}^{(1)}a_{i_{i},j}^{(1)}
    */
   private[ml] def forwardInterval(rank: Int, viewId: Int, arr: Array[Double], z: ED, w: VD): VD = {
@@ -593,12 +593,12 @@ object MVM {
   }
 
   /**
-   * arr的长度是rank * viewSize
-   * 当 v=viewId , k属于[0,rank] 时
+   * arr = rank * viewSize
+   * when v=viewId , k belongs to [0,rank]
    * arr(k + v * rank) = \frac{\partial \hat{y}(x|\Theta )}{\partial\theta }
-   * 返回 multi * \frac{\partial \hat{y}(x|\Theta )}{\partial\theta }
-   * 分类: multi = 1/(1+ \exp(-\hat{y}(x|\Theta)) ) - y
-   * 回归: multi = 2(\hat{y}(x|\Theta) -y)
+   * return multi * \frac{\partial \hat{y}(x|\Theta )}{\partial\theta }
+   * clustering: multi = 1/(1+ \exp(-\hat{y}(x|\Theta)) ) - y
+   * regression: multi = 2(\hat{y}(x|\Theta) -y)
    */
   private[ml] def backwardInterval(
     rank: Int,
