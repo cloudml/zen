@@ -111,7 +111,7 @@ object MovieLensMVM {
 
     /**
      * The first view contains [0,maxUserId),The second view contains [maxUserId, maxMovieId + maxUserId)...
-     * The third contains [maxMovieId + maxUserId,numFeatures)  The last id equals the number of features
+     * The third contains [maxMovieId + maxUserId, numFeatures)  The last id equals the number of features
      */
     val views = Array(maxUserId, maxMovieId + maxUserId, numFeatures).map(_.toLong)
 
@@ -137,7 +137,8 @@ object MovieLensMVM {
     trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
     testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
     dataSet.unpersist()
-    val model = MVM.trainRegression(trainSet, numIterations, stepSize, views, regular, rank, useAdaGrad, 1.0)
+    val model = MVM.trainRegression(trainSet, numIterations, stepSize, views,
+      regular, 0.0, rank, useAdaGrad, false, 1.0)
     model.save(sc, out)
     println(f"Test RMSE: ${model.loss(testSet)}%1.4f")
     sc.stop()
