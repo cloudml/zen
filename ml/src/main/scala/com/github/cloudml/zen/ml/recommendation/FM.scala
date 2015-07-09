@@ -346,10 +346,9 @@ class FMClassification(
   }
 
   override protected def multiplier(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD]) = {
-    val random: JavaRandom = new XORShiftRandom()
-    random.setSeed(17425170 - iter - innerIter)
-    val seed = random.nextLong()
     val mod = mask
+    val random = genRandom(mod, iter)
+    val seed = random.nextLong()
     val multi = dataSet.vertices.leftJoin(q) { (vid, data, deg) =>
       deg match {
         case Some(m) =>
@@ -410,10 +409,9 @@ class FMRegression(
   }
 
   override protected def multiplier(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD]) = {
-    val random: JavaRandom = new XORShiftRandom()
-    random.setSeed(17425170 - iter - innerIter)
-    val seed = random.nextLong()
     val mod = mask
+    val random = genRandom(mod, iter)
+    val seed = random.nextLong()
     val multi = dataSet.vertices.leftJoin(q) { (vid, data, deg) =>
       deg match {
         case Some(m) =>
