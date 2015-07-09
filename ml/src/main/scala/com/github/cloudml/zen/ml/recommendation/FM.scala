@@ -113,7 +113,7 @@ private[ml] abstract class FM extends Serializable with Logging {
       val startedAt = System.nanoTime()
       val previousVertices = vertices
       val margin = forward(iter)
-      var (thisNumSamples, rmse, gradient) = backward(margin, iter)
+      var (_, rmse, gradient) = backward(margin, iter)
       gradient = updateGradientSum(gradient, iter)
       vertices = updateWeight(gradient, iter)
       checkpointVertices()
@@ -136,10 +136,9 @@ private[ml] abstract class FM extends Serializable with Logging {
   }
 
   protected[ml] def forward(iter: Int): VertexRDD[Array[Double]] = {
-    val random: JavaRandom = new XORShiftRandom
-    random.setSeed(17425170 - iter - innerIter)
-    val seed = random.nextLong()
     val mod = mask
+    val random = genRandom(mod, iter)
+    val seed = random.nextLong()
     dataSet.aggregateMessages[Array[Double]](ctx => {
       val sampleId = ctx.dstId
       // val featureId = ctx.srcId
@@ -157,17 +156,17 @@ private[ml] abstract class FM extends Serializable with Logging {
   protected def backward(q: VertexRDD[VD], iter: Int): (Long, Double, (Double, VertexRDD[Array[Double]])) = {
     val (thisNumSamples, costSum, thisMulti) = multiplier(q, iter)
     multi = thisMulti
-    val random: JavaRandom = new XORShiftRandom()
-    random.setSeed(17425170 - iter - innerIter)
-    val seed = random.nextLong()
     val mod = mask
+    val random = genRandom(mod, iter)
+    val seed = random.nextLong()
     val gradW0 = multi.filter(t => isSampleId(t._1)).map(_._2.last).sum() / thisNumSamples
     val gradient = GraphImpl.fromExistingRDDs(multi, edges).aggregateMessages[Array[Double]](ctx => {
       val sampleId = ctx.dstId
       // val featureId = ctx.srcId
       if (mod == 1 || isSampled(random, seed, sampleId, iter, mod)) {
         val x = ctx.attr
-        val Array(sumM, multi) = ctx.dstAttr
+        val sumM = ctx.dstAttr
+        val multi = sumM.head
         val factors = ctx.srcAttr
         val m = backwardInterval(rank, x, sumM, multi, factors)
         ctx.sendToSrc(m) // send the multi directly
@@ -358,7 +357,9 @@ class FMClassification(
           val diff = predict(m) - y
           val z = predictInterval(rank, bias, m)
           val loss = if (y > 0.0) Utils.log1pExp(-z) else Utils.log1pExp(z)
-          (Array(sumInterval(rank, m), diff), loss)
+          val sum = sumInterval(rank, m)
+          sum(0) = diff
+          (sum, loss)
         case _ => (data, 0.0)
       }
     }
@@ -418,7 +419,9 @@ class FMRegression(
         case Some(m) =>
           val y = data.head
           val diff = predict(m) - y
-          Array(sumInterval(rank, m), diff * 2.0)
+          val sum = sumInterval(rank, m)
+          sum(0) = 2.0 * diff
+          sum
         case _ => data
       }
     }
@@ -426,7 +429,7 @@ class FMRegression(
     val Array(numSamples, costSum) = multi.filter { case (id, _) =>
       isSampleId(id) && (mod == 1 || isSampled(random, seed, id, iter, mod))
     }.map { case (_, arr) =>
-      Array(1.0, pow(arr.last / 2.0, 2.0))
+      Array(1.0, pow(arr.head / 2.0, 2.0))
     }.reduce(reduceInterval)
     (numSamples.toLong, sqrt(costSum / numSamples), multi)
   }
@@ -554,6 +557,21 @@ object FM {
     random.nextInt(mod) == iter % mod
   }
 
+  @inline private[ml] def genRandom(mod: Int, iter: Int): JavaRandom = {
+    val random: JavaRandom = new XORShiftRandom()
+    random.setSeed(17425170 - iter / mod)
+    random
+  }
+
+  private[ml] def reduceInterval(a: VD, b: VD): VD = {
+    var i = 0
+    while (i < a.length) {
+      a(i) += b(i)
+      i += 1
+    }
+    a
+  }
+
   /**
    * arr[0] = \sum_{j=1}^{n}w_{j}x_{i}
    * arr[f] = \sum_{i=1}^{n}v_{i,f}x_{i} f属于 [1,rank]
@@ -567,15 +585,6 @@ object FM {
       i += 1
     }
     bias + arr(0) + 0.5 * sum
-  }
-
-  private[ml] def reduceInterval(a: VD, b: VD): VD = {
-    var i = 0
-    while (i < a.length) {
-      a(i) += b(i)
-      i += 1
-    }
-    a
   }
 
   /**
@@ -601,25 +610,25 @@ object FM {
   private[ml] def backwardInterval(
     rank: Int,
     x: ED,
-    sumM: ED,
+    sumM: VD,
     multi: ED,
     factors: VD): VD = {
     val m = new Array[Double](rank + 1)
     m(0) = x * multi
     var i = 1
     while (i <= rank) {
-      val grad = sumM * x - factors(i) * pow(x, 2)
+      val grad = sumM(i) * x - factors(i) * pow(x, 2)
       m(i) = grad * multi
       i += 1
     }
     m
   }
 
-  private[ml] def sumInterval(rank: Int, arr: Array[Double]): Double = {
-    var result = 0.0
+  private[ml] def sumInterval(rank: Int, arr: Array[Double]): VD = {
+    val result = new Array[Double](rank + 1)
     var i = 1
     while (i <= rank) {
-      result += arr(i)
+      result(i) = arr(i)
       i += 1
     }
     result
