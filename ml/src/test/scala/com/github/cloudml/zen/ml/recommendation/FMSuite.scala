@@ -36,9 +36,9 @@ class FMSuite extends FunSuite with SharedSparkContext with Matchers {
         (id, LabeledPoint(newLabel, features))
     }
     val stepSize = 0.1
-    val regParam = 1e-2
+    val regParam = 1e-4
     val l2 = (regParam, regParam, regParam)
-    val rank = 20
+    val rank = 5
     val useAdaGrad = true
     val trainSet = dataSet.cache()
     val fm = new FMClassification(trainSet, stepSize, l2, rank, useAdaGrad)
@@ -49,16 +49,14 @@ class FMSuite extends FunSuite with SharedSparkContext with Matchers {
     val startedAt = System.currentTimeMillis()
     while (i < maxIter) {
       fm.run(1)
-      val q = fm.forward(i)
-      pps(i) = fm.loss(q)
+      pps(i) =  fm.saveModel().loss(trainSet)
       i += 1
     }
     println((System.currentTimeMillis() - startedAt) / 1e3)
     pps.foreach(println)
 
     val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
-    assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.size > 0.05)
-    assert(pps.head - pps.last > 0)
+    assert(ppsDiff.count(_ < 0).toDouble / ppsDiff.size > 0.05)
 
 
     val fmModel = fm.saveModel()
