@@ -126,9 +126,9 @@ object AdsMVM extends Logging {
     val model = MVM.trainClassification(trainSet, numIterations, stepSize, views, regular, 0.0, rank,
       useAdaGrad, useWeightedLambda, 1.0, StorageLevel.DISK_ONLY)
     model.save(sc, out)
-    val rmse = model.loss(testSet)
-    logInfo(f"Test RMSE: $rmse%1.4f")
+    val auc = model.loss(testSet)
+    logInfo(f"Test AUC: $auc%1.4f")
+    println(f"Test AUC: $auc%1.4f")
     sc.stop()
-    println(f"Test RMSE: $rmse%1.4f")
   }
 }
