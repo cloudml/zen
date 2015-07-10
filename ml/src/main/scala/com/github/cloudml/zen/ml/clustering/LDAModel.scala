@@ -688,6 +688,55 @@ object LDAModel extends Loader[DistributedLDAModel] {
       }
     }
 
+    def loadDataFromSolidFile(sc: SparkContext,
+                              path: String): DistributedLDAModel = {
+      type MT = Tuple6[Int, Long, Double, Double, Double, Boolean]
+      val (metas, rdd) = LoaderUtils.HDFSFile2RDD[(VertexId, VD), MT](sc, path, header => {
+        implicit val formats = DefaultFormats
+        val metadata = parse(header)
+        val alpha = (metadata \ "alpha").extract[Double]
+        val beta = (metadata \ "beta").extract[Double]
+        val alphaAS = (metadata \ "alphaAS").extract[Double]
+        val numTopics = (metadata \ "numTopics").extract[Int]
+        val numTerms = (metadata \ "numTerms").extract[Long]
+        val isTransposed = (metadata \ "isTransposed").extract[Boolean]
+        (numTopics, numTerms, alpha, beta, alphaAS, isTransposed)
+      }, (metas, line) => {
+        val numTopics = metas._1
+        val numTerms = metas._2
+        val isTransposed = metas._6
+        val numSize = if (isTransposed) numTerms.toInt else numTopics
+        val sv = BSV.zeros[Double](numSize)
+        val arr = line.split("\t")
+        arr.tail.foreach { sub =>
+          val Array(index, value) = sub.split(":")
+          sv(index.toInt) = value.toDouble
+        }
+        sv.compact()
+        (arr.head.toLong, sv)
+      })
+
+      val (numTopics, numTerms, alpha, beta, alphaAS, isTransposed) = metas
+      val ttc = if (isTransposed) {
+        rdd.flatMap { case (topicId, vector) =>
+          vector.activeIterator.map { case (termId, cn) =>
+            val z = BSV.zeros[Double](numTopics)
+            z(topicId.toInt) = cn
+            (termId.toLong, z)
+          }
+        }.reduceByKey(_ += _).map {
+          t => t._2.compact(); t
+        }
+      } else {
+        rdd
+      }
+      ttc.persist(StorageLevel.MEMORY_AND_DISK)
+
+      val gtc = ttc.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
+
+      new DistributedLDAModel(gtc, ttc, numTopics, numTerms, alpha, beta, alphaAS)
+    }
+
     def save(
       sc: SparkContext,
       path: String,
@@ -697,14 +746,14 @@ object LDAModel extends Loader[DistributedLDAModel] {
       alpha: Double,
       beta: Double,
       alphaAS: Double,
-      isTransposed: Boolean): Unit = {
+      isTransposed: Boolean,
+      saveSolid: Boolean = true): Unit = {
       val metadata = compact(render
         (("class" -> classNameV1_0) ~ ("version" -> formatVersionV1_0) ~
           ("alpha" -> alpha) ~ ("beta" -> beta) ~ ("alphaAS" -> alphaAS) ~
           ("numTopics" -> numTopics) ~ ("numTerms" -> numTerms) ~
           ("numEdges" -> LDA.numEdges) ~ ("numDocs" -> LDA.numDocs)
           ~ ("isTransposed" -> isTransposed)))
-      sc.parallelize(Seq(metadata), 1).saveAsTextFile(LoaderUtils.metadataPath(path))
 
       val rdd = if (isTransposed) {
         ttc.flatMap { case (termId, vector) =>
@@ -718,11 +767,21 @@ object LDAModel extends Loader[DistributedLDAModel] {
         ttc
       }
 
-      // save model with the topic or word-term descending order
-      rdd.map { case (id, vector) =>
-        val list = vector.activeIterator.toList.sortWith((a, b) => a._2 > b._2)
-        (NullWritable.get(), new Text(id + "\t" + list.map(item => item._1 + ":" + item._2).mkString("\t")))
-      }.saveAsHadoopFile[TextOutputFormat[NullWritable, Text]](LoaderUtils.dataPath(path))
+      if (saveSolid) {
+        val metadata_line = metadata.replaceAll("\n", "")
+        val rdd_txt = rdd.map { case (id, vector) =>
+          val list = vector.activeIterator.toList.sortWith((a, b) => a._2 > b._2)
+          id.toString + "\t" + list.map(item => item._1 + ":" + item._2).mkString("\t")
+        }
+        LoaderUtils.RDD2HDFSFile[String](sc, rdd_txt, path, metadata_line, t => t)
+      } else {
+        sc.parallelize(Seq(metadata), 1).saveAsTextFile(LoaderUtils.metadataPath(path))
+        // save model with the topic or word-term descending order
+        rdd.map { case (id, vector) =>
+          val list = vector.activeIterator.toList.sortWith((a, b) => a._2 > b._2)
+          (NullWritable.get(), new Text(id + "\t" + list.map(item => item._1 + ":" + item._2).mkString("\t")))
+        }.saveAsHadoopFile[TextOutputFormat[NullWritable, Text]](LoaderUtils.dataPath(path))
+      }
     }
   }
 

@@ -17,13 +17,15 @@
 
 package com.github.cloudml.zen.ml.util
 
-import org.apache.hadoop.fs.Path
+import org.apache.hadoop.fs._
 import org.apache.spark.SparkContext
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.ScalaReflection
 import org.apache.spark.sql.types.{DataType, StructField, StructType}
 import org.json4s._
 import org.json4s.jackson.JsonMethods._
 
+import scala.reflect.ClassTag
 import scala.reflect.runtime.universe.TypeTag
 
 // copy form Spark MLlib
@@ -71,5 +73,57 @@ private[ml] object LoaderUtils {
     val clazz = (metadata \ "class").extract[String]
     val version = (metadata \ "version").extract[String]
     (clazz, version, metadata)
+  }
+
+  /**
+   * Save an RDD to one HDFS file
+   * @param sc SparkContext
+   * @param rdd The RDD to save
+   * @param outPathStr The HDFS file path of String
+   * @param header Header line of HDFS file, used for storing some metadata
+   * @param mapEle The function mapping each element of RDD to a line of String
+   */
+  def RDD2HDFSFile[T](sc: SparkContext,
+                      rdd: RDD[T],
+                      outPathStr: String,
+                      header: => String,
+                      mapEle: T => String): Unit = {
+    val hdpconf = sc.hadoopConfiguration
+    val fs = FileSystem.get(hdpconf)
+    val outPath = new Path(outPathStr)
+    if (fs.exists(outPath))
+      throw new InvalidPathException("Output path %s already exists.".format(outPathStr))
+    val fout = fs.create(outPath)
+    fout.write(header.getBytes)
+    fout.write("\n".getBytes)
+    rdd.toLocalIterator.foreach(e => {
+      fout.write(mapEle(e).getBytes)
+      fout.write("\n".getBytes)
+    })
+    fout.close()
+  }
+
+  /**
+   * Load an RDD from one HDFS file
+   * @param sc SparkContext
+   * @param inPathStr The HDFS file path of String
+   * @param init_f The function used for initialization after reading header
+   * @param lineParser The function parses each line in HDFS file to an element of RDD
+   */
+  def HDFSFile2RDD[T: ClassTag, M](sc: SparkContext,
+                      inPathStr: String,
+                      init_f: String => M,
+                      lineParser: (M, String) => T): (M, RDD[T]) = {
+    val rawrdd = sc.textFile(inPathStr)
+    val header = rawrdd.first()
+    val meta = init_f(header)
+    val rdd: RDD[T] = rawrdd.mapPartitions(iter => {
+      val first = iter.next()
+      if (first == header)
+        iter
+      else
+        Iterator(first) ++ iter
+    }.map(lineParser(meta, _)))
+    (meta, rdd)
   }
 }
