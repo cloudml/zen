@@ -26,7 +26,7 @@ import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{Logging, SparkConf, SparkContext}
 import scopt.OptionParser
 
-object AdsMVM extends Logging {
+object AdsFM extends Logging {
 
   case class Params(
     input: String = null,
@@ -34,18 +34,16 @@ object AdsMVM extends Logging {
     numIterations: Int = 200,
     numPartitions: Int = -1,
     stepSize: Double = 0.05,
-    regular: Double = 0.01,
+    regular: String = "0.01,0.01,0.01",
     fraction: Double = 1.0,
     rank: Int = 64,
     useAdaGrad: Boolean = false,
-    useWeightedLambda: Boolean = false,
-    useThreeViews: Boolean = false,
     kryo: Boolean = false) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
     val defaultParams = Params()
-    val parser = new OptionParser[Params]("MVM") {
-      head("AdsMVM: an example app for MVM.")
+    val parser = new OptionParser[Params]("FM") {
+      head("AdsFM: an example app for FM.")
       opt[Int]("numIterations")
         .text(s"number of iterations, default: ${defaultParams.numIterations}")
         .action((x, c) => c.copy(numIterations = x))
@@ -61,9 +59,12 @@ object AdsMVM extends Logging {
       opt[Double]("stepSize")
         .text(s"stepSize, default: ${defaultParams.stepSize}")
         .action((x, c) => c.copy(stepSize = x))
-      opt[Double]("regular")
+      opt[String]("regular")
         .text(
-          s"L2 regularization, default: ${defaultParams.regular}")
+          s"""
+             |'r0,r1,r2' for SGD: r0=bias regularization, r1=1-way regularization,
+             |r2=2-way regularization, default: ${defaultParams.regular} (auto)
+           """.stripMargin)
         .action((x, c) => c.copy(regular = x))
       opt[Double]("fraction")
         .text(
@@ -72,12 +73,6 @@ object AdsMVM extends Logging {
       opt[Unit]("adagrad")
         .text("use AdaGrad")
         .action((_, c) => c.copy(useAdaGrad = true))
-      opt[Unit]("weightedLambda")
-        .text("use weighted lambda regularization")
-        .action((_, c) => c.copy(useWeightedLambda = true))
-      opt[Unit]("threeViews")
-        .text("use three views")
-        .action((_, c) => c.copy(useThreeViews = true))
       arg[String]("<input>")
         .required()
         .text("input paths")
@@ -90,11 +85,11 @@ object AdsMVM extends Logging {
         """
           |For example, the following command runs this app on a synthetic dataset:
           |
-          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.AdsMVM \
+          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.AdsFM \
           |  examples/target/scala-*/zen-examples-*.jar \
           |  --rank 20 --numIterations 200 --regular 0.01 --kryo \
           |  data/mllib/ads_data/*
-          |  data/mllib/MVM_model
+          |  data/mllib/FM_model
         """.stripMargin)
     }
 
@@ -107,28 +102,27 @@ object AdsMVM extends Logging {
 
   def run(params: Params): Unit = {
     val Params(input, out, numIterations, numPartitions, stepSize, regular, fraction,
-    rank, useAdaGrad, useWeightedLambda, useThreeViews, kryo) = params
+    rank, useAdaGrad, kryo) = params
+    val regs = regular.split(",").map(_.toDouble)
+    val l2 = (regs(0), regs(1), regs(2))
     val checkpointDir = s"$out/checkpoint"
-    val conf = new SparkConf().setAppName(s"MVM with $params")
+    val conf = new SparkConf().setAppName(s"FM with $params")
     if (kryo) {
       GraphXUtils.registerKryoClasses(conf)
       // conf.set("spark.kryoserializer.buffer.mb", "8")
     }
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
-    SparkHacker.gcCleaner(60 * 15, 60 * 15, "AdsMVM")
-    val (trainSet, testSet, views) = if (useThreeViews) {
-      AdsUtils.genSamplesWithTimeAnd3Views(sc, input, numPartitions, fraction)
-    } else {
-      AdsUtils.genSamplesWithTime(sc, input, numPartitions, fraction)
-    }
+    SparkHacker.gcCleaner(60 * 15, 60 * 15, "AdsFM")
+    val (trainSet, testSet, _) = AdsUtils.genSamplesWithTime(sc, input, numPartitions, fraction)
 
-    val model = MVM.trainClassification(trainSet, numIterations, stepSize, views, regular, 0.0, rank,
-      useAdaGrad, useWeightedLambda, 1.0, StorageLevel.MEMORY_AND_DISK)
+    val model = FM.trainClassification(trainSet, numIterations, stepSize, l2, rank,
+      useAdaGrad, 1.0, StorageLevel.DISK_ONLY)
     model.save(sc, out)
     val auc = model.loss(testSet)
     logInfo(f"Test AUC: $auc%1.4f")
     println(f"Test AUC: $auc%1.4f")
     sc.stop()
   }
+
 }
