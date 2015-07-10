@@ -160,7 +160,7 @@ private[ml] abstract class FM extends Serializable with Logging {
     val mod = mask
     val random = genRandom(mod, iter)
     val seed = random.nextLong()
-    val gradW0 = multi.filter(t => isSampleId(t._1)).map(_._2.last).sum() / thisNumSamples
+    val gradW0 = multi.filter(t => isSampleId(t._1)).map(_._2.head).sum() / thisNumSamples
     val gradient = GraphImpl.fromExistingRDDs(multi, edges).aggregateMessages[Array[Double]](ctx => {
       val sampleId = ctx.dstId
       // val featureId = ctx.srcId
