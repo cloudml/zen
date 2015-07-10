@@ -107,7 +107,7 @@ private[ml] abstract class TF extends Serializable with Logging {
       val startedAt = System.nanoTime()
       val previousVertices = vertices
       val margin = forward(iter)
-      var (thisNumSamples, rmse, gradient) = backward(margin, iter)
+      var (_, rmse, gradient) = backward(margin, iter)
       gradient = updateGradientSum(gradient, iter)
       vertices = updateWeight(gradient, iter)
       checkpointVertices()

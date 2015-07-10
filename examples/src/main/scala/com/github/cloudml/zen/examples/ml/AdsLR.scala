@@ -18,15 +18,18 @@ package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.recommendation._
+import com.github.cloudml.zen.ml.regression.LogisticRegression
 import com.github.cloudml.zen.ml.util.SparkHacker
 import org.apache.spark.graphx.GraphXUtils
+import org.apache.spark.mllib.classification.LogisticRegressionModel
+import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{Logging, SparkConf, SparkContext}
 import scopt.OptionParser
 
-object AdsFM extends Logging {
+object AdsLR extends Logging {
 
   case class Params(
     input: String = null,
@@ -34,7 +37,7 @@ object AdsFM extends Logging {
     numIterations: Int = 200,
     numPartitions: Int = -1,
     stepSize: Double = 0.05,
-    regular: String = "0.01,0.01,0.01",
+    regular: Double = 0.01,
     fraction: Double = 1.0,
     rank: Int = 64,
     useAdaGrad: Boolean = false,
@@ -44,8 +47,8 @@ object AdsFM extends Logging {
 
   def main(args: Array[String]) {
     val defaultParams = Params()
-    val parser = new OptionParser[Params]("FM") {
-      head("AdsFM: an example app for FM.")
+    val parser = new OptionParser[Params]("LR") {
+      head("AdsLR: an example app for LR.")
       opt[Int]("numIterations")
         .text(s"number of iterations, default: ${defaultParams.numIterations}")
         .action((x, c) => c.copy(numIterations = x))
@@ -61,23 +64,20 @@ object AdsFM extends Logging {
       opt[Double]("stepSize")
         .text(s"stepSize, default: ${defaultParams.stepSize}")
         .action((x, c) => c.copy(stepSize = x))
-      opt[String]("regular")
+      opt[Double]("regular")
         .text(
-          s"""
-             |'r0,r1,r2' for SGD: r0=bias regularization, r1=1-way regularization,
-             |r2=2-way regularization, default: ${defaultParams.regular} (auto)
-           """.stripMargin)
+          s"L2 regularization, default: ${defaultParams.regular}")
         .action((x, c) => c.copy(regular = x))
       opt[Double]("fraction")
         .text(
           s"the sampling fraction, default: ${defaultParams.fraction}")
         .action((x, c) => c.copy(fraction = x))
-      opt[Unit]("diskOnly")
-        .text("use DISK_ONLY storage levels")
-        .action((_, c) => c.copy(diskOnly = true))
       opt[Unit]("adagrad")
         .text("use AdaGrad")
         .action((_, c) => c.copy(useAdaGrad = true))
+      opt[Unit]("diskOnly")
+        .text("use DISK_ONLY storage levels")
+        .action((_, c) => c.copy(diskOnly = true))
       opt[Unit]("threeViews")
         .text("use three views")
         .action((_, c) => c.copy(useThreeViews = true))
@@ -93,11 +93,11 @@ object AdsFM extends Logging {
         """
           |For example, the following command runs this app on a synthetic dataset:
           |
-          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.AdsFM \
+          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.AdsLR \
           |  examples/target/scala-*/zen-examples-*.jar \
           |  --rank 20 --numIterations 200 --regular 0.01 --kryo \
           |  data/mllib/ads_data/*
-          |  data/mllib/FM_model
+          |  data/mllib/MVM_model
         """.stripMargin)
     }
 
@@ -111,31 +111,35 @@ object AdsFM extends Logging {
   def run(params: Params): Unit = {
     val Params(input, out, numIterations, numPartitions, stepSize, regular, fraction,
     rank, useAdaGrad, useThreeViews, diskOnly, kryo) = params
+
     val storageLevel = if (diskOnly) StorageLevel.DISK_ONLY else StorageLevel.MEMORY_AND_DISK
-    val regs = regular.split(",").map(_.toDouble)
-    val l2 = (regs(0), regs(1), regs(2))
     val checkpointDir = s"$out/checkpoint"
-    val conf = new SparkConf().setAppName(s"FM with $params")
+    val conf = new SparkConf().setAppName(s"LR with $params")
     if (kryo) {
       GraphXUtils.registerKryoClasses(conf)
       // conf.set("spark.kryoserializer.buffer.mb", "8")
     }
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
-    SparkHacker.gcCleaner(60 * 15, 60 * 15, "AdsFM")
-    val (trainSet, testSet, _) = if (useThreeViews) {
+    SparkHacker.gcCleaner(60 * 15, 60 * 15, "AdsLR")
+    val (trainSet, testSet, views) = if (useThreeViews) {
       AdsUtils.genSamplesWithTimeAnd3Views(sc, input, numPartitions, fraction, storageLevel)
     } else {
       AdsUtils.genSamplesWithTime(sc, input, numPartitions, fraction, storageLevel)
     }
 
-    val model = FM.trainClassification(trainSet, numIterations, stepSize, l2, rank,
-      useAdaGrad, 1.0, storageLevel)
-    model.save(sc, out)
-    val auc = model.loss(testSet)
+    val model = LogisticRegression.trainSGD(trainSet, numIterations, stepSize, regular,
+      useAdaGrad, storageLevel).asInstanceOf[LogisticRegressionModel]
+
+    val scoreAndLabels = testSet.map { case (_, LabeledPoint(label, features)) =>
+      (model.predict(features), label)
+    }
+
+    val metrics = new BinaryClassificationMetrics(scoreAndLabels)
+    val auc = metrics.areaUnderROC()
+
     logInfo(f"Test AUC: $auc%1.4f")
     println(f"Test AUC: $auc%1.4f")
     sc.stop()
   }
-
 }

@@ -26,7 +26,7 @@ import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{Logging, SparkConf, SparkContext}
 import scopt.OptionParser
 
-object AdsFM extends Logging {
+object AdsPartialMVM extends Logging {
 
   case class Params(
     input: String = null,
@@ -39,13 +39,14 @@ object AdsFM extends Logging {
     rank: Int = 64,
     useAdaGrad: Boolean = false,
     useThreeViews: Boolean = false,
+    useWeightedLambda: Boolean = false,
     diskOnly: Boolean = false,
     kryo: Boolean = false) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
     val defaultParams = Params()
-    val parser = new OptionParser[Params]("FM") {
-      head("AdsFM: an example app for FM.")
+    val parser = new OptionParser[Params]("PartialMVM") {
+      head("AdsPartialMVM: an example app for PartialMVM.")
       opt[Int]("numIterations")
         .text(s"number of iterations, default: ${defaultParams.numIterations}")
         .action((x, c) => c.copy(numIterations = x))
@@ -81,6 +82,9 @@ object AdsFM extends Logging {
       opt[Unit]("threeViews")
         .text("use three views")
         .action((_, c) => c.copy(useThreeViews = true))
+      opt[Unit]("weightedLambda")
+        .text("use weighted lambda regularization")
+        .action((_, c) => c.copy(useWeightedLambda = true))
       arg[String]("<input>")
         .required()
         .text("input paths")
@@ -93,7 +97,7 @@ object AdsFM extends Logging {
         """
           |For example, the following command runs this app on a synthetic dataset:
           |
-          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.AdsFM \
+          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.PartialMVM \
           |  examples/target/scala-*/zen-examples-*.jar \
           |  --rank 20 --numIterations 200 --regular 0.01 --kryo \
           |  data/mllib/ads_data/*
@@ -110,27 +114,27 @@ object AdsFM extends Logging {
 
   def run(params: Params): Unit = {
     val Params(input, out, numIterations, numPartitions, stepSize, regular, fraction,
-    rank, useAdaGrad, useThreeViews, diskOnly, kryo) = params
+    rank, useAdaGrad, useThreeViews, useWeightedLambda, diskOnly, kryo) = params
     val storageLevel = if (diskOnly) StorageLevel.DISK_ONLY else StorageLevel.MEMORY_AND_DISK
     val regs = regular.split(",").map(_.toDouble)
     val l2 = (regs(0), regs(1), regs(2))
     val checkpointDir = s"$out/checkpoint"
-    val conf = new SparkConf().setAppName(s"FM with $params")
+    val conf = new SparkConf().setAppName(s"PartialMVM with $params")
     if (kryo) {
       GraphXUtils.registerKryoClasses(conf)
       // conf.set("spark.kryoserializer.buffer.mb", "8")
     }
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
-    SparkHacker.gcCleaner(60 * 15, 60 * 15, "AdsFM")
-    val (trainSet, testSet, _) = if (useThreeViews) {
+    SparkHacker.gcCleaner(60 * 15, 60 * 15, "PartialMVM")
+    val (trainSet, testSet, views) = if (useThreeViews) {
       AdsUtils.genSamplesWithTimeAnd3Views(sc, input, numPartitions, fraction, storageLevel)
     } else {
       AdsUtils.genSamplesWithTime(sc, input, numPartitions, fraction, storageLevel)
     }
 
-    val model = FM.trainClassification(trainSet, numIterations, stepSize, l2, rank,
-      useAdaGrad, 1.0, storageLevel)
+    val model = PartialMVM.trainClassification(trainSet, numIterations, stepSize, views, l2, rank,
+      useAdaGrad, useWeightedLambda, 1.0, storageLevel)
     model.save(sc, out)
     val auc = model.loss(testSet)
     logInfo(f"Test AUC: $auc%1.4f")
