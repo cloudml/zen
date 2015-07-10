@@ -38,6 +38,7 @@ object MovieLensLR extends Logging {
     stepSize: Double = 0.1,
     regular: Double = 0.05,
     useAdaGrad: Boolean = false,
+    useSVDPlusPlus: Boolean = false,
     kryo: Boolean = true) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
@@ -63,6 +64,9 @@ object MovieLensLR extends Logging {
       opt[Unit]("adagrad")
         .text("use AdaGrad")
         .action((_, c) => c.copy(useAdaGrad = true))
+      opt[Unit]("svdPlusPlus")
+        .text("use SVD++")
+        .action((_, c) => c.copy(useSVDPlusPlus = true))
       arg[String]("<input>")
         .required()
         .text("input paths")
@@ -91,7 +95,9 @@ object MovieLensLR extends Logging {
   }
 
   def run(params: Params): Unit = {
-    val Params(input, out, numIterations, numPartitions, stepSize, regParam, useAdaGrad, kryo) = params
+    val Params(input, out, numIterations, numPartitions, stepSize, regParam,
+    useAdaGrad, useSVDPlusPlus, kryo) = params
+    val storageLevel = if (useSVDPlusPlus) StorageLevel.DISK_ONLY else StorageLevel.MEMORY_AND_DISK
     val checkpointDir = s"$out/checkpoint"
     val conf = new SparkConf().setAppName(s"LinearRegression with $params")
     if (kryo) {
@@ -102,8 +108,13 @@ object MovieLensLR extends Logging {
     sc.setCheckpointDir(checkpointDir)
     SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensLR")
 
-    val (trainSet, testSet, _) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
-    val lr = new LinearRegression(trainSet, stepSize, regParam, useAdaGrad, StorageLevel.MEMORY_AND_DISK)
+    val (trainSet, testSet, _) = if (useSVDPlusPlus) {
+      MovieLensUtils.genSamplesSVDPlusPlus(sc, input, numPartitions, storageLevel)
+    }
+    else {
+      MovieLensUtils.genSamplesWithTime(sc, input, numPartitions, storageLevel)
+    }
+    val lr = new LinearRegression(trainSet, stepSize, regParam, useAdaGrad, storageLevel)
     lr.run(numIterations)
     val model = lr.saveModel()
     val lm = new LinearRegressionModel(model.weights, model.intercept)

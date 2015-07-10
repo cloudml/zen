@@ -39,6 +39,7 @@ object AdsMVM extends Logging {
     rank: Int = 64,
     useAdaGrad: Boolean = false,
     useWeightedLambda: Boolean = false,
+    useThreeViews: Boolean = false,
     kryo: Boolean = false) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
@@ -74,6 +75,9 @@ object AdsMVM extends Logging {
       opt[Unit]("weightedLambda")
         .text("use weighted lambda regularization")
         .action((_, c) => c.copy(useWeightedLambda = true))
+      opt[Unit]("threeViews")
+        .text("use three views")
+        .action((_, c) => c.copy(useThreeViews = true))
       arg[String]("<input>")
         .required()
         .text("input paths")
@@ -103,7 +107,7 @@ object AdsMVM extends Logging {
 
   def run(params: Params): Unit = {
     val Params(input, out, numIterations, numPartitions, stepSize, regular, fraction,
-    rank, useAdaGrad, useWeightedLambda, kryo) = params
+    rank, useAdaGrad, useWeightedLambda, useThreeViews, kryo) = params
     val checkpointDir = s"$out/checkpoint"
     val conf = new SparkConf().setAppName(s"MVM with $params")
     if (kryo) {
@@ -113,11 +117,14 @@ object AdsMVM extends Logging {
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
     SparkHacker.gcCleaner(60 * 15, 60 * 15, "AdsMVM")
-    val (trainSet, testSet, views) = AdsUtils.genSamplesWithTime(sc, input, numPartitions, fraction)
-    val fm = new MVMRegression(trainSet, stepSize, views, regular, 0.0, rank,
-      useAdaGrad, useWeightedLambda, 1.0, StorageLevel.MEMORY_AND_DISK)
-    fm.run(numIterations)
-    val model = fm.saveModel()
+    val (trainSet, testSet, views) = if (useThreeViews) {
+      AdsUtils.genSamplesWithTimeAnd3Views(sc, input, numPartitions, fraction)
+    } else {
+      AdsUtils.genSamplesWithTime(sc, input, numPartitions, fraction)
+    }
+
+    val model = MVM.trainClassification(trainSet, numIterations, stepSize, views, regular, 0.0, rank,
+      useAdaGrad, useWeightedLambda, 1.0, StorageLevel.DISK_ONLY)
     model.save(sc, out)
     val rmse = model.loss(testSet)
     logInfo(f"Test RMSE: $rmse%1.4f")

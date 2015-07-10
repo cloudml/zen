@@ -42,11 +42,7 @@ private[zen] object MovieLensUtils extends Logging {
         (userId.toInt, movieId.toInt, rating.toDouble, timestamp.toInt)
       }
     }
-    movieLens = if (numPartitions > 0) {
-      movieLens.repartition(numPartitions)
-    } else {
-      movieLens.repartition(sc.defaultParallelism)
-    }
+    movieLens = movieLens.repartition(if (numPartitions > 0) numPartitions else sc.defaultParallelism)
     movieLens.persist(newLevel).count()
 
     val daySeconds = 60 * 60 * 24
@@ -84,4 +80,57 @@ private[zen] object MovieLensUtils extends Logging {
     (trainSet, testSet, views)
   }
 
+  def genSamplesSVDPlusPlus(
+    sc: SparkContext,
+    dataFile: String,
+    numPartitions: Int = -1,
+    newLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): (RDD[(Long, LabeledPoint)],
+    RDD[(Long, LabeledPoint)], Array[Long]) = {
+    val line = sc.textFile(dataFile).first()
+    val splitString = if (line.contains(",")) "," else "::"
+    var movieLens = sc.textFile(dataFile, sc.defaultParallelism).mapPartitions { iter =>
+      iter.filter(t => !t.startsWith("userId") && !t.isEmpty).map { line =>
+        val Array(userId, movieId, rating, timestamp) = line.split(splitString)
+        (userId.toInt, (movieId.toInt, rating.toDouble))
+      }
+    }
+    movieLens = movieLens.repartition(if (numPartitions > 0) numPartitions else sc.defaultParallelism)
+    movieLens.persist(newLevel).count()
+
+    val maxMovieId = movieLens.map(_._2._1).max + 1
+    val maxUserId = movieLens.map(_._1).max + 1
+    val numFeatures = maxUserId + 2 * maxMovieId
+    val dataSet = movieLens.map { case (userId, (movieId, rating)) =>
+      val sv = BSV.zeros[Double](maxMovieId)
+      sv(movieId) = rating
+      (userId, sv)
+    }.reduceByKey(_ :+= _).flatMap { case (userId, ratings) =>
+      val activeSize = ratings.activeSize
+      ratings.activeIterator.map { case (movieId, rating) =>
+        val sv = BSV.zeros[Double](numFeatures)
+        sv(userId) = 1.0
+        sv(movieId + maxUserId) = 1.0
+        ratings.activeKeysIterator.foreach { mId =>
+          sv(maxMovieId + maxUserId + mId) = 1.0 / math.sqrt(activeSize)
+        }
+        new LabeledPoint(rating, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
+
+      }
+    }.zipWithIndex().map(_.swap).persist(newLevel)
+    dataSet.count()
+    movieLens.unpersist()
+
+    val trainSet = dataSet.filter(t => t._2.features.hashCode() % 5 > 0).persist(newLevel)
+    val testSet = dataSet.filter(t => t._2.features.hashCode() % 5 == 0).persist(newLevel)
+    trainSet.count()
+    testSet.count()
+    dataSet.unpersist()
+
+    /**
+     * The first view contains [0,maxUserId),The second view contains [maxUserId, maxMovieId + maxUserId)...
+     * The third contains [maxMovieId + maxUserId, numFeatures)  The last id equals the number of features
+     */
+    val views = Array(maxUserId, maxMovieId + maxUserId, numFeatures).map(_.toLong)
+    (trainSet, testSet, views)
+  }
 }

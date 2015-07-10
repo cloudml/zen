@@ -37,6 +37,7 @@ object MovieLensTF extends Logging {
     rank: Int = 20,
     useAdaGrad: Boolean = false,
     useWeightedLambda: Boolean = false,
+    useSVDPlusPlus: Boolean = false,
     kryo: Boolean = true) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
@@ -68,6 +69,9 @@ object MovieLensTF extends Logging {
       opt[Unit]("weightedLambda")
         .text("use weighted lambda regularization")
         .action((_, c) => c.copy(useWeightedLambda = true))
+      opt[Unit]("svdPlusPlus")
+        .text("use SVD++")
+        .action((_, c) => c.copy(useSVDPlusPlus = true))
       arg[String]("<input>")
         .required()
         .text("input paths")
@@ -97,7 +101,8 @@ object MovieLensTF extends Logging {
 
   def run(params: Params): Unit = {
     val Params(input, out, numIterations, numPartitions, stepSize, regular, rank,
-    useAdaGrad, useWeightedLambda, kryo) = params
+    useAdaGrad, useWeightedLambda, useSVDPlusPlus, kryo) = params
+    val storageLevel = if (useSVDPlusPlus) StorageLevel.DISK_ONLY else StorageLevel.MEMORY_AND_DISK
     val checkpointDir = s"$out/checkpoint"
     val conf = new SparkConf().setAppName(s"TF with $params")
     if (kryo) {
@@ -107,9 +112,14 @@ object MovieLensTF extends Logging {
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
     SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensTF")
-    val (trainSet, testSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
+    val (trainSet, testSet, views) = if (useSVDPlusPlus) {
+      MovieLensUtils.genSamplesSVDPlusPlus(sc, input, numPartitions, storageLevel)
+    }
+    else {
+      MovieLensUtils.genSamplesWithTime(sc, input, numPartitions, storageLevel)
+    }
     val model = TF.trainRegression(trainSet, numIterations, stepSize, views,
-      regular, 0.0, rank, useAdaGrad, useWeightedLambda, 1.0)
+      regular, 0.0, rank, useAdaGrad, useWeightedLambda, 1.0, storageLevel)
     model.save(sc, out)
     val rmse = model.loss(testSet)
     logInfo(f"Test RMSE: $rmse%1.4f")

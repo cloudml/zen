@@ -73,6 +73,7 @@ private[ml] abstract class BSFM extends Serializable with Logging {
     dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
     numFeatures = features.count()
     numSamples = samples.count()
+    logInfo(s"$numFeatures features, $numSamples samples in the data")
     this
   }
 

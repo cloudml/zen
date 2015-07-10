@@ -38,6 +38,7 @@ object MovieLensThreeWayFM extends Logging {
     rank3: Int = 10,
     useAdaGrad: Boolean = false,
     useWeightedLambda: Boolean = false,
+    useSVDPlusPlus: Boolean = false,
     kryo: Boolean = true) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
@@ -75,6 +76,9 @@ object MovieLensThreeWayFM extends Logging {
       opt[Unit]("weightedLambda")
         .text("use weighted lambda regularization")
         .action((_, c) => c.copy(useWeightedLambda = true))
+      opt[Unit]("svdPlusPlus")
+        .text("use SVD++")
+        .action((_, c) => c.copy(useSVDPlusPlus = true))
       arg[String]("<input>")
         .required()
         .text("input paths")
@@ -104,7 +108,8 @@ object MovieLensThreeWayFM extends Logging {
 
   def run(params: Params): Unit = {
     val Params(input, out, numIterations, numPartitions, stepSize, regular,
-    rank2, rank3, useAdaGrad, useWeightedLambda, kryo) = params
+    rank2, rank3, useAdaGrad, useWeightedLambda, useSVDPlusPlus, kryo) = params
+    val storageLevel = if (useSVDPlusPlus) StorageLevel.DISK_ONLY else StorageLevel.MEMORY_AND_DISK
     val regs = regular.split(",").map(_.toDouble)
     val l2 = (regs(0), regs(1), regs(2), regs(3))
     val conf = new SparkConf().setAppName(s"ThreeWayFM with $params")
@@ -116,9 +121,14 @@ object MovieLensThreeWayFM extends Logging {
     val checkpointDir = s"$out/checkpoint"
     sc.setCheckpointDir(checkpointDir)
     SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensThreeWayFM")
-    val (trainSet, testSet, views) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
+    val (trainSet, testSet, views) = if (useSVDPlusPlus) {
+      MovieLensUtils.genSamplesSVDPlusPlus(sc, input, numPartitions, storageLevel)
+    }
+    else {
+      MovieLensUtils.genSamplesWithTime(sc, input, numPartitions, storageLevel)
+    }
     val model = ThreeWayFM.trainRegression(trainSet, numIterations, stepSize, views, l2, rank2, rank3,
-      useAdaGrad, useWeightedLambda, 1.0)
+      useAdaGrad, useWeightedLambda, 1.0, storageLevel)
     model.save(sc, out)
     val rmse = model.loss(testSet)
     logInfo(f"Test RMSE: $rmse%1.4f")

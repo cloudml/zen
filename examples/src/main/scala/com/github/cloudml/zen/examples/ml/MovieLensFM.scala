@@ -36,6 +36,7 @@ object MovieLensFM extends Logging {
     regular: String = "0.01,0.01,0.01",
     rank: Int = 20,
     useAdaGrad: Boolean = false,
+    useSVDPlusPlus: Boolean = false,
     kryo: Boolean = true) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
@@ -67,6 +68,9 @@ object MovieLensFM extends Logging {
       opt[Unit]("adagrad")
         .text("use AdaGrad")
         .action((_, c) => c.copy(useAdaGrad = true))
+      opt[Unit]("svdPlusPlus")
+        .text("use SVD++")
+        .action((_, c) => c.copy(useSVDPlusPlus = true))
       arg[String]("<input>")
         .required()
         .text("input paths")
@@ -95,7 +99,9 @@ object MovieLensFM extends Logging {
   }
 
   def run(params: Params): Unit = {
-    val Params(input, out, numIterations, numPartitions, stepSize, regular, rank, useAdaGrad, kryo) = params
+    val Params(input, out, numIterations, numPartitions, stepSize, regular, rank,
+    useAdaGrad, useSVDPlusPlus, kryo) = params
+    val storageLevel = if (useSVDPlusPlus) StorageLevel.DISK_ONLY else StorageLevel.MEMORY_AND_DISK
     val regs = regular.split(",").map(_.toDouble)
     val l2 = (regs(0), regs(1), regs(2))
     val conf = new SparkConf().setAppName(s"FM with $params")
@@ -107,8 +113,14 @@ object MovieLensFM extends Logging {
     val checkpointDir = s"$out/checkpoint"
     sc.setCheckpointDir(checkpointDir)
     SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensFM")
-    val (trainSet, testSet, _) = MovieLensUtils.genSamplesWithTime(sc, input, numPartitions)
-    val model = FM.trainRegression(trainSet, numIterations, stepSize, l2, rank, useAdaGrad, 1.0)
+    val (trainSet, testSet, _) = if (useSVDPlusPlus) {
+      MovieLensUtils.genSamplesSVDPlusPlus(sc, input, numPartitions, storageLevel)
+    }
+    else {
+      MovieLensUtils.genSamplesWithTime(sc, input, numPartitions, storageLevel)
+    }
+    val model = FM.trainRegression(trainSet, numIterations, stepSize, l2,
+      rank, useAdaGrad, 1.0, storageLevel)
     model.save(sc, out)
     val rmse = model.loss(testSet)
     logInfo(f"Test RMSE: $rmse%1.4f")
