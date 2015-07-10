@@ -23,6 +23,7 @@ import org.apache.spark.mllib.linalg.{SparseVector => SSV}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
+import java.util.Arrays
 
 object AdsUtils {
   def genSamplesWithTime(
@@ -41,7 +42,11 @@ object AdsUtils {
       }
       (importance.toInt, label.toDouble, features)
     }
-    if (sampleFraction < 1) adaDataSet = adaDataSet.sample(false, sampleFraction)
+    val mod = 1e6
+    if (sampleFraction < 1) adaDataSet = adaDataSet.filter { case (_, _, features) =>
+      val hash = Arrays.hashCode(features.map(_._1)) * Arrays.hashCode(features.map(_._2))
+      (hash.abs % mod) < mod * sampleFraction
+    }
     adaDataSet = if (numPartitions > 0) {
       adaDataSet.repartition(numPartitions)
     } else {
@@ -116,7 +121,11 @@ object AdsUtils {
       }
       (importance.toInt, label.toDouble, features)
     }
-    if (sampleFraction < 1) adaDataSet = adaDataSet.sample(false, sampleFraction)
+    val mod = 1e6
+    if (sampleFraction < 1) adaDataSet = adaDataSet.filter { case (_, _, features) =>
+      val hash = Arrays.hashCode(features.map(_._1)) * Arrays.hashCode(features.map(_._2))
+      (hash.abs % mod) < mod * sampleFraction
+    }
     adaDataSet = if (numPartitions > 0) {
       adaDataSet.repartition(numPartitions)
     } else {

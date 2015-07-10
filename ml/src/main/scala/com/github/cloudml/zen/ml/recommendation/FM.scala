@@ -369,7 +369,10 @@ class FMClassification(
     }.map { case (_, (arr, loss)) =>
       Array(1D, loss)
     }.reduce(reduceInterval)
-    (numSamples.toLong, costSum / numSamples, multi.mapValues(_._1))
+    val newMulti = multi.mapValues(_._1).setName(s"multiplier-$iter").persist(storageLevel)
+    newMulti.count()
+    multi.unpersist(blocking = false)
+    (numSamples.toLong, costSum / numSamples, newMulti)
   }
 
 }

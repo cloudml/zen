@@ -40,6 +40,7 @@ object AdsMVM extends Logging {
     useAdaGrad: Boolean = false,
     useWeightedLambda: Boolean = false,
     useThreeViews: Boolean = false,
+    diskOnly: Boolean = false,
     kryo: Boolean = false) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
@@ -75,6 +76,9 @@ object AdsMVM extends Logging {
       opt[Unit]("weightedLambda")
         .text("use weighted lambda regularization")
         .action((_, c) => c.copy(useWeightedLambda = true))
+      opt[Unit]("diskOnly")
+        .text("use DISK_ONLY storage levels")
+        .action((_, c) => c.copy(diskOnly = true))
       opt[Unit]("threeViews")
         .text("use three views")
         .action((_, c) => c.copy(useThreeViews = true))
@@ -107,7 +111,9 @@ object AdsMVM extends Logging {
 
   def run(params: Params): Unit = {
     val Params(input, out, numIterations, numPartitions, stepSize, regular, fraction,
-    rank, useAdaGrad, useWeightedLambda, useThreeViews, kryo) = params
+    rank, useAdaGrad, useWeightedLambda, useThreeViews, diskOnly, kryo) = params
+
+    val storageLevel = if (diskOnly) StorageLevel.DISK_ONLY else StorageLevel.MEMORY_AND_DISK
     val checkpointDir = s"$out/checkpoint"
     val conf = new SparkConf().setAppName(s"MVM with $params")
     if (kryo) {
@@ -118,13 +124,13 @@ object AdsMVM extends Logging {
     sc.setCheckpointDir(checkpointDir)
     SparkHacker.gcCleaner(60 * 15, 60 * 15, "AdsMVM")
     val (trainSet, testSet, views) = if (useThreeViews) {
-      AdsUtils.genSamplesWithTimeAnd3Views(sc, input, numPartitions, fraction)
+      AdsUtils.genSamplesWithTimeAnd3Views(sc, input, numPartitions, fraction, storageLevel)
     } else {
-      AdsUtils.genSamplesWithTime(sc, input, numPartitions, fraction)
+      AdsUtils.genSamplesWithTime(sc, input, numPartitions, fraction, storageLevel)
     }
 
     val model = MVM.trainClassification(trainSet, numIterations, stepSize, views, regular, 0.0, rank,
-      useAdaGrad, useWeightedLambda, 1.0, StorageLevel.MEMORY_AND_DISK)
+      useAdaGrad, useWeightedLambda, 1.0, storageLevel)
     model.save(sc, out)
     val auc = model.loss(testSet)
     logInfo(f"Test AUC: $auc%1.4f")
