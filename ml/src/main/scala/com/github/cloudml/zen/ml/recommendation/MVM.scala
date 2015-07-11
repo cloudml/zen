@@ -76,6 +76,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
     dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
     numFeatures = features.count()
     numSamples = samples.count()
+    logInfo(s"$numFeatures features, $numSamples samples in the data")
     this
   }
 
@@ -119,7 +120,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
       val startedAt = System.nanoTime()
       val previousVertices = vertices
       val margin = forward(iter)
-      var (thisNumSamples, rmse, gradient) = backward(margin, iter)
+      var (_, rmse, gradient) = backward(margin, iter)
       gradient = updateGradientSum(gradient, iter)
       vertices = updateWeight(gradient, iter)
       checkpointVertices()
@@ -336,7 +337,11 @@ class MVMClassification(
 
   override protected def predict(arr: Array[Double]): Double = {
     val result = predictInterval(rank, arr)
-    1.0 / (1.0 + math.exp(-result))
+    sigmoid(result)
+  }
+
+  @inline private def sigmoid(x: Double): Double = {
+    1d / (1d + math.exp(-x))
   }
 
   override def saveModel(): MVMModel = {
@@ -344,6 +349,8 @@ class MVMClassification(
   }
 
   override protected def multiplier(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD]) = {
+    val accNumSamples = q.sparkContext.accumulator(1L)
+    val accLossSum = q.sparkContext.accumulator(0.0)
     val multi = dataSet.vertices.leftJoin(q) { (vid, data, deg) =>
       deg match {
         case Some(m) =>
@@ -351,19 +358,18 @@ class MVMClassification(
           // val diff = predict(m) - y
           val arr = sumInterval(rank, m)
           val z = arr.last
-          val diff = predict(m) - y
-          val loss = if (y > 0.0) Utils.log1pExp(-z) else Utils.log1pExp(z)
+          val diff = sigmoid(z) - y
+          accNumSamples += 1L
+          accLossSum += Utils.log1pExp(if (y > 0.0) -z else z)
           arr(arr.length - 1) = diff
-          (arr, loss)
-        case _ => (data, 0.0)
+          arr
+        case _ => data
       }
-    }
-    multi.setName(s"multiplier-$iter").persist(storageLevel)
-    val Array(numSamples, costSum) = multi.filter(t => t._2._1.length == rank * views.length + 1).map {
-      case (_, (arr, loss)) =>
-        Array(1D, loss)
-    }.reduce(reduceInterval)
-    (numSamples.toLong, costSum / numSamples, multi.mapValues(_._1))
+    }.setName(s"multiplier-$iter").persist(storageLevel)
+    multi.count()
+    val numSamples = accNumSamples.value
+    val lossSum = accLossSum.value
+    (numSamples, lossSum / numSamples, multi)
   }
 
 }
@@ -410,23 +416,25 @@ class MVMRegression(
   }
 
   override protected def multiplier(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD]) = {
+    val accNumSamples = q.sparkContext.accumulator(1L)
+    val accLossSum = q.sparkContext.accumulator(0.0)
     val multi = dataSet.vertices.leftJoin(q) { (vid, data, deg) =>
       deg match {
         case Some(m) =>
           val y = data.head
           val arr = sumInterval(rank, m)
           val diff = arr.last - y
+          accLossSum += pow(diff, 2)
+          accNumSamples += 1L
           arr(arr.length - 1) = diff * 2.0
           arr
         case _ => data
       }
-    }
-    multi.setName(s"multiplier-$iter").persist(storageLevel)
-    val Array(numSamples, costSum) = multi.filter(t => t._2.length == rank * views.length + 1).map {
-      case (_, arr) =>
-        Array(1D, pow(arr.last / 2.0, 2))
-    }.reduce(reduceInterval)
-    (numSamples.toLong, sqrt(costSum / numSamples), multi)
+    }.setName(s"multiplier-$iter").persist(storageLevel)
+    multi.count()
+    val numSamples = accNumSamples.value
+    val costSum = accLossSum.value
+    (numSamples, sqrt(costSum / numSamples), multi)
   }
 }
 
