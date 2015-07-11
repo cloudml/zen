@@ -339,7 +339,11 @@ class FMClassification(
 
   override protected def predict(arr: Array[Double]): Double = {
     val result = predictInterval(rank, bias, arr)
-    1.0 / (1.0 + math.exp(-result))
+    sigmoid(result)
+  }
+
+  @inline private def sigmoid(x: Double): Double = {
+    1d / (1d + math.exp(-x))
   }
 
   override def saveModel(): FMModel = {
@@ -347,32 +351,27 @@ class FMClassification(
   }
 
   override protected def multiplier(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD]) = {
-    val mod = mask
-    val random = genRandom(mod, iter)
-    val seed = random.nextLong()
+    val accNumSamples = q.sparkContext.accumulator(1L)
+    val accLossSum = q.sparkContext.accumulator(0.0)
     val multi = dataSet.vertices.leftJoin(q) { (vid, data, deg) =>
       deg match {
         case Some(m) =>
           val y = data.head
-          val diff = predict(m) - y
+          //  val diff = predict(m) - y
           val z = predictInterval(rank, bias, m)
-          val loss = if (y > 0.0) Utils.log1pExp(-z) else Utils.log1pExp(z)
+          val diff = sigmoid(z) - y
+          accNumSamples += 1L
+          accLossSum += Utils.log1pExp(if (y > 0.0) -z else z)
           val sum = sumInterval(rank, m)
           sum(0) = diff
-          (sum, loss)
-        case _ => (data, 0.0)
+          sum
+        case _ => data
       }
-    }
-    multi.setName(s"multiplier-$iter").persist(storageLevel)
-    val Array(numSamples, costSum) = multi.filter { case (id, _) =>
-      isSampleId(id) && (mod == 1 || isSampled(random, seed, id, iter, mod))
-    }.map { case (_, (arr, loss)) =>
-      Array(1D, loss)
-    }.reduce(reduceInterval)
-    val newMulti = multi.mapValues(_._1).setName(s"multiplier-$iter").persist(storageLevel)
-    newMulti.count()
-    multi.unpersist(blocking = false)
-    (numSamples.toLong, costSum / numSamples, newMulti)
+    }.setName(s"multiplier-$iter").persist(storageLevel)
+    multi.count()
+    val numSamples = accNumSamples.value
+    val costSum = accLossSum.value
+    (numSamples.toLong, costSum / numSamples, multi)
   }
 
 }
@@ -413,27 +412,25 @@ class FMRegression(
   }
 
   override protected def multiplier(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD]) = {
-    val mod = mask
-    val random = genRandom(mod, iter)
-    val seed = random.nextLong()
+    val accNumSamples = q.sparkContext.accumulator(1L)
+    val accLossSum = q.sparkContext.accumulator(0.0)
     val multi = dataSet.vertices.leftJoin(q) { (vid, data, deg) =>
       deg match {
         case Some(m) =>
           val y = data.head
           val diff = predict(m) - y
           val sum = sumInterval(rank, m)
+          accNumSamples += 1L
+          accLossSum += pow(diff, 2)
           sum(0) = 2.0 * diff
           sum
         case _ => data
       }
-    }
-    multi.setName(s"multiplier-$iter").persist(storageLevel)
-    val Array(numSamples, costSum) = multi.filter { case (id, _) =>
-      isSampleId(id) && (mod == 1 || isSampled(random, seed, id, iter, mod))
-    }.map { case (_, arr) =>
-      Array(1.0, pow(arr.head / 2.0, 2.0))
-    }.reduce(reduceInterval)
-    (numSamples.toLong, sqrt(costSum / numSamples), multi)
+    }.setName(s"multiplier-$iter").persist(storageLevel)
+    multi.count()
+    val numSamples = accNumSamples.value
+    val costSum = accLossSum.value
+    (numSamples, sqrt(costSum / numSamples), multi)
   }
 }
 
