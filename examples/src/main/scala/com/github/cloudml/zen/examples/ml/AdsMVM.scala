@@ -129,12 +129,20 @@ object AdsMVM extends Logging {
       AdsUtils.genSamplesWithTime(sc, input, numPartitions, fraction, storageLevel)
     }
 
-    val model = MVM.trainClassification(trainSet, numIterations, stepSize, views, regular, 0.0, rank,
-      useAdaGrad, useWeightedLambda, 1.0, storageLevel)
+    val lfm = new MVMClassification(trainSet, stepSize, views, regular, 0.0, rank,
+      useAdaGrad, useWeightedLambda, 1, storageLevel)
+    var iter = 0
+    var model: MVMModel = null
+    while (iter < numIterations) {
+      val thisItr = math.min(50, numPartitions - iter)
+      lfm.run(thisItr)
+      model = lfm.saveModel()
+      val auc = model.loss(testSet)
+      iter += thisItr
+      logInfo(s"(Iteration $iter/$numIterations) Test AUC:                     $auc%1.4f")
+      println(s"(Iteration $iter/$numIterations) Test AUC:                     $auc%1.4f")
+    }
     model.save(sc, out)
-    val auc = model.loss(testSet)
-    logInfo(f"Test AUC: $auc%1.4f")
-    println(f"Test AUC: $auc%1.4f")
     sc.stop()
   }
 }

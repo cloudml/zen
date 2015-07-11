@@ -17,70 +17,73 @@
 package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
-import com.github.cloudml.zen.ml.recommendation._
-import com.github.cloudml.zen.ml.regression.{LogisticRegressionSGD, LogisticRegression}
+import com.github.cloudml.zen.ml.recommendation.{ThreeWayFMModel, ThreeWayFMClassification, ThreeWayFM}
 import com.github.cloudml.zen.ml.util.SparkHacker
 import org.apache.spark.graphx.GraphXUtils
-import org.apache.spark.mllib.classification.LogisticRegressionModel
-import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
-import org.apache.spark.mllib.regression.{GeneralizedLinearModel, LabeledPoint}
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{Logging, SparkConf, SparkContext}
 import scopt.OptionParser
 
-object AdsLR extends Logging {
+object AdsThreeWayFM extends Logging {
 
   case class Params(
     input: String = null,
     out: String = null,
-    numIterations: Int = 200,
+    numIterations: Int = 40,
     numPartitions: Int = -1,
-    stepSize: Double = 0.05,
-    regular: Double = 0.01,
+    stepSize: Double = 0.1,
     fraction: Double = 1.0,
-    rank: Int = 64,
+    regular: String = "0.01,0.01,0.01,0.01",
+    rank2: Int = 10,
+    rank3: Int = 10,
     useAdaGrad: Boolean = false,
-    useThreeViews: Boolean = false,
-    diskOnly: Boolean = false,
-    kryo: Boolean = false) extends AbstractParams[Params]
+    useWeightedLambda: Boolean = false,
+    useSVDPlusPlus: Boolean = false,
+    kryo: Boolean = true) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
     val defaultParams = Params()
-    val parser = new OptionParser[Params]("LR") {
-      head("AdsLR: an example app for LR.")
+    val parser = new OptionParser[Params]("MovieLensThreeWayFM") {
+      head("MovieLensThreeWayFM: an example app for ThreeWayFM.")
       opt[Int]("numIterations")
         .text(s"number of iterations, default: ${defaultParams.numIterations}")
         .action((x, c) => c.copy(numIterations = x))
       opt[Int]("numPartitions")
         .text(s"number of partitions, default: ${defaultParams.numPartitions}")
         .action((x, c) => c.copy(numPartitions = x))
-      opt[Int]("rank")
-        .text(s"dim of 2-way interactions, default: ${defaultParams.rank}")
-        .action((x, c) => c.copy(rank = x))
+      opt[Int]("rank2")
+        .text(s"dim of 2-way interactions, default: ${defaultParams.rank2}")
+        .action((x, c) => c.copy(rank2 = x))
+      opt[Int]("rank3")
+        .text(s"dim of 3-way interactions, default: ${defaultParams.rank2}")
+        .action((x, c) => c.copy(rank3 = x))
       opt[Unit]("kryo")
         .text("use Kryo serialization")
         .action((_, c) => c.copy(kryo = true))
-      opt[Double]("stepSize")
-        .text(s"stepSize, default: ${defaultParams.stepSize}")
-        .action((x, c) => c.copy(stepSize = x))
-      opt[Double]("regular")
-        .text(
-          s"L2 regularization, default: ${defaultParams.regular}")
-        .action((x, c) => c.copy(regular = x))
       opt[Double]("fraction")
         .text(
           s"the sampling fraction, default: ${defaultParams.fraction}")
         .action((x, c) => c.copy(fraction = x))
+      opt[Double]("stepSize")
+        .text(s"stepSize, default: ${defaultParams.stepSize}")
+        .action((x, c) => c.copy(stepSize = x))
+      opt[String]("regular")
+        .text(
+          s"""
+             |'r0,r1,r2,r3' for SGD: r0=bias regularization, r1=1-way regularization, r2=2-way regularization,
+             |r2=3-way regularization default: ${defaultParams.regular} (auto)
+           """.stripMargin)
+        .action((x, c) => c.copy(regular = x))
       opt[Unit]("adagrad")
         .text("use AdaGrad")
         .action((_, c) => c.copy(useAdaGrad = true))
-      opt[Unit]("diskOnly")
-        .text("use DISK_ONLY storage levels")
-        .action((_, c) => c.copy(diskOnly = true))
-      opt[Unit]("threeViews")
-        .text("use three views")
-        .action((_, c) => c.copy(useThreeViews = true))
+      opt[Unit]("weightedLambda")
+        .text("use weighted lambda regularization")
+        .action((_, c) => c.copy(useWeightedLambda = true))
+      opt[Unit]("svdPlusPlus")
+        .text("use SVD++")
+        .action((_, c) => c.copy(useSVDPlusPlus = true))
       arg[String]("<input>")
         .required()
         .text("input paths")
@@ -91,55 +94,50 @@ object AdsLR extends Logging {
         .action((x, c) => c.copy(out = x))
       note(
         """
-          |For example, the following command runs this app on a synthetic dataset:
+          | For example, the following command runs this app on a synthetic dataset:
           |
-          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.AdsLR \
-          |  examples/target/scala-*/zen-examples-*.jar \
-          |  --rank 20 --numIterations 200 --regular 0.01 --kryo \
-          |  data/mllib/ads_data/*
-          |  data/mllib/MVM_model
+          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.MovieLensThreeWayFM \
+          | examples/target/scala-*/zen-examples-*.jar \
+          | --rank2 10 --rank3 10  --numIterations 50 --regular 0.01,0.01,0.01,0.01 --kryo \
+          | data/mllib/sample_movielens_data.txt
+          | data/mllib/ThreeWayFM_model
         """.stripMargin)
     }
 
     parser.parse(args, defaultParams).map { params =>
       run(params)
-    } getOrElse {
+    }.getOrElse {
       System.exit(1)
     }
   }
 
   def run(params: Params): Unit = {
-    val Params(input, out, numIterations, numPartitions, stepSize, regular, fraction,
-    rank, useAdaGrad, useThreeViews, diskOnly, kryo) = params
-
-    val storageLevel = if (diskOnly) StorageLevel.DISK_ONLY else StorageLevel.MEMORY_AND_DISK
-    val checkpointDir = s"$out/checkpoint"
-    val conf = new SparkConf().setAppName(s"LR with $params")
+    val Params(input, out, numIterations, numPartitions, stepSize, fraction, regular,
+    rank2, rank3, useAdaGrad, useWeightedLambda, useSVDPlusPlus, kryo) = params
+    val storageLevel = if (useSVDPlusPlus) StorageLevel.DISK_ONLY else StorageLevel.MEMORY_AND_DISK
+    val regs = regular.split(",").map(_.toDouble)
+    val l2 = (regs(0), regs(1), regs(2), regs(3))
+    val conf = new SparkConf().setAppName(s"ThreeWayFM with $params")
     if (kryo) {
       GraphXUtils.registerKryoClasses(conf)
       // conf.set("spark.kryoserializer.buffer.mb", "8")
     }
     val sc = new SparkContext(conf)
+    val checkpointDir = s"$out/checkpoint"
     sc.setCheckpointDir(checkpointDir)
-    SparkHacker.gcCleaner(60 * 15, 60 * 15, "AdsLR")
-    val (trainSet, testSet, views) = if (useThreeViews) {
-      AdsUtils.genSamplesWithTimeAnd3Views(sc, input, numPartitions, fraction, storageLevel)
-    } else {
-      AdsUtils.genSamplesWithTime(sc, input, numPartitions, fraction, storageLevel)
-    }
+    SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensThreeWayFM")
+    val (trainSet, testSet, views) = AdsUtils.genSamplesWithTimeAnd3Views(sc, input,
+      numPartitions, fraction, storageLevel)
 
-    val lr = new LogisticRegressionSGD(trainSet, stepSize, regular, useAdaGrad, storageLevel)
+    val lfm = new ThreeWayFMClassification(trainSet, stepSize, views, l2, rank2, rank3,
+      useAdaGrad, useWeightedLambda, 1.0, storageLevel)
     var iter = 0
-    var model: LogisticRegressionModel = null
+    var model: ThreeWayFMModel = null
     while (iter < numIterations) {
       val thisItr = math.min(50, numPartitions - iter)
-      lr.run(thisItr)
-      model = lr.saveModel().asInstanceOf[LogisticRegressionModel]
-      val scoreAndLabels = testSet.map { case (_, LabeledPoint(label, features)) =>
-        (model.predict(features), label)
-      }
-      val metrics = new BinaryClassificationMetrics(scoreAndLabels)
-      val auc = metrics.areaUnderROC()
+      lfm.run(thisItr)
+      model = lfm.saveModel()
+      val auc = model.loss(testSet)
       iter += thisItr
       logInfo(s"(Iteration $iter/$numIterations) Test AUC:                     $auc%1.4f")
       println(s"(Iteration $iter/$numIterations) Test AUC:                     $auc%1.4f")

@@ -17,7 +17,7 @@
 package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
-import com.github.cloudml.zen.ml.recommendation.MVM
+import com.github.cloudml.zen.ml.recommendation.{MVMRegression, MVMModel, MVMClassification, MVM}
 import com.github.cloudml.zen.ml.util.SparkHacker
 import org.apache.spark.graphx.GraphXUtils
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
@@ -118,12 +118,20 @@ object MovieLensMVM extends Logging {
     else {
       MovieLensUtils.genSamplesWithTime(sc, input, numPartitions, storageLevel)
     }
-    val model = MVM.trainRegression(trainSet, numIterations, stepSize, views,
-      regular, 0.0, rank, useAdaGrad, useWeightedLambda, 1.0, storageLevel)
+    val lfm = new MVMRegression(trainSet, stepSize, views, regular, 0.0, rank,
+      useAdaGrad, useWeightedLambda, 1, storageLevel)
+    var iter = 0
+    var model: MVMModel = null
+    while (iter < numIterations) {
+      val thisItr = math.min(50, numPartitions - iter)
+      lfm.run(thisItr)
+      model = lfm.saveModel()
+      val rmse = model.loss(testSet)
+      iter += thisItr
+      logInfo(s"(Iteration $iter/$numIterations) Test RMSE:                     $rmse%1.4f")
+      println(s"(Iteration $iter/$numIterations) Test RMSE:                     $rmse%1.4f")
+    }
     model.save(sc, out)
-    val rmse = model.loss(testSet)
-    logInfo(f"Test RMSE: $rmse%1.4f")
-    println(f"Test RMSE: $rmse%1.4f")
     sc.stop()
   }
 }

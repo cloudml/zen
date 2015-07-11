@@ -17,7 +17,7 @@
 package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
-import com.github.cloudml.zen.ml.recommendation.TF
+import com.github.cloudml.zen.ml.recommendation.{TFRegression, TFModel, TFClassification, TF}
 import com.github.cloudml.zen.ml.util.SparkHacker
 import org.apache.spark.graphx.GraphXUtils
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
@@ -118,12 +118,21 @@ object MovieLensTF extends Logging {
     else {
       MovieLensUtils.genSamplesWithTime(sc, input, numPartitions, storageLevel)
     }
-    val model = TF.trainRegression(trainSet, numIterations, stepSize, views,
-      regular, 0.0, rank, useAdaGrad, useWeightedLambda, 1.0, storageLevel)
+
+    val lfm = new TFRegression(trainSet, stepSize, views, regular, 0.0, rank,
+      useAdaGrad, useWeightedLambda, 1.0, storageLevel)
+    var iter = 0
+    var model: TFModel = null
+    while (iter < numIterations) {
+      val thisItr = math.min(50, numPartitions - iter)
+      lfm.run(thisItr)
+      model = lfm.saveModel()
+      val rmse = model.loss(testSet)
+      iter += thisItr
+      logInfo(s"(Iteration $iter/$numIterations) Test RMSE:                     $rmse%1.4f")
+      println(s"(Iteration $iter/$numIterations) Test RMSE:                     $rmse%1.4f")
+    }
     model.save(sc, out)
-    val rmse = model.loss(testSet)
-    logInfo(f"Test RMSE: $rmse%1.4f")
-    println(f"Test RMSE: $rmse%1.4f")
     sc.stop()
   }
 }

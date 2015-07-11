@@ -17,7 +17,7 @@
 package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
-import com.github.cloudml.zen.ml.recommendation.BSFM
+import com.github.cloudml.zen.ml.recommendation.{BSFMRegression, BSFMModel, BSFMClassification, BSFM}
 import com.github.cloudml.zen.ml.util.SparkHacker
 import org.apache.spark.graphx.GraphXUtils
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
@@ -123,12 +123,21 @@ object MovieLensBSFM extends Logging {
     else {
       MovieLensUtils.genSamplesWithTime(sc, input, numPartitions, storageLevel)
     }
-    val model = BSFM.trainRegression(trainSet, numIterations, stepSize, views, l2, rank,
+
+    val lfm = new BSFMRegression(trainSet, stepSize, views, l2, rank,
       useAdaGrad, useWeightedLambda, 1.0, storageLevel)
+    var iter = 0
+    var model: BSFMModel = null
+    while (iter < numIterations) {
+      val thisItr = math.min(50, numPartitions - iter)
+      lfm.run(thisItr)
+      model = lfm.saveModel()
+      val rmse = model.loss(testSet)
+      iter += thisItr
+      logInfo(s"(Iteration $iter/$numIterations) Test RMSE:                     $rmse%1.4f")
+      println(s"(Iteration $iter/$numIterations) Test RMSE:                     $rmse%1.4f")
+    }
     model.save(sc, out)
-    val rmse = model.loss(testSet)
-    logInfo(f"Test RMSE: $rmse%1.4f")
-    println(f"Test RMSE: $rmse%1.4f")
     sc.stop()
   }
 }

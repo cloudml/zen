@@ -40,7 +40,8 @@ object AdsUtils {
         val Array(featureId, featureValue, viewId) = sub.split(":")
         (featureId.toInt, featureValue.toDouble, viewId.toInt)
       }
-      (importance.toInt, label.toDouble, features)
+      val newLabel = if (label.toDouble > 0.0) 1.0 else 0.0
+      (importance.toInt, newLabel, features)
     }
     val mod = 1e6
     if (sampleFraction < 1) adaDataSet = adaDataSet.filter { case (_, _, features) =>
@@ -119,7 +120,8 @@ object AdsUtils {
         val Array(featureId, featureValue, viewId) = sub.split(":")
         (featureId.toInt, featureValue.toDouble, math.min(viewId.toInt, 3))
       }
-      (importance.toInt, label.toDouble, features)
+      val newLabel = if (label.toDouble > 0.0) 1.0 else 0.0
+      (importance.toInt, newLabel, features)
     }
     val mod = 1e6
     if (sampleFraction < 1) adaDataSet = adaDataSet.filter { case (_, _, features) =>

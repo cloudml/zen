@@ -114,17 +114,23 @@ object MovieLensLR extends Logging {
     else {
       MovieLensUtils.genSamplesWithTime(sc, input, numPartitions, storageLevel)
     }
+
     val lr = new LinearRegression(trainSet, stepSize, regParam, useAdaGrad, storageLevel)
-    lr.run(numIterations)
-    val model = lr.saveModel()
-    val lm = new LinearRegressionModel(model.weights, model.intercept)
-    lm.save(sc, out)
-    val sum = testSet.map { case (_, LabeledPoint(label, features)) =>
-      pow(label - model.predict(features), 2)
-    }.reduce(_ + _)
-    val rmse = sqrt(sum / testSet.count())
-    logInfo(f"Test RMSE: $rmse%1.4f")
-    println(f"Test RMSE: $rmse%1.4f")
+    var iter = 0
+    var model: LinearRegressionModel = null
+    while (iter < numIterations) {
+      val thisItr = math.min(50, numPartitions - iter)
+      lr.run(thisItr)
+      model = lr.saveModel().asInstanceOf[LinearRegressionModel]
+      val sum = testSet.map { case (_, LabeledPoint(label, features)) =>
+        pow(label - model.predict(features), 2)
+      }.reduce(_ + _)
+      val rmse = sqrt(sum / testSet.count())
+      iter += thisItr
+      logInfo(s"(Iteration $iter/$numIterations) Test RMSE:                     $rmse%1.4f")
+      println(s"(Iteration $iter/$numIterations) Test RMSE:                     $rmse%1.4f")
+    }
+    model.save(sc, out)
     sc.stop()
   }
 }
