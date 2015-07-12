@@ -128,13 +128,16 @@ object MovieLensPartialMVM extends Logging {
     var iter = 0
     var model: PartialMVMFMModel = null
     while (iter < numIterations) {
-      val thisItr = math.min(50, numPartitions - iter)
+      val thisItr = math.min(50, numIterations - iter)
+      iter += thisItr
+      if (model != null) model.factors.unpersist(false)
       lfm.run(thisItr)
       model = lfm.saveModel()
+      model.factors.persist(storageLevel)
+      model.factors.count()
       val rmse = model.loss(testSet)
-      iter += thisItr
-      logInfo(s"(Iteration $iter/$numIterations) Test RMSE:                     $rmse%1.4f")
-      println(s"(Iteration $iter/$numIterations) Test RMSE:                     $rmse%1.4f")
+      logInfo(f"(Iteration $iter/$numIterations) Test RMSE:                     $rmse%1.4f")
+      println(f"(Iteration $iter/$numIterations) Test RMSE:                     $rmse%1.4f")
     }
     model.save(sc, out)
     sc.stop()

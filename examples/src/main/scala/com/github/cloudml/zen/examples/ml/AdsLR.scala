@@ -132,17 +132,20 @@ object AdsLR extends Logging {
     var iter = 0
     var model: LogisticRegressionModel = null
     while (iter < numIterations) {
-      val thisItr = math.min(50, numPartitions - iter)
+      val thisItr = math.min(50, numIterations - iter)
+      iter += thisItr
       lr.run(thisItr)
       model = lr.saveModel().asInstanceOf[LogisticRegressionModel]
       val scoreAndLabels = testSet.map { case (_, LabeledPoint(label, features)) =>
         (model.predict(features), label)
       }
+      scoreAndLabels.persist(storageLevel)
+      scoreAndLabels.count()
       val metrics = new BinaryClassificationMetrics(scoreAndLabels)
       val auc = metrics.areaUnderROC()
-      iter += thisItr
-      logInfo(s"(Iteration $iter/$numIterations) Test AUC:                     $auc%1.4f")
-      println(s"(Iteration $iter/$numIterations) Test AUC:                     $auc%1.4f")
+      scoreAndLabels.unpersist(false)
+      logInfo(f"(Iteration $iter/$numIterations) Test AUC:                     $auc%1.4f")
+      println(f"(Iteration $iter/$numIterations) Test AUC:                     $auc%1.4f")
     }
     model.save(sc, out)
     sc.stop()
