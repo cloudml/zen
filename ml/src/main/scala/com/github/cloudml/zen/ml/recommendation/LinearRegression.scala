@@ -95,7 +95,7 @@ class LinearRegression(
     sqrt(sum / numSamples)
   }
 
-  override def saveModel(): GeneralizedLinearModel = {
+  override def saveModel(numFeatures: Int = -1): GeneralizedLinearModel = {
     val numFeatures = features.map(_._1).max().toInt + 1
     val featureData = new Array[Double](numFeatures)
     features.toLocalIterator.foreach { case (index, value) =>

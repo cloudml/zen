@@ -128,6 +128,7 @@ object AdsLR extends Logging {
       AdsUtils.genSamplesWithTime(sc, input, numPartitions, fraction, storageLevel)
     }
 
+    val numFeatures = views.last.toInt
     val lr = new LogisticRegressionSGD(trainSet, stepSize, regular, useAdaGrad, storageLevel)
     var iter = 0
     var model: LogisticRegressionModel = null
@@ -135,7 +136,7 @@ object AdsLR extends Logging {
       val thisItr = math.min(50, numIterations - iter)
       iter += thisItr
       lr.run(thisItr)
-      model = lr.saveModel().asInstanceOf[LogisticRegressionModel]
+      model = lr.saveModel(numFeatures).asInstanceOf[LogisticRegressionModel]
       val scoreAndLabels = testSet.map { case (_, LabeledPoint(label, features)) =>
         (model.predict(features), label)
       }

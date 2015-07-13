@@ -143,13 +143,13 @@ abstract class LogisticRegression(
 
   protected def loss(q: VertexRDD[VD]): Double
 
-  def saveModel(): GeneralizedLinearModel = {
-    val numFeatures = features.map(_._1).max().toInt + 1
-    val featureData = new Array[Double](numFeatures)
+  def saveModel(numFeatures: Int = -1): GeneralizedLinearModel = {
+    val len = if (numFeatures < 0) features.map(_._1).max().toInt + 1 else numFeatures
+    val featureData = new Array[Double](len)
     features.toLocalIterator.foreach { case (index, value) =>
       featureData(index.toInt) = value
     }
-    new LogisticRegressionModel(new SDV(featureData), 0.0, numFeatures, 2)
+    new LogisticRegressionModel(new SDV(featureData), 0.0, len, 2)
   }
 
   protected def updateGradientSum(gradient: VertexRDD[Double], iter: Int): VertexRDD[Double] = {
