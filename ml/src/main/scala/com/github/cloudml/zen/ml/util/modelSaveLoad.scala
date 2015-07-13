@@ -91,8 +91,9 @@ private[ml] object LoaderUtils {
     val hdpconf = sc.hadoopConfiguration
     val fs = FileSystem.get(hdpconf)
     val outPath = new Path(outPathStr)
-    if (fs.exists(outPath))
+    if (fs.exists(outPath)) {
       throw new InvalidPathException("Output path %s already exists.".format(outPathStr))
+    }
     val fout = fs.create(outPath)
     fout.write(header.getBytes)
     fout.write("\n".getBytes)
@@ -119,9 +120,9 @@ private[ml] object LoaderUtils {
     val meta = init_f(header)
     val rdd: RDD[T] = rawrdd.mapPartitions(iter => {
       val first = iter.next()
-      if (first == header)
+      if (first == header) {
         iter
-      else
+      } else
         Iterator(first) ++ iter
     }.map(lineParser(meta, _)))
     (meta, rdd)

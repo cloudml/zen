@@ -1,5 +1,23 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.github.cloudml.zen.ml
 
+import breeze.linalg._
 import scala.reflect.ClassTag
 import org.apache.spark.HashPartitioner
 import org.apache.spark.graphx._
@@ -8,7 +26,8 @@ import org.apache.spark.storage.StorageLevel
 
 object VMBLPPartitioner {
   /**
-   * Modified Balanced Label Propogation, see: https://code.facebook.com/posts/274771932683700/large-scale-graph-partitioning-with-apache-giraph/
+   * Modified Balanced Label Propogation, see:
+   * https://code.facebook.com/posts/274771932683700/large-scale-graph-partitioning-with-apache-giraph/
    * This is the vertex-cut version (MBLP is an edge-cut algorithm for Apache Giraph)
    */
   def partitionByVMBLP[VD: ClassTag, ED: ClassTag](
@@ -25,32 +44,32 @@ object VMBLPPartitioner {
       val pidVertices = VertexRDD(pidRdd)  // Get Vertices which v.attr = <partitionId of v>
       
       val pidGraph = GraphImpl(pidVertices, tbrGraph.edges)
-      val neiVecVertices = pidGraph.aggregateMessages[Array[Int]](ectx => {
-        val vecSrc = Array.fill(numPartitions)(0)
-        vecSrc(ectx.dstAttr) += 1
-        val vecDst = Array.fill(numPartitions)(0)
-        vecDst(ectx.srcAttr) += 1
-        ectx.sendToSrc(vecSrc)
-        ectx.sendToDst(vecDst)
-      }, (_, _).zipped.map(_ + _))  // Get Vertices which v.attr = Array[d0, d1, ..., dn]
+      val neiVecVertices = pidGraph.aggregateMessages[Vector[Int]](ectx => {
+        val bsvSrc = SparseVector.zeros[Int](numPartitions)
+        bsvSrc(ectx.dstAttr) = 1
+        val bsvDst = SparseVector.zeros[Int](numPartitions)
+        bsvDst(ectx.srcAttr) = 1
+        ectx.sendToSrc(bsvSrc)
+        ectx.sendToDst(bsvDst)
+      }, _ += _)  // Get Vertices which v.attr = Array[d0, d1, ..., dn]
       
       val wantVertices = neiVecVertices.mapValues(discreteSample(_))
       // Get Vertices which v.attr = (<partitionId now>, <partitionId to move to>) 
       val moveVertices = pidVertices.innerZipJoin(wantVertices)((_, fromPid, toPid) => (fromPid, toPid))
       
       // Get a matrix which mat(i)(j) = total num of vertices that want to move from i to j
-      val moveMat = moveVertices.aggregate(Array.fill(numPartitions, numPartitions)(0))({
+      val moveMat = moveVertices.aggregate(CSCMatrix.zeros[Int](numPartitions, numPartitions))({
         case (mat, (_, ft)) => {
-          if(ft._1 != ft._2) mat(ft._1)(ft._2) += 1
+          if(ft._1 != ft._2) mat(ft._1, ft._2) += 1
           mat
-      }}, (_, _).zipped.map((_, _).zipped.map(_ + _)))
+      }}, _ += _)
       
       val newPidRdd = moveVertices.mapPartitions(iter => iter.map({case (vid, (from, to)) => {
         if(from == to) (vid, from)
         else {
           // Move vertices under balance constraints
-          val numOut = moveMat(from)(to)
-          val numIn = moveMat(to)(from)
+          val numOut = moveMat(from, to)
+          val numIn = moveMat(to, from)
           val threshold = math.min(numOut, numIn)
           val r = threshold.asInstanceOf[Float] / numOut
           val u = math.random
@@ -75,14 +94,14 @@ object VMBLPPartitioner {
     tbrGraph
   }
   
-  def discreteSample(dist: Array[Int]): Int = {
+  def discreteSample(dist: Vector[Int]): Int = {
     val s = dist.sum
     val u = math.random * s
     var ps = 0
-    for(p <- dist) {
+    dist.activeIterator.foreach{ case (i, p) => {
       ps += p
-      if(u < ps) return p
-    }
-    dist.length - 1
+      if (u < ps) return p
+    }}
+    -1
   }
 }
