@@ -122,8 +122,9 @@ private[ml] object LoaderUtils {
       val first = iter.next()
       if (first == header) {
         iter
-      } else
+      } else {
         Iterator(first) ++ iter
+      }
     }.map(lineParser(meta, _)))
     (meta, rdd)
   }
