@@ -134,8 +134,5 @@ object MovieLensMVM extends Logging {
     }
     model.save(sc, out)
     sc.stop()
-
-    model.save(sc, out)
-    sc.stop()
   }
 }
