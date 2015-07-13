@@ -149,7 +149,7 @@ abstract class LogisticRegression(
     features.toLocalIterator.foreach { case (index, value) =>
       featureData(index.toInt) = value
     }
-    new LogisticRegressionModel(new SDV(featureData), 0.0, len, 2)
+    new LogisticRegressionModel(new SDV(featureData), 0.0, len, 2).clearThreshold()
   }
 
   protected def updateGradientSum(gradient: VertexRDD[Double], iter: Int): VertexRDD[Double] = {
