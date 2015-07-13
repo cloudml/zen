@@ -152,7 +152,7 @@ abstract class LDA private[ml](
    * Save the term-topic related model
    * @param totalIter
    */
-  def saveTermModel(totalIter: Int = 1): DistributedLDAModel = {
+  def saveModel(totalIter: Int = 1): DistributedLDAModel = {
     var termTopicCounter: RDD[(VertexId, VD)] = null
     for (iter <- 1 to totalIter) {
       logInfo(s"Save TopicModel (Iteration $iter/$totalIter)")
@@ -176,36 +176,6 @@ abstract class LDA private[ml](
     ttc.persist(storageLevel)
     val gtc = ttc.map(_._2).aggregate(BDV.zeros[Double](numTopics))(_ :+= _, _ :+= _)
     new DistributedLDAModel(gtc, ttc, numTopics, numTerms, alpha, beta, alphaAS)
-  }
-
-  /**
-   * save doc-topic related model
-   * @param totalIter
-   */
-  def saveDocModel(totalIter: Int = 1): DistributedLDAModel = {
-    var docTopicCounter: RDD[(VertexId, VD)] = null
-    for (iter <- 1 to totalIter) {
-      logInfo(s"Save TopicModel (Iteration $iter/$totalIter)")
-      var previousDocTopicCounter = docTopicCounter
-      gibbsSampling(iter)
-      val newDocTopicCounter = docVertices
-      docTopicCounter = Option(docTopicCounter).map(_.join(newDocTopicCounter).map {
-        case (term, (a, b)) =>
-          (term, a :+ b)
-      }).getOrElse(newDocTopicCounter)
-
-      docTopicCounter.persist(storageLevel).count()
-      Option(previousDocTopicCounter).foreach(_.unpersist(blocking = false))
-      previousDocTopicCounter = docTopicCounter
-    }
-    val dtc = docTopicCounter.mapValues(c => {
-      val nc = new BSV[Double](c.index.slice(0, c.used), c.data.slice(0, c.used).map(_.toDouble), c.length)
-      nc :/= totalIter.toDouble
-      nc
-    })
-    dtc.persist(storageLevel)
-    val gtc = dtc.map(_._2).aggregate(BDV.zeros[Double](numTopics))(_ :+= _, _ :+= _)
-    new DistributedLDAModel(gtc, dtc, numTopics, numTerms, alpha, beta, alphaAS)
   }
 
   def runGibbsSampling(iterations: Int): Unit = {
@@ -348,7 +318,7 @@ object LDA {
     alphaAS: Double = 0.1,
     useLightLDA: Boolean = false,
     useDBHStrategy: Boolean = false,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): (DistributedLDAModel, DistributedLDAModel) = {
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): DistributedLDAModel = {
     require(totalIter > 0, "totalIter is less than 0")
     val lda = if (useLightLDA) {
       new LightLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy, storageLevel)
@@ -356,9 +326,8 @@ object LDA {
       new FastLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy, storageLevel)
     }
     lda.runGibbsSampling(totalIter - 1)
-    val termModel = lda.saveTermModel(1)
-    val docModel = lda.saveDocModel(1)
-    (termModel, docModel)
+    val termModel = lda.saveModel(1)
+    termModel
   }
 
   /**
@@ -390,7 +359,7 @@ object LDA {
     }
     broadcastModel.unpersist(blocking = false)
     lda.runGibbsSampling(totalIter - 1)
-    lda.saveTermModel(1)
+    lda.saveModel(1)
   }
 
   private[ml] def initializeCorpus(

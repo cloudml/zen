@@ -101,15 +101,14 @@ object LDADriver {
     useDBHStrategy: Boolean): Double = {
     SparkHacker.gcCleaner(15 * 60, 15 * 60, "LDA_gcCleaner")
     val trainingStartedTime = System.currentTimeMillis()
-    //    val storage =  StorageLevel.DISK_ONLY
+    // val storage =  StorageLevel.DISK_ONLY
     val storage = StorageLevel.MEMORY_AND_DISK
-    val (termModel, docModel) =
-      LDA.train(trainingDocs, totalIter, numTopics, alpha, beta, alphaAS, useDBHStrategy, storageLevel = storage)
+    val termModel = LDA.train(trainingDocs, totalIter, numTopics, alpha, beta, alphaAS,
+      useDBHStrategy, storageLevel = storage)
     val trainingEndedTime = System.currentTimeMillis()
 
     println("save the model both in doc-term view or term-doc view")
     termModel.save(sc, outputRootPath + "/topic-term", isTransposed = true)
-    // docModel.save(sc, outputRootPath + "/doc-topic", isTransposed = false)
 
     // try to delete the checkpoint folder in the HDFS
     if (sys.env.contains("HADOOP_CONF_DIR") || sys.env.contains("YARN_CONF_DIR")) {
