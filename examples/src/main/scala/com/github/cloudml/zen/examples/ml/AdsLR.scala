@@ -137,6 +137,7 @@ object AdsLR extends Logging {
       iter += thisItr
       lr.run(thisItr)
       model = lr.saveModel(numFeatures).asInstanceOf[LogisticRegressionModel]
+      model.clearThreshold()
       val scoreAndLabels = testSet.map { case (_, LabeledPoint(label, features)) =>
         (model.predict(features), label)
       }
