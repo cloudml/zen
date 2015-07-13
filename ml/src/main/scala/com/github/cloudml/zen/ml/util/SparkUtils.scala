@@ -22,28 +22,28 @@ import org.apache.spark.mllib.linalg.{DenseVector => SDV, Vector => SV, SparseVe
 import scala.language.implicitConversions
 
 private[zen] object SparkUtils {
-  implicit def toBreeze(sv: SV): BV[Double] = {
+  implicit def toBreeze[T](sv: SV): BV[T] = {
     sv match {
       case SDV(data) =>
-        new BDV(data)
+        new BDV[T](data.map(_.asInstanceOf[T]))
       case SSV(size, indices, values) =>
-        new BSV(indices, values, size)
+        new BSV[T](indices, values.map(_.asInstanceOf[T]), size)
     }
   }
 
-  implicit def fromBreeze(breezeVector: BV[Double]): SV = {
+  implicit def fromBreeze[T](breezeVector: BV[T]): SV = {
     breezeVector match {
-      case v: BDV[Double] =>
+      case v: BDV[_] =>
         if (v.offset == 0 && v.stride == 1 && v.length == v.data.length) {
-          new SDV(v.data)
+          new SDV(v.data.map(_.asInstanceOf[Double]))
         } else {
-          new SDV(v.toArray) // Can't use underlying array directly, so make a new one
+          new SDV(v.toArray.map(_.asInstanceOf[Double])) // Can't use underlying array directly, so make a new one
         }
-      case v: BSV[Double] =>
+      case v: BSV[_] =>
         if (v.index.length == v.used) {
-          new SSV(v.length, v.index, v.data)
+          new SSV(v.length, v.index, v.data.map(_.asInstanceOf[Double]))
         } else {
-          new SSV(v.length, v.index.slice(0, v.used), v.data.slice(0, v.used))
+          new SSV(v.length, v.index.slice(0, v.used), v.data.slice(0, v.used).map(_.asInstanceOf[Double]))
         }
       case v: BV[_] =>
         sys.error("Unsupported Breeze vector type: " + v.getClass.getName)

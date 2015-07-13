@@ -43,9 +43,9 @@ abstract class LDA private[ml](
   @transient private var corpus: Graph[VD, ED],
   private val numTopics: Int,
   private val numTerms: Int,
-  private var alpha: Double,
-  private var beta: Double,
-  private var alphaAS: Double,
+  private var alpha: Float,
+  private var beta: Float,
+  private var alphaAS: Float,
   private var storageLevel: StorageLevel,
   private var useDBHStrategy: Boolean) extends Serializable with Logging {
 
@@ -59,17 +59,17 @@ abstract class LDA private[ml](
    */
   val numTokens = corpus.edges.map(e => e.attr.size.toDouble).sum().toLong
 
-  def setAlpha(alpha: Double): this.type = {
+  def setAlpha(alpha: Float): this.type = {
     this.alpha = alpha
     this
   }
 
-  def setBeta(beta: Double): this.type = {
+  def setBeta(beta: Float): this.type = {
     this.beta = beta
     this
   }
 
-  def setAlphaAS(alphaAS: Double): this.type = {
+  def setAlphaAS(alphaAS: Float): this.type = {
     this.alphaAS = alphaAS
     this
   }
@@ -141,12 +141,12 @@ abstract class LDA private[ml](
     graph: Graph[VD, ED],
     totalTopicCounter: BDV[Count],
     innerIter: Long,
-    numTokens: Double,
-    numTopics: Double,
-    numTerms: Double,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): Graph[VD, ED]
+    numTokens: Long,
+    numTopics: Int,
+    numTerms: Int,
+    alpha: Float,
+    alphaAS: Float,
+    beta: Float): Graph[VD, ED]
 
   /**
    * Save the term-topic related model
@@ -169,12 +169,12 @@ abstract class LDA private[ml](
       previousTermTopicCounter = termTopicCounter
     }
     val ttc = termTopicCounter.mapValues(c => {
-      val nc = new BSV[Double](c.index.slice(0, c.used), c.data.slice(0, c.used).map(_.toDouble), c.length)
-      nc :/= totalIter.toDouble
+      val nc = new BSV[Float](c.index.slice(0, c.used), c.data.slice(0, c.used).map(_.toFloat), c.length)
+      nc :/= totalIter.toFloat
       nc
     })
     ttc.persist(storageLevel)
-    val gtc = ttc.map(_._2).aggregate(BDV.zeros[Double](numTopics))(_ :+= _, _ :+= _)
+    val gtc = ttc.map(_._2).aggregate(BDV.zeros[Float](numTopics))(_ :+= _, _ :+= _)
     new DistributedLDAModel(gtc, ttc, numTopics, numTerms, alpha, beta, alphaAS)
   }
 
@@ -199,12 +199,12 @@ abstract class LDA private[ml](
       previousDocTopicCounter = docTopicCounter
     }
     val dtc = docTopicCounter.mapValues(c => {
-      val nc = new BSV[Double](c.index.slice(0, c.used), c.data.slice(0, c.used).map(_.toDouble), c.length)
-      nc :/= totalIter.toDouble
+      val nc = new BSV[Float](c.index.slice(0, c.used), c.data.slice(0, c.used).map(_.toFloat), c.length)
+      nc :/= totalIter.toFloat
       nc
     })
     dtc.persist(storageLevel)
-    val gtc = dtc.map(_._2).aggregate(BDV.zeros[Double](numTopics))(_ :+= _, _ :+= _)
+    val gtc = dtc.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
     new DistributedLDAModel(gtc, dtc, numTopics, numTerms, alpha, beta, alphaAS)
   }
 
@@ -318,7 +318,7 @@ object LDA {
   private[ml] type DocId = VertexId
   private[ml] type WordId = VertexId
   private[ml] type Count = Int
-  private[ml] type ED = Array[Count]
+  private[ml] type ED = Array[Int]
   private[ml] type VD = BSV[Count]
 
   var numDocs = 0L
@@ -343,9 +343,9 @@ object LDA {
     docs: RDD[(Long, SV)],
     totalIter: Int = 150,
     numTopics: Int = 2048,
-    alpha: Double = 0.001,
-    beta: Double = 0.01,
-    alphaAS: Double = 0.1,
+    alpha: Float = 0.001,
+    beta: Float = 0.01,
+    alphaAS: Float = 0.1,
     useLightLDA: Boolean = false,
     useDBHStrategy: Boolean = false,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): (DistributedLDAModel, DistributedLDAModel) = {
@@ -374,7 +374,7 @@ object LDA {
   def incrementalTrain(
     docs: RDD[(Long, SV)],
     computedModel: LocalLDAModel,
-    alphaAS: Double = 0.1,
+    alphaAS: Float = 0.1,
     totalIter: Int = 150,
     useLightLDA: Boolean = false,
     useDBHStrategy: Boolean = false): DistributedLDAModel = {
@@ -547,17 +547,17 @@ class FastLDA(
   corpus: Graph[VD, ED],
   numTopics: Int,
   numTerms: Int,
-  alpha: Double,
-  beta: Double,
-  alphaAS: Double,
+  alpha: Float,
+  beta: Float,
+  alphaAS: Float,
   storageLevel: StorageLevel,
   useDBHStrategy: Boolean)
     extends LDA(corpus, numTopics, numTerms, alpha, beta, alphaAS, storageLevel, useDBHStrategy) {
   def this(docs: RDD[(DocId, SV)],
     numTopics: Int,
-    alpha: Double,
-    beta: Double,
-    alphaAS: Double,
+    alpha: Float,
+    beta: Float,
+    alphaAS: Float,
     useDBHStrategy: Boolean,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK,
     computedModel: Broadcast[LocalLDAModel] = null) {
@@ -570,12 +570,12 @@ class FastLDA(
     graph: Graph[VD, ED],
     totalTopicCounter: BDV[Count],
     innerIter: Long,
-    numTokens: Double,
-    numTopics: Double,
-    numTerms: Double,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): Graph[VD, ED] = {
+    numTokens: Long,
+    numTopics: Int,
+    numTerms: Int,
+    alpha: Float,
+    alphaAS: Float,
+    beta: Float): Graph[VD, ED] = {
     val parts = graph.edges.partitions.size
     val nweGraph = graph.mapTriplets(
       (pid, iter) => {
@@ -585,9 +585,9 @@ class FastLDA(
         // so, use below simple cache to avoid calculating table each time
         val lastTable = new AliasTable(numTopics.toInt)
         var lastVid: VertexId = -1
-        var lastWSum = 0.0
+        var lastWSum = 0.0f
         val dv = tDense(totalTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
-        val dData = new Array[Double](numTopics.toInt)
+        val dData = new Array[Float](numTopics.toInt)
         val t = AliasTable.generateAlias(dv._2, dv._1)
         val tSum = dv._1
         iter.map {
@@ -623,12 +623,12 @@ class FastLDA(
   private def tokenSampling(
     gen: Random,
     t: AliasTable,
-    tSum: Double,
+    tSum: Float,
     w: AliasTable,
     termTopicCounter: VD,
-    wSum: Double,
+    wSum: Float,
     docTopicCounter: VD,
-    dData: Array[Double],
+    dData: Array[Float],
     currentTopic: Int): Int = {
     val index = docTopicCounter.index
     val used = docTopicCounter.used
@@ -653,17 +653,17 @@ class FastLDA(
    */
   private def tDense(
     totalTopicCounter: BDV[Count],
-    numTokens: Double,
-    numTerms: Double,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): (Double, BDV[Double]) = {
+    numTokens: Long,
+    numTerms: Int,
+    alpha: Float,
+    alphaAS: Float,
+    beta: Float): (Float, BDV[Float]) = {
     val numTopics = totalTopicCounter.length
-    val t = BDV.zeros[Double](numTopics)
+    val t = BDV.zeros[Float](numTopics)
     val alphaSum = alpha * numTopics
-    val termSum = numTokens - 1D + alphaAS * numTopics
+    val termSum = numTokens - 1F + alphaAS * numTopics
     val betaSum = numTerms * beta
-    var sum = 0.0
+    var sum = 0.0f
     for (topic <- 0 until numTopics) {
       val last = beta * alphaSum * (totalTopicCounter(topic) + alphaAS) /
         ((totalTopicCounter(topic) + betaSum) * termSum)
@@ -681,17 +681,17 @@ class FastLDA(
   private def wSparse(
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
-    numTokens: Double,
-    numTerms: Double,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): (Double, BSV[Double]) = {
+    numTokens: Long,
+    numTerms: Int,
+    alpha: Float,
+    alphaAS: Float,
+    beta: Float): (Float, BSV[Float]) = {
     val numTopics = totalTopicCounter.length
     val alphaSum = alpha * numTopics
-    val termSum = numTokens - 1D + alphaAS * numTopics
+    val termSum = numTokens - 1F + alphaAS * numTopics
     val betaSum = numTerms * beta
-    val w = BSV.zeros[Double](numTopics)
-    var sum = 0.0
+    val w = BSV.zeros[Float](numTopics)
+    var sum = 0.0f
     termTopicCounter.activeIterator.filter(_._2 > 0).foreach { t =>
       val topic = t._1
       val count = t._2
@@ -713,20 +713,20 @@ class FastLDA(
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
     docTopicCounter: VD,
-    d: Array[Double],
+    d: Array[Float],
     currentTopic: Int,
-    numTokens: Double,
-    numTerms: Double,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): Unit = {
+    numTokens: Long,
+    numTerms: Int,
+    alpha: Float,
+    alphaAS: Float,
+    beta: Float): Unit = {
     val index = docTopicCounter.index
     val data = docTopicCounter.data
     val used = docTopicCounter.used
 
     // val termSum = numTokens - 1D + alphaAS * numTopics
     val betaSum = numTerms * beta
-    var sum = 0.0
+    var sum = 0.0f
     for (i <- 0 until used) {
       val topic = index(i)
       val count = data(i)
@@ -745,11 +745,11 @@ class FastLDA(
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
     termId: VertexId,
-    numTokens: Double,
-    numTerms: Double,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): Double = {
+    numTokens: Long,
+    numTerms: Int,
+    alpha: Float,
+    alphaAS: Float,
+    beta: Float): Float = {
     val sv = wSparse(totalTopicCounter, termTopicCounter,
       numTokens, numTerms, alpha, alphaAS, beta)
     AliasTable.generateAlias(sv._2, sv._1, table)
@@ -762,17 +762,17 @@ class LightLDA(
   corpus: Graph[VD, ED],
   numTopics: Int,
   numTerms: Int,
-  alpha: Double,
-  beta: Double,
-  alphaAS: Double,
+  alpha: Float,
+  beta: Float,
+  alphaAS: Float,
   storageLevel: StorageLevel,
   useDBHStrategy: Boolean)
     extends LDA(corpus, numTopics, numTerms, alpha, beta, alphaAS, storageLevel, useDBHStrategy) {
   def this(docs: RDD[(Long, SV)],
     numTopics: Int,
-    alpha: Double,
-    beta: Double,
-    alphaAS: Double,
+    alpha: Float,
+    beta: Float,
+    alphaAS: Float,
     useDBHStrategy: Boolean,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK,
     computedModel: Broadcast[LocalLDAModel] = null) {
@@ -784,24 +784,24 @@ class LightLDA(
     graph: Graph[VD, ED],
     totalTopicCounter: BDV[Count],
     innerIter: Long,
-    numTokens: Double,
-    numTopics: Double,
-    numTerms: Double,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): Graph[VD, ED] = {
+    numTokens: Long,
+    numTopics: Int,
+    numTerms: Int,
+    alpha: Float,
+    alphaAS: Float,
+    beta: Float): Graph[VD, ED] = {
     val parts = graph.edges.partitions.size
     val nweGraph = graph.mapTriplets(
       (pid, iter) => {
         val gen = new Random(parts * innerIter + pid)
-        val docTableCache = new AppendOnlyMap[VertexId, SoftReference[(Double, AliasTable)]]()
+        val docTableCache = new AppendOnlyMap[VertexId, SoftReference[(Float, AliasTable)]]()
 
         // table is a per term data structure
         // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
         // so, use below simple cache to avoid calculating table each time
         val lastTable = new AliasTable(numTopics.toInt)
         var lastVid: VertexId = -1
-        var lastWSum = 0.0
+        var lastWSum = 0.0f
 
         val p = tokenTopicProb(totalTopicCounter, beta, alpha,
           alphaAS, numTokens, numTerms) _
@@ -809,9 +809,9 @@ class LightLDA(
         val wPFun = wordProb(totalTopicCounter, numTerms, beta) _
 
         var dD: AliasTable = null
-        var dDSum: Double = 0.0
+        var dDSum: Float = 0.0f
         var wD: AliasTable = null
-        var wDSum: Double = 0.0
+        var wDSum: Float = 0.0f
 
         iter.map {
           triplet =>
@@ -850,7 +850,7 @@ class LightLDA(
                 val currentTopic = topics(i)
                 var proposalTopic = -1
                 val q = if (docProposal) {
-                  if (gen.nextDouble() < dDSum / (dSum - 1.0 + dDSum)) {
+                  if (gen.nextFloat() < dDSum / (dSum - 1.0f + dDSum)) {
                     proposalTopic = dD.sampleAlias(gen)
                   }
                   else {
@@ -920,8 +920,8 @@ class LightLDA(
     docProposal: Boolean,
     currentTopic: Int,
     proposalTopic: Int,
-    q: (VD, Int, Boolean) => Double,
-    p: (VD, VD, Int, Boolean) => Double): Int = {
+    q: (VD, Int, Boolean) => Float,
+    p: (VD, VD, Int, Boolean) => Float): Int = {
     if (proposalTopic == currentTopic) return proposalTopic
     val cp = p(docTopicCounter, termTopicCounter, currentTopic, true)
     val np = p(docTopicCounter, termTopicCounter, proposalTopic, false)
@@ -930,20 +930,20 @@ class LightLDA(
     val nq = q(vd, proposalTopic, false)
 
     val pi = (np * cq) / (cp * nq)
-    if (gen.nextDouble() < math.min(1.0, pi)) proposalTopic else currentTopic
+    if (gen.nextFloat() < math.min(1.0f, pi)) proposalTopic else currentTopic
   }
 
   // scalastyle:off
   private def tokenTopicProb(
     totalTopicCounter: BDV[Count],
-    beta: Double,
-    alpha: Double,
-    alphaAS: Double,
-    numTokens: Double,
-    numTerms: Double)(docTopicCounter: VD,
+    beta: Float,
+    alpha: Float,
+    alphaAS: Float,
+    numTokens: Long,
+    numTerms: Float)(docTopicCounter: VD,
     termTopicCounter: VD,
     topic: Int,
-    isAdjustment: Boolean): Double = {
+    isAdjustment: Boolean): Float = {
     val numTopics = docTopicCounter.length
     val adjustment = if (isAdjustment) -1 else 0
     val ratio = (totalTopicCounter(topic) + adjustment + alphaAS) /
@@ -964,17 +964,17 @@ class LightLDA(
 
   private def wordProb(
     totalTopicCounter: BDV[Count],
-    numTerms: Double,
-    beta: Double)(termTopicCounter: VD, topic: Int, isAdjustment: Boolean): Double = {
+    numTerms: Int,
+    beta: Float)(termTopicCounter: VD, topic: Int, isAdjustment: Boolean): Float = {
     (termTopicCounter(topic) + beta) / (totalTopicCounter(topic) + beta * numTerms)
   }
 
   private def docProb(
     totalTopicCounter: BDV[Count],
-    alpha: Double,
-    alphaAS: Double,
-    numTokens: Double)(docTopicCounter: VD, topic: Int, isAdjustment: Boolean): Double = {
-    val adjustment = if (isAdjustment) -1.0 else 0.0
+    alpha: Float,
+    alphaAS: Float,
+    numTokens: Long)(docTopicCounter: VD, topic: Int, isAdjustment: Boolean): Float = {
+    val adjustment = if (isAdjustment) -1 else 0
     val numTopics = totalTopicCounter.length
     val ratio = (totalTopicCounter(topic) + alphaAS) /
       (numTokens - 1 + alphaAS * numTopics)
@@ -988,13 +988,13 @@ class LightLDA(
   private def wSparse(
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
-    numTerms: Double,
-    beta: Double): (Double, BV[Double]) = {
+    numTerms: Int,
+    beta: Float): (Float, BV[Float]) = {
     val numTopics = termTopicCounter.length
     val termSum = beta * numTerms
-    val w = BSV.zeros[Double](numTopics)
+    val w = BSV.zeros[Float](numTopics)
 
-    var sum = 0.0
+    var sum = 0.0f
     termTopicCounter.activeIterator.foreach { t =>
       val topic = t._1
       val count = t._2
@@ -1012,12 +1012,12 @@ class LightLDA(
    */
   private def wDense(
     totalTopicCounter: BDV[Count],
-    numTerms: Double,
-    beta: Double): (Double, BV[Double]) = {
+    numTerms: Int,
+    beta: Float): (Float, BV[Float]) = {
     val numTopics = totalTopicCounter.length
-    val t = BDV.zeros[Double](numTopics)
+    val t = BDV.zeros[Float](numTopics)
     val termSum = beta * numTerms
-    var sum = 0.0
+    var sum = 0.0f
     for (topic <- 0 until numTopics) {
       val last = beta / (totalTopicCounter(topic) + termSum)
       t(topic) = last
@@ -1026,10 +1026,10 @@ class LightLDA(
     (sum, t)
   }
 
-  private def dSparse(docTopicCounter: VD): (Double, BV[Double]) = {
+  private def dSparse(docTopicCounter: VD): (Float, BV[Float]) = {
     val numTopics = docTopicCounter.length
-    val d = BSV.zeros[Double](numTopics)
-    var sum = 0.0
+    val d = BSV.zeros[Float](numTopics)
+    var sum = 0.0f
     docTopicCounter.activeIterator.foreach { t =>
       val topic = t._1
       val count = t._2
@@ -1045,13 +1045,13 @@ class LightLDA(
 
   private def dDense(
     totalTopicCounter: BDV[Count],
-    alpha: Double,
-    alphaAS: Double,
-    numTokens: Double): (Double, BV[Double]) = {
+    alpha: Float,
+    alphaAS: Float,
+    numTokens: Long): (Float, BV[Float]) = {
     val numTopics = totalTopicCounter.length
-    val asPrior = BDV.zeros[Double](numTopics)
+    val asPrior = BDV.zeros[Float](numTopics)
 
-    var sum = 0.0
+    var sum = 0.0f
     for (topic <- 0 until numTopics) {
       val ratio = (totalTopicCounter(topic) + alphaAS) /
         (numTokens - 1 + alphaAS * numTopics)
@@ -1063,10 +1063,10 @@ class LightLDA(
   }
 
   private def docTable(
-    updateFunc: SoftReference[(Double, AliasTable)] => Boolean,
-    cacheMap: AppendOnlyMap[VertexId, SoftReference[(Double, AliasTable)]],
+    updateFunc: SoftReference[(Float, AliasTable)] => Boolean,
+    cacheMap: AppendOnlyMap[VertexId, SoftReference[(Float, AliasTable)]],
     docTopicCounter: VD,
-    docId: VertexId): (Double, AliasTable) = {
+    docId: VertexId): (Float, AliasTable) = {
     val cacheD = cacheMap(docId)
     if (!updateFunc(cacheD)) {
       cacheD.get
@@ -1085,8 +1085,8 @@ class LightLDA(
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
     termId: VertexId,
-    numTerms: Double,
-    beta: Double): Double = {
+    numTerms: Int,
+    beta: Float): Float = {
     val sv = wSparse(totalTopicCounter, termTopicCounter, numTerms, beta)
     AliasTable.generateAlias(sv._2, sv._1, table)
     sv._1
