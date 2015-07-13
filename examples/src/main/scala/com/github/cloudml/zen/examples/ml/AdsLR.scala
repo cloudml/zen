@@ -39,7 +39,6 @@ object AdsLR extends Logging {
     stepSize: Double = 0.05,
     regular: Double = 0.01,
     fraction: Double = 1.0,
-    rank: Int = 64,
     useAdaGrad: Boolean = false,
     useThreeViews: Boolean = false,
     diskOnly: Boolean = false,
@@ -55,9 +54,6 @@ object AdsLR extends Logging {
       opt[Int]("numPartitions")
         .text(s"number of partitions, default: ${defaultParams.numPartitions}")
         .action((x, c) => c.copy(numPartitions = x))
-      opt[Int]("rank")
-        .text(s"dim of 2-way interactions, default: ${defaultParams.rank}")
-        .action((x, c) => c.copy(rank = x))
       opt[Unit]("kryo")
         .text("use Kryo serialization")
         .action((_, c) => c.copy(kryo = true))
@@ -95,7 +91,7 @@ object AdsLR extends Logging {
           |
           | bin/spark-submit --class com.github.cloudml.zen.examples.ml.AdsLR \
           |  examples/target/scala-*/zen-examples-*.jar \
-          |  --rank 20 --numIterations 200 --regular 0.01 --kryo \
+          |  --numIterations 200 --regular 0.01 --kryo \
           |  data/mllib/ads_data/*
           |  data/mllib/MVM_model
         """.stripMargin)
@@ -110,7 +106,7 @@ object AdsLR extends Logging {
 
   def run(params: Params): Unit = {
     val Params(input, out, numIterations, numPartitions, stepSize, regular, fraction,
-    rank, useAdaGrad, useThreeViews, diskOnly, kryo) = params
+    useAdaGrad, useThreeViews, diskOnly, kryo) = params
 
     val storageLevel = if (diskOnly) StorageLevel.DISK_ONLY else StorageLevel.MEMORY_AND_DISK
     val checkpointDir = s"$out/checkpoint"

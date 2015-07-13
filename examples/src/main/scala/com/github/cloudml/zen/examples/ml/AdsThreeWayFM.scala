@@ -39,7 +39,6 @@ object AdsThreeWayFM extends Logging {
     rank3: Int = 10,
     useAdaGrad: Boolean = false,
     useWeightedLambda: Boolean = false,
-    useSVDPlusPlus: Boolean = false,
     kryo: Boolean = true) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
@@ -81,9 +80,6 @@ object AdsThreeWayFM extends Logging {
       opt[Unit]("weightedLambda")
         .text("use weighted lambda regularization")
         .action((_, c) => c.copy(useWeightedLambda = true))
-      opt[Unit]("svdPlusPlus")
-        .text("use SVD++")
-        .action((_, c) => c.copy(useSVDPlusPlus = true))
       arg[String]("<input>")
         .required()
         .text("input paths")
@@ -113,8 +109,8 @@ object AdsThreeWayFM extends Logging {
 
   def run(params: Params): Unit = {
     val Params(input, out, numIterations, numPartitions, stepSize, fraction, regular,
-    rank2, rank3, useAdaGrad, useWeightedLambda, useSVDPlusPlus, kryo) = params
-    val storageLevel = if (useSVDPlusPlus) StorageLevel.DISK_ONLY else StorageLevel.MEMORY_AND_DISK
+    rank2, rank3, useAdaGrad, useWeightedLambda, kryo) = params
+    val storageLevel = StorageLevel.MEMORY_AND_DISK
     val regs = regular.split(",").map(_.toDouble)
     val l2 = (regs(0), regs(1), regs(2), regs(3))
     val conf = new SparkConf().setAppName(s"ThreeWayFM with $params")
