@@ -43,8 +43,8 @@ object AdsThreeWayFM extends Logging {
 
   def main(args: Array[String]) {
     val defaultParams = Params()
-    val parser = new OptionParser[Params]("MovieLensThreeWayFM") {
-      head("MovieLensThreeWayFM: an example app for ThreeWayFM.")
+    val parser = new OptionParser[Params]("AdsThreeWayFM") {
+      head("AdsThreeWayFM: an example app for ThreeWayFM.")
       opt[Int]("numIterations")
         .text(s"number of iterations, default: ${defaultParams.numIterations}")
         .action((x, c) => c.copy(numIterations = x))
@@ -92,7 +92,7 @@ object AdsThreeWayFM extends Logging {
         """
           | For example, the following command runs this app on a synthetic dataset:
           |
-          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.MovieLensThreeWayFM \
+          | bin/spark-submit --class com.github.cloudml.zen.examples.ml.AdsThreeWayFM \
           | examples/target/scala-*/zen-examples-*.jar \
           | --rank2 10 --rank3 10  --numIterations 50 --regular 0.01,0.01,0.01,0.01 --kryo \
           | data/mllib/sample_movielens_data.txt
@@ -121,7 +121,7 @@ object AdsThreeWayFM extends Logging {
     val sc = new SparkContext(conf)
     val checkpointDir = s"$out/checkpoint"
     sc.setCheckpointDir(checkpointDir)
-    SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensThreeWayFM")
+    SparkHacker.gcCleaner(60 * 10, 60 * 10, "AdsThreeWayFM")
     val (trainSet, testSet, views) = AdsUtils.genSamplesWithTimeAnd3Views(sc, input,
       numPartitions, fraction, storageLevel)
 
