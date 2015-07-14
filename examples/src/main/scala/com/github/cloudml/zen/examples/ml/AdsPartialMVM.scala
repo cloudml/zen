@@ -139,8 +139,8 @@ object AdsPartialMVM extends Logging {
       model.factors.persist(storageLevel)
       model.factors.count()
       val auc = model.loss(testSet)
-      logInfo(f"(Iteration $iter/$numIterations) Test AUC:                     $auc%1.4f")
-      println(f"(Iteration $iter/$numIterations) Test AUC:                     $auc%1.4f")
+      logInfo(f"(Iteration $iter/$numIterations) Test AUC:                     $auc%1.6f")
+      println(f"(Iteration $iter/$numIterations) Test AUC:                     $auc%1.6f")
     }
     model.save(sc, out)
     sc.stop()
