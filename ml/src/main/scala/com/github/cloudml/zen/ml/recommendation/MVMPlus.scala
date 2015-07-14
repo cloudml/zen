@@ -20,13 +20,12 @@ package com.github.cloudml.zen.ml.recommendation
 import java.util.{Random => JavaRandom}
 
 import com.github.cloudml.zen.ml.DBHPartitioner
-import com.github.cloudml.zen.ml.recommendation.MVM._
+import com.github.cloudml.zen.ml.recommendation.MVMPlus._
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.{XORShiftRandom, Utils}
-import org.apache.spark.{SparkContext, Logging}
+import org.apache.spark.Logging
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.{EdgeRDDImpl, GraphImpl}
-import org.apache.spark.mllib.linalg.{Vector => SV}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
@@ -35,7 +34,7 @@ import scala.math._
 
 /**
  * Multi-view Machines :
- * \hat{y}(x) :=\sum_{i_1 =1}^{I_i +1} ...\sum_{i_m =1}^{I_m +1}
+ * \hat{y}(x) := w_0 + \sum_{i_1 =1}^{I_i +1} ...\sum_{i_m =1}^{I_m +1}
  * (\prod_{v=1}^{m} z_{i_v}^{(v)})(\sum_{f=1}^{k}\prod_{v=1}^{m}a_{i_{v,j}}^{(v)})
  * :=  \sum_{f}^{k}(\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)}) ..
  * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
@@ -47,16 +46,16 @@ import scala.math._
  * (\sum_{i_{v+1} =1}^{I_{v+1}+1}z_{i_{v+1}}^{({v+1})}a_{i_{v+1},j}^{({v+1})}) ...
  * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
  */
-private[ml] abstract class MVM extends Serializable with Logging {
+private[ml] abstract class MVMPlus extends Serializable with Logging {
 
   protected val checkpointInterval = 10
   protected var numFeatures: Long = 0
   protected var numSamples: Long = 0
-
+  protected var bias: Double = 0.0
   // SGD
   @transient protected var dataSet: Graph[VD, ED] = null
   @transient protected var multi: VertexRDD[Array[Double]] = null
-  @transient protected var gradientSum: VertexRDD[Array[Double]] = null
+  @transient protected var gradientSum: (Double, VertexRDD[Array[Double]]) = null
   @transient protected var vertices: VertexRDD[VD] = null
   @transient protected var edges: EdgeRDD[ED] = null
   @transient private var innerIter = 1
@@ -134,13 +133,13 @@ private[ml] abstract class MVM extends Serializable with Logging {
       previousVertices.unpersist(blocking = false)
       margin.unpersist(blocking = false)
       multi.unpersist(blocking = false)
-      gradient.unpersist(blocking = false)
+      gradient._2.unpersist(blocking = false)
       innerIter += 1
     }
   }
 
-  def saveModel(): MVMModel = {
-    new MVMModel(rank, views, false, features.mapValues(arr => arr.slice(0, arr.length - 1)))
+  def saveModel(): MVMPlusModel = {
+    new MVMPlusModel(rank, bias, views, false, features.mapValues(arr => arr.slice(0, arr.length - 1)))
   }
 
   protected[ml] def forward(iter: Int): VertexRDD[Array[Double]] = {
@@ -162,12 +161,13 @@ private[ml] abstract class MVM extends Serializable with Logging {
 
   protected def multiplier(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD])
 
-  protected def backward(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD]) = {
+  protected def backward(q: VertexRDD[VD], iter: Int): (Long, Double, (Double, VertexRDD[VD])) = {
     val (thisNumSamples, costSum, thisMulti) = multiplier(q, iter)
     multi = thisMulti
     val mod = mask
     val random = genRandom(mod, iter)
     val seed = random.nextLong()
+    val gradW0 = multi.filter(t => isSampleId(t._1)).map(_._2.last).sum() / thisNumSamples
     val gradient = GraphImpl.fromExistingRDDs(multi, edges).aggregateMessages[VD](ctx => {
       val sampleId = ctx.dstId
       val featureId = ctx.srcId
@@ -181,15 +181,17 @@ private[ml] abstract class MVM extends Serializable with Logging {
     }, reduceInterval, TripletFields.Dst).mapValues { gradients =>
       gradients.map(_ / thisNumSamples)
     }
-    (thisNumSamples, costSum, gradient.setName(s"gradient-$iter").persist(storageLevel))
+    (thisNumSamples, costSum, (gradW0, gradient.setName(s"gradient-$iter").persist(storageLevel)))
   }
 
   // Updater for elastic net regularized problems
-  protected def updateWeight(delta: VertexRDD[Array[Double]], iter: Int): VertexRDD[VD] = {
-    val gradient = delta
+  protected def updateWeight(delta: (Double, VertexRDD[VD]), iter: Int): VertexRDD[VD] = {
+    val (biasGrad, gradient) = delta
     val thisIterStepSize = if (useAdaGrad) stepSize else stepSize / sqrt(iter)
     val shrinkageVal = elasticNetParam * regParam * thisIterStepSize
     val regParamL2 = (1.0 - elasticNetParam) * regParam
+    bias -= thisIterStepSize * (biasGrad + regParamL2 * bias)
+    if (shrinkageVal > 0.0) bias = signum(bias) * max(0.0, abs(bias) - shrinkageVal)
     dataSet.vertices.leftJoin(gradient) { (_, attr, gradient) =>
       gradient match {
         case Some(grad) =>
@@ -199,8 +201,9 @@ private[ml] abstract class MVM extends Serializable with Logging {
           while (i < rank) {
             if (grad(i) != 0.0) {
               weight(i) -= thisIterStepSize * (grad(i) + regParamL2 * wd * weight(i))
-              if (shrinkageVal > 0) {
-                weight(i) = signum(weight(i)) * max(0.0, abs(weight(i)) - wd * shrinkageVal)
+              if (shrinkageVal > 0.0) {
+                val wi = weight(i)
+                weight(i) = signum(wi) * max(0.0, abs(wi) - wd * shrinkageVal)
               }
             }
             i += 1
@@ -212,84 +215,100 @@ private[ml] abstract class MVM extends Serializable with Logging {
   }
 
   protected def updateGradientSum(
-    gradient: VertexRDD[Array[Double]],
-    iter: Int): VertexRDD[Array[Double]] = {
+    gradient: (Double, VertexRDD[Array[Double]]),
+    iter: Int): (Double, VertexRDD[Array[Double]]) = {
     if (useAdaGrad) {
       val rho = math.exp(-math.log(2.0) / halfLife)
-      val delta = adaGrad(gradientSum, gradient, epsilon, 1.0, iter)
-      // val delta = esgd(gradientSum, gradient, epsilon, 1.0, iter)
+      val (newW0Grad, newW0Sum, delta) = adaGrad(gradientSum, gradient, epsilon, 1.0)
+      // val (newW0Grad, newW0Sum, delta) = esgd(gradientSum, gradient, epsilon, iter)
       checkpointGradientSum(delta)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
 
-      gradient.unpersist(blocking = false)
+      gradient._2.unpersist(blocking = false)
       val newGradient = delta.mapValues(_._1).filter(_._2 != null).
         setName(s"gradient-$iter").persist(storageLevel)
       newGradient.count()
 
-      if (gradientSum != null) gradientSum.unpersist(blocking = false)
-      gradientSum = delta.mapValues(_._2).setName(s"gradientSum-$iter").persist(storageLevel)
-      gradientSum.count()
+      if (gradientSum != null) gradientSum._2.unpersist(blocking = false)
+      gradientSum = (newW0Sum, delta.mapValues(_._2).setName(s"gradientSum-$iter").persist(storageLevel))
+      gradientSum._2.count()
       delta.unpersist(blocking = false)
-      newGradient
+      (newW0Grad, newGradient)
     } else {
       gradient
     }
   }
 
   protected def adaGrad(
-    gradientSum: VertexRDD[Array[Double]],
-    gradient: VertexRDD[Array[Double]],
+    gradientSum: (Double, VertexRDD[Array[Double]]),
+    gradient: (Double, VertexRDD[Array[Double]]),
     epsilon: Double,
-    rho: Double,
-    iter: Int): VertexRDD[(Array[Double], Array[Double])] = {
+    rho: Double): (Double, Double, VertexRDD[(Array[Double], Array[Double])]) = {
     val delta = if (gradientSum == null) {
       features.mapValues(t => t.map(x => 0.0))
     }
     else {
-      gradientSum
+      gradientSum._2
     }
-
-    val newGradSum = delta.innerJoin(gradient) { case (_, gs, grad) =>
-      val gradLen = grad.length
-      val newGradSum = new Array[Double](gradLen)
-      val newGrad = new Array[Double](gradLen)
-      for (i <- 0 until gradLen) {
-        newGradSum(i) = gs(i) * rho + pow(grad(i), 2)
-        val div = epsilon + sqrt(newGradSum(i))
-        newGrad(i) = grad(i) / div
+    val newGradSumWithoutW0 = delta.leftJoin(gradient._2) { (_, gradSum, g) =>
+      g match {
+        case Some(grad) =>
+          val gradLen = grad.length
+          val newGradSum = new Array[Double](gradLen)
+          val newGrad = new Array[Double](gradLen)
+          for (i <- 0 until gradLen) {
+            newGradSum(i) = gradSum(i) * rho + pow(grad(i), 2)
+            newGrad(i) = grad(i) / (epsilon + sqrt(newGradSum(i)))
+          }
+          (newGrad, newGradSum)
+        case _ => (null, gradSum)
       }
-      (newGrad, newGradSum)
+
     }
-    newGradSum
+    val w0Sum = if (gradientSum == null) 0.0 else gradientSum._1
+    val w0Grad = gradient._1
+
+    val newW0Sum = w0Sum * rho + pow(w0Grad, 2)
+    val newW0Grad = w0Grad / (epsilon + sqrt(newW0Sum))
+
+    (newW0Grad, newW0Sum, newGradSumWithoutW0)
   }
 
   protected def esgd(
-    gradientSum: VertexRDD[Array[Double]],
-    gradient: VertexRDD[Array[Double]],
+    gradientSum: (Double, VertexRDD[Array[Double]]),
+    gradient: (Double, VertexRDD[Array[Double]]),
     epsilon: Double,
-    rho: Double,
-    iter: Int): VertexRDD[(Array[Double], Array[Double])] = {
+    iter: Int): (Double, Double, VertexRDD[(Array[Double], Array[Double])]) = {
     val delta = if (gradientSum == null) {
       features.mapValues(t => t.map(x => 0.0))
     }
     else {
-      gradientSum
+      gradientSum._2
     }
-
-    val newGradSum = delta.innerJoin(gradient) { case (_, gs, grad) =>
-      val gradLen = grad.length
-      val newGradSum = new Array[Double](gradLen)
-      val newGrad = new Array[Double](gradLen)
-      for (i <- 0 until gradLen) {
-        val h = Utils.random.nextGaussian()
-        newGradSum(i) = gs(i) * rho + pow(h * grad(i), 2)
-        val div = epsilon + sqrt(newGradSum(i) / iter)
-        newGrad(i) = grad(i) / div
+    val newGradSumWithoutW0 = delta.leftJoin(gradient._2) { (_, gradSum, g) =>
+      g match {
+        case Some(grad) =>
+          val gradLen = grad.length
+          val newGradSum = new Array[Double](gradLen)
+          val newGrad = new Array[Double](gradLen)
+          for (i <- 0 until gradLen) {
+            newGradSum(i) = gradSum(i) + pow(Utils.random.nextGaussian() * grad(i), 2)
+            newGrad(i) = grad(i) / (epsilon + sqrt(newGradSum(i) / iter))
+          }
+          (newGrad, newGradSum)
+        case _ => (null, gradSum)
       }
-      (newGrad, newGradSum)
+
     }
-    newGradSum
+    val w0Sum = if (gradientSum == null) 0.0 else gradientSum._1
+    val w0Grad = gradient._1
+
+    val newW0Sum = w0Sum + pow(Utils.random.nextGaussian() * w0Grad, 2)
+    val newW0Grad = w0Grad / (epsilon + sqrt(newW0Sum / iter))
+
+    (newW0Grad, newW0Sum, newGradSumWithoutW0)
   }
+
 
   protected def checkpointGradientSum(delta: VertexRDD[(Array[Double], Array[Double])]): Unit = {
     val sc = delta.sparkContext
@@ -306,7 +325,7 @@ private[ml] abstract class MVM extends Serializable with Logging {
   }
 }
 
-class MVMClassification(
+class MVMPlusClassification(
   @transient _dataSet: Graph[VD, ED],
   val stepSize: Double,
   val views: Array[Long],
@@ -316,7 +335,7 @@ class MVMClassification(
   val useAdaGrad: Boolean,
   val useWeightedLambda: Boolean,
   val miniBatchFraction: Double,
-  val storageLevel: StorageLevel) extends MVM {
+  val storageLevel: StorageLevel) extends MVMPlus {
 
   def this(
     input: RDD[(VertexId, LabeledPoint)],
@@ -338,7 +357,7 @@ class MVMClassification(
   // assert(rank > 1, s"rank $rank less than 2")
 
   override protected def predict(arr: Array[Double]): Double = {
-    val result = predictInterval(rank, arr)
+    val result = predictInterval(rank, arr, bias)
     sigmoid(result)
   }
 
@@ -346,8 +365,8 @@ class MVMClassification(
     1d / (1d + math.exp(-x))
   }
 
-  override def saveModel(): MVMModel = {
-    new MVMModel(rank, views, true, features.mapValues(arr => arr.slice(0, arr.length - 1)))
+  override def saveModel(): MVMPlusModel = {
+    new MVMPlusModel(rank, bias, views, true, features.mapValues(arr => arr.slice(0, arr.length - 1)))
   }
 
   override protected def multiplier(q: VertexRDD[VD], iter: Int): (Long, Double, VertexRDD[VD]) = {
@@ -360,7 +379,7 @@ class MVMClassification(
           // val diff = predict(m) - y
           val arr = sumInterval(rank, m)
           val z = arr.last
-          val diff = sigmoid(z) - y
+          val diff = sigmoid(z + bias) - y
           accNumSamples += 1L
           accLossSum += Utils.log1pExp(if (y > 0.0) -z else z)
           arr(arr.length - 1) = diff
@@ -376,7 +395,7 @@ class MVMClassification(
 
 }
 
-class MVMRegression(
+class MVMPlusRegression(
   @transient _dataSet: Graph[VD, ED],
   val stepSize: Double,
   val views: Array[Long],
@@ -386,7 +405,7 @@ class MVMRegression(
   val useAdaGrad: Boolean,
   val useWeightedLambda: Boolean,
   val miniBatchFraction: Double,
-  val storageLevel: StorageLevel) extends MVM {
+  val storageLevel: StorageLevel) extends MVMPlus {
 
   def this(
     input: RDD[(VertexId, LabeledPoint)],
@@ -411,7 +430,7 @@ class MVMRegression(
   // val min = samples.map(_._2.head).min
 
   override protected def predict(arr: Array[Double]): Double = {
-    var result = predictInterval(rank, arr)
+    var result = predictInterval(rank, arr, bias)
     // result = Math.max(result, min)
     // result = Math.min(result, max)
     result
@@ -425,7 +444,7 @@ class MVMRegression(
         case Some(m) =>
           val y = data.head
           val arr = sumInterval(rank, m)
-          val diff = arr.last - y
+          val diff = arr.last + bias - y
           accLossSum += pow(diff, 2)
           accNumSamples += 1L
           arr(arr.length - 1) = diff * 2.0
@@ -440,12 +459,12 @@ class MVMRegression(
   }
 }
 
-object MVM {
+object MVMPlus {
   private[ml] type ED = Double
   private[ml] type VD = Array[Double]
 
   /**
-   * MVM Clustering
+   * MVMPlus classification
    * @param input train data
    * @param numIterations
    * @param stepSize  we recommend the step size: 1e-2 - 1e-1
@@ -468,13 +487,13 @@ object MVM {
     useAdaGrad: Boolean = true,
     useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): MVMModel = {
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): MVMPlusModel = {
     val data = input.map { case (id, LabeledPoint(label, features)) =>
       assert(id >= 0.0, s"sampleId $id less than 0")
       val newLabel = if (label > 0.0) 1.0 else 0.0
       (id, LabeledPoint(newLabel, features))
     }
-    val lfm = new MVMClassification(data, stepSize, views, regParam, elasticNetParam, rank,
+    val lfm = new MVMPlusClassification(data, stepSize, views, regParam, elasticNetParam, rank,
       useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
@@ -482,7 +501,7 @@ object MVM {
   }
 
   /**
-   * MVM Regression
+   * MVMPlus Regression
    * @param input train data
    * @param numIterations
    * @param stepSize  we recommend the step size: 1e-2 - 1e-1
@@ -506,12 +525,12 @@ object MVM {
     useAdaGrad: Boolean = true,
     useWeightedLambda: Boolean = true,
     miniBatchFraction: Double = 1.0,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): MVMModel = {
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): MVMPlusModel = {
     val data = input.map { case (id, labeledPoint) =>
       assert(id >= 0.0, s"sampleId $id less than 0")
       (id, labeledPoint)
     }
-    val lfm = new MVMRegression(data, stepSize, views, regParam, elasticNetParam,
+    val lfm = new MVMPlusRegression(data, stepSize, views, regParam, elasticNetParam,
       rank, useAdaGrad, useWeightedLambda, miniBatchFraction, storageLevel)
     lfm.run(numIterations)
     val model = lfm.saveModel()
@@ -625,7 +644,7 @@ object MVM {
    * arr(k + v * rank)= (\sum_{i_1 =1}^{I_1+1}z_{i_1}^{(1)}a_{i_1,j}^{(1)})
    * (\sum_{i_m =1}^{I_m+1}z_{i_m}^{(m)}a_{i_m,j}^{(m)})
    */
-  private[ml] def predictInterval(rank: Int, arr: VD): ED = {
+  private[ml] def predictInterval(rank: Int, arr: VD, bias: Double): ED = {
     val viewSize = arr.length / rank
     var sum = 0.0
     var i = 0
@@ -639,7 +658,7 @@ object MVM {
       sum += multi
       i += 1
     }
-    sum
+    sum + bias
   }
 
   private[ml] def forwardInterval(rank: Int, viewSize: Int, viewId: Int, x: ED, w: VD): VD = {

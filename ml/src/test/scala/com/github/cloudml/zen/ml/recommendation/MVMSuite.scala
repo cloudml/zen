@@ -464,7 +464,7 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
         val Array(userId, movieId, rating, timestamp) = line.split("\t")
         (userId.toInt, movieId.toInt, rating.toDouble, timestamp.toInt / (60 * 60 * 24))
       }
-    }.repartition(72).persist(StorageLevel.MEMORY_AND_DISK)
+    }.persist(StorageLevel.MEMORY_AND_DISK)
     val maxMovieId = movieLens.map(_._2).max + 1
     val maxUserId = movieLens.map(_._1).max + 1
     val maxDay = movieLens.map(_._4).max()
@@ -487,23 +487,25 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
     val stepSize = 0.1
     val numIterations = 50
     val regParam = 0.1
-    val l2 = (regParam, regParam, regParam)
+    val l2 = (regParam, regParam, regParam, regParam)
     val rank = 4
     val useAdaGrad = true
     val useWeightedLambda = true
     val views = Array(maxUserId, maxUserId + maxMovieId, numFeatures).map(_.toLong)
     val miniBatchFraction = 1
     val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
+    //    val fm = new FMClassification(trainSet, stepSize, l2, rank, useAdaGrad, miniBatchFraction)
 
-    val fm = new FMClassification(trainSet, stepSize, l2,
-       rank, useAdaGrad, miniBatchFraction)
-
+    //    val fm = new PartialMVMClassification(trainSet, stepSize, views, l2, rank,
+    //      useAdaGrad, useWeightedLambda, miniBatchFraction)
     //    val fm = new FMRegression(trainSet, stepSize, l2, rank, useAdaGrad,
     //      miniBatchFraction, StorageLevel.MEMORY_AND_DISK)
 
     //    val fm = new BSFMRegression(trainSet, stepSize, Array(maxUserId, numFeatures),
     //      l2, rank, useAdaGrad, miniBatchFraction)
 
+    val fm = new ThreeWayFMClassification(trainSet, stepSize, views, l2, rank, rank,
+      useAdaGrad, useWeightedLambda, miniBatchFraction)
     fm.run(numIterations)
     val model = fm.saveModel()
     println(f"Test loss: ${model.loss(testSet)}%1.4f")
