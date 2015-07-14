@@ -190,6 +190,7 @@ private[ml] abstract class MVMPlus extends Serializable with Logging {
     val thisIterStepSize = if (useAdaGrad) stepSize else stepSize / sqrt(iter)
     val shrinkageVal = elasticNetParam * regParam * thisIterStepSize
     val regParamL2 = (1.0 - elasticNetParam) * regParam
+    // bias -= thisIterStepSize * biasGrad
     bias -= thisIterStepSize * (biasGrad + regParamL2 * bias)
     if (shrinkageVal > 0.0) bias = signum(bias) * max(0.0, abs(bias) - shrinkageVal)
     dataSet.vertices.leftJoin(gradient) { (_, attr, gradient) =>
