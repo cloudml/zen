@@ -43,9 +43,9 @@ abstract class LDA private[ml](
   @transient private var corpus: Graph[VD, ED],
   private val numTopics: Int,
   private val numTerms: Int,
-  private var alpha: Double,
-  private var beta: Double,
-  private var alphaAS: Double,
+  private var alpha: Float,
+  private var beta: Float,
+  private var alphaAS: Float,
   private var storageLevel: StorageLevel,
   private var useDBHStrategy: Boolean) extends Serializable with Logging {
 
@@ -59,17 +59,17 @@ abstract class LDA private[ml](
    */
   val numTokens = corpus.edges.map(e => e.attr.size.toDouble).sum().toLong
 
-  def setAlpha(alpha: Double): this.type = {
+  def setAlpha(alpha: Float): this.type = {
     this.alpha = alpha
     this
   }
 
-  def setBeta(beta: Double): this.type = {
+  def setBeta(beta: Float): this.type = {
     this.beta = beta
     this
   }
 
-  def setAlphaAS(alphaAS: Double): this.type = {
+  def setAlphaAS(alphaAS: Float): this.type = {
     this.alphaAS = alphaAS
     this
   }
@@ -141,12 +141,12 @@ abstract class LDA private[ml](
     graph: Graph[VD, ED],
     totalTopicCounter: BDV[Count],
     innerIter: Long,
-    numTokens: Double,
-    numTopics: Double,
-    numTerms: Double,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): Graph[VD, ED]
+    numTokens: Long,
+    numTopics: Int,
+    numTerms: Int,
+    alpha: Float,
+    alphaAS: Float,
+    beta: Float): Graph[VD, ED]
 
   /**
    * Save the term-topic related model
@@ -168,13 +168,21 @@ abstract class LDA private[ml](
       Option(previousTermTopicCounter).foreach(_.unpersist(blocking = false))
       previousTermTopicCounter = termTopicCounter
     }
+    val rand = new Random()
     val ttc = termTopicCounter.mapValues(c => {
-      val nc = new BSV[Double](c.index.slice(0, c.used), c.data.slice(0, c.used).map(_.toDouble), c.length)
-      nc :/= totalIter.toDouble
+      val nc = new BSV[Count](c.index.slice(0, c.used), c.data.slice(0, c.used).map(v => {
+        val mid = v.toDouble / totalIter
+        val l = math.floor(mid)
+        if (rand.nextDouble() > mid - l) {
+          l
+        } else {
+          l + 1
+        }
+      }.asInstanceOf[Count]), c.length)
       nc
     })
     ttc.persist(storageLevel)
-    val gtc = ttc.map(_._2).aggregate(BDV.zeros[Double](numTopics))(_ :+= _, _ :+= _)
+    val gtc = ttc.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
     new DistributedLDAModel(gtc, ttc, numTopics, numTerms, alpha, beta, alphaAS)
   }
 
@@ -603,10 +611,10 @@ class FastLDA(
     val used = docTopicCounter.used
     val dSum = dData(docTopicCounter.used - 1)
     val distSum = tSum + wSum + dSum
-    val genSum = gen.nextDouble() * distSum
+    val genSum = gen.nextFloat() * distSum
     if (genSum < dSum) {
-      val dGenSum = gen.nextDouble() * dSum
-      val pos = binarySearchInterval(dData, dGenSum, 0, used, true)
+      val dGenSum = gen.nextFloat() * dSum
+      val pos = binarySearchInterval[Float](dData, dGenSum, 0, used, true)
       index(pos)
     } else if (genSum < (dSum + wSum)) {
       sampleSV(gen, w, termTopicCounter, currentTopic)
@@ -699,7 +707,7 @@ class FastLDA(
     for (i <- 0 until used) {
       val topic = index(i)
       val count = data(i)
-      val adjustment = if (currentTopic == topic) -1D else 0
+      val adjustment = if (currentTopic == topic) -1 else 0
       val last = (count + adjustment) * (termTopicCounter(topic) + adjustment + beta) /
         (totalTopicCounter(topic) + adjustment + betaSum)
       // val lastD = (count + adjustment) * termSum * (termTopicCounter(topic) + adjustment + beta) /
