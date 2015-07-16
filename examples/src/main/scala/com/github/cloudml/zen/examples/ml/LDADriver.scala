@@ -53,7 +53,7 @@ object LDADriver {
     val appStartedTime = System.currentTimeMillis()
     val inputDataPath = args(5)
     val outputRootPath = args(6)
-    val checkpointPath = args(6) + "/checkpoint"
+    val checkpointPath = args(6) + ".checkpoint"
     val sampleRate = args(7).toDouble
     val partitionNum = args(8).toInt
     assert(sampleRate > 0)
@@ -112,19 +112,21 @@ object LDADriver {
     // docModel.save(sc, outputRootPath + "/doc-topic", isTransposed = false)
 
     // try to delete the checkpoint folder in the HDFS
-    if (sys.env.contains("HADOOP_CONF_DIR") || sys.env.contains("YARN_CONF_DIR")) {
-      val hdfsConfPath = if (sys.env.get("HADOOP_CONF_DIR").isDefined) {
-        sys.env.get("HADOOP_CONF_DIR").get + "/core-site.xml"
-      } else sys.env.get("YARN_CONF_DIR").get + "/core-site.xml"
-      val hdfsConf = new Configuration()
-      hdfsConf.addResource(new Path(hdfsConfPath))
-      val fs = FileSystem.get(hdfsConf)
-      fs.delete(new Path(sc.getCheckpointDir.get), true)
-    } else {
-      val hdfsConf = new Configuration()
-      val fs = FileSystem.get(hdfsConf)
-      fs.delete(new Path(sc.getCheckpointDir.get), true)
-    }
+//    if (sys.env.contains("HADOOP_CONF_DIR") || sys.env.contains("YARN_CONF_DIR")) {
+//      val hdfsConfPath = if (sys.env.get("HADOOP_CONF_DIR").isDefined) {
+//        sys.env.get("HADOOP_CONF_DIR").get + "/core-site.xml"
+//      } else sys.env.get("YARN_CONF_DIR").get + "/core-site.xml"
+//      val hdfsConf = new Configuration()
+//      hdfsConf.addResource(new Path(hdfsConfPath))
+//      val fs = FileSystem.get(hdfsConf)
+//      fs.delete(new Path(sc.getCheckpointDir.get), true)
+//    } else {
+//      val hdfsConf = new Configuration()
+//      val fs = FileSystem.get(hdfsConf)
+//      fs.delete(new Path(sc.getCheckpointDir.get), true)
+//    }
+    val fs = FileSystem.get(sc.hadoopConfiguration)
+    fs.delete(new Path(sc.getCheckpointDir.get), true)
 
     (trainingEndedTime - trainingStartedTime) / 1e3
   }
