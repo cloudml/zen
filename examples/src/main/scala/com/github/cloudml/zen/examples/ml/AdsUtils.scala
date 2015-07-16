@@ -173,10 +173,10 @@ object AdsUtils {
     testSet.count()
     adaDataSet.unpersist()
     /**
-     * [0,maxUnigramsId), [maxUnigramsId +1  ,maxDisplayUrlId + maxDisplayUrlId ),
+     * [0,maxUnigramsId), [maxUnigramsId +1, maxUnigramsId + maxDisplayUrlId ),
      * [maxDisplayUrlId + maxDisplayUrlId  + 1, numFeatures)
      */
-    val views = Array(maxUnigramsId, maxDisplayUrlId + maxDisplayUrlId, numFeatures).map(_.toLong)
+    val views = Array(maxUnigramsId, maxUnigramsId + maxDisplayUrlId, numFeatures).map(_.toLong)
     (trainSet, testSet, views)
   }
 
