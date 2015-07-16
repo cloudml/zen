@@ -108,7 +108,7 @@ object LDADriver {
     val trainingEndedTime = System.currentTimeMillis()
 
     println("save the model both in doc-term view or term-doc view")
-    termModel.save(sc, outputRootPath + "/topic-term", isTransposed = true)
+    termModel.save(sc, outputRootPath, isTransposed = true)
     // docModel.save(sc, outputRootPath + "/doc-topic", isTransposed = false)
 
     // try to delete the checkpoint folder in the HDFS
