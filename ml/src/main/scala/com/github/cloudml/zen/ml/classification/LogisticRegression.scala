@@ -208,11 +208,7 @@ class LogisticRegressionMIS(dataSet: RDD[LabeledPoint]) extends Logging with Ser
     val grads: Array[Double] = new Array[Double](muPlus.size)
     var i = 0
     while (i < muPlus.size) {
-      grads(i) = if (epsilon == 0.0) {
-        math.log(muPlus(i) / muMinus(i))
-      } else {
-        math.log(epsilon + muPlus(i) / (epsilon + muMinus(i)))
-      }
+      grads(i) = math.log(epsilon + muPlus(i) / (epsilon + muMinus(i)))
       i += 1
     }
     val thisIterStepSize = stepSize / math.sqrt(iter)
