@@ -120,9 +120,9 @@ object LDASuite {
   val numTerms = 1000
   val numDocs = 100
   val expectedDocLength = 300
-  val alpha = 0.01
-  val alphaAS = 1D
-  val beta = 0.01
+  val alpha = 0.01f
+  val alphaAS = 1f
+  val beta = 0.01f
   val totalIterations = 2
   val burnInIterations = 1
   val incrementalLearning = 10

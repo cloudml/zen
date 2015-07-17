@@ -34,15 +34,15 @@ object VMBLPPartitioner {
       inGraph: Graph[VD, ED],
       numIter: Int,
       storageLevel: StorageLevel): Graph[VD, ED] = {
-    
+
     val numPartitions = inGraph.edges.partitions.length
     var tbrGraph = inGraph
     tbrGraph.persist(storageLevel)
-    
+
     for (i <- 0 to numIter) {
       val pidRdd = tbrGraph.vertices.mapPartitionsWithIndex((pid, iter) => iter.map(t => (t._1, pid)), true)
       val pidVertices = VertexRDD(pidRdd)  // Get Vertices which v.attr = <partitionId of v>
-      
+
       val pidGraph = GraphImpl(pidVertices, tbrGraph.edges)
       val neiVecVertices = pidGraph.aggregateMessages[Vector[Int]](ectx => {
         val bsvSrc = SparseVector.zeros[Int](numPartitions)
@@ -52,18 +52,18 @@ object VMBLPPartitioner {
         ectx.sendToSrc(bsvSrc)
         ectx.sendToDst(bsvDst)
       }, _ += _)  // Get Vertices which v.attr = Array[d0, d1, ..., dn]
-      
-      val wantVertices = neiVecVertices.mapValues(discreteSample(_))
+
+      val wantVertices = neiVecVertices.mapValues(discreteSample)
       // Get Vertices which v.attr = (<partitionId now>, <partitionId to move to>) 
       val moveVertices = pidVertices.innerZipJoin(wantVertices)((_, fromPid, toPid) => (fromPid, toPid))
-      
+
       // Get a matrix which mat(i)(j) = total num of vertices that want to move from i to j
       val moveMat = moveVertices.aggregate(CSCMatrix.zeros[Int](numPartitions, numPartitions))({
         case (mat, (_, ft)) => {
           if(ft._1 != ft._2) mat(ft._1, ft._2) += 1
           mat
       }}, _ += _)
-      
+
       val newPidRdd = moveVertices.mapPartitions(iter => iter.map({case (vid, (from, to)) => {
         if(from == to) (vid, from)
         else {
@@ -78,14 +78,14 @@ object VMBLPPartitioner {
         }
       }}))
       val newPidVertices = VertexRDD(newPidRdd)  // Get Vertices which v.attr = <partitionId after moving>
-      
+
       // Repartition
       val newPidGraph = GraphImpl(newPidVertices, tbrGraph.edges)
       val tempEdges = newPidGraph.triplets.mapPartitions(iter => iter.map{
         et => (et.srcAttr, Edge(et.srcId, et.dstId, et.attr))
       })
       val newEdges = tempEdges.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
-      
+
       val ntbrGraph = GraphImpl(tbrGraph.vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
       ntbrGraph.persist(storageLevel)
       tbrGraph.unpersist(false)
@@ -93,15 +93,11 @@ object VMBLPPartitioner {
     }  // End for
     tbrGraph
   }
-  
-  def discreteSample(dist: Vector[Int]): Int = {
-    val s = dist.sum
+
+  val discreteSample: Vector[Int] => Int = (dist) => {
+    val s = sum(dist)
     val u = math.random * s
-    var ps = 0
-    dist.activeIterator.foreach{ case (i, p) => {
-      ps += p
-      if (u < ps) return p
-    }}
-    -1
+    dist.activeIterator.scanLeft((-1, 0)){case ((li, ps), (i, p)) => (i, ps + p)}
+      .dropWhile(_._2 <= u).next()._1
   }
 }

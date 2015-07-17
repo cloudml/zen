@@ -51,7 +51,8 @@ class LocalLDAModel private[ml](
   val alphaAS: Float) extends Serializable {
 
   def this(topicCounts: SDV, topicTermCounts: Array[SSV], alpha: Float, beta: Float) {
-    this(toBreeze[Count](topicCounts), topicTermCounts.map(toBreeze[Count]), alpha, beta, alpha)
+    this(toBreezeConv[Count](topicCounts).asInstanceOf[BDV[Count]], topicTermCounts.map(t =>
+      toBreezeConv[Count](t).asInstanceOf[BSV[Count]]), alpha, beta, alpha)
   }
 
   @transient private lazy val numTopics = gtc.length
@@ -73,9 +74,9 @@ class LocalLDAModel private[ml](
     rand.setSeed(seed)
   }
 
-  def globalTopicCounter: SV = fromBreeze(gtc)
+  def globalTopicCounter: SV = fromBreezeConv[Count](gtc)
 
-  def topicTermCounter: Array[SV] = ttc.map(t => fromBreeze(t))
+  def topicTermCounter: Array[SV] = ttc.map(t => fromBreezeConv[Count](t))
 
   /**
    * inference interface
@@ -91,8 +92,8 @@ class LocalLDAModel private[ml](
     require(totalIter > 0, "totalIter is less than 0")
     require(burnIn > 0, "burnInIter is less than 0")
 
-    val topicDist = BSV.zeros[Float](numTopics)
-    val tokens = vector2Array(toBreeze[Float](doc))
+    val topicDist = BSV.zeros[Int](numTopics)
+    val tokens = vector2Array(toBreezeConv[Int](doc))
     val topics = new Array[Int](tokens.length)
 
     var docTopicCounter = uniformDistSampler(tokens, topics)
@@ -102,11 +103,11 @@ class LocalLDAModel private[ml](
     }
 
     topicDist.compact()
-    topicDist :/= brzNorm(topicDist, 1)
-    fromBreeze(topicDist)
+    val norm = brzNorm(topicDist, 1).toFloat
+    fromBreezeConv[Float](topicDist.map(_ / norm))
   }
 
-  private[ml] def vector2Array(vec: BV[Float]): Array[Int] = {
+  private[ml] def vector2Array(vec: BV[Int]): Array[Int] = {
     val docLen = brzSum(vec)
     var offset = 0
     val sent = new Array[Int](docLen.toInt)
@@ -143,8 +144,8 @@ class LocalLDAModel private[ml](
       val (wSum, w) = wordTable(wordTableCache, gtc, ttc(termId), termId, numTokens, numTerms, alpha, alphaAS, beta)
       val newTopic = LDAModel.tokenSampling(rand, t, tSum, w, wSum, d)
       if (newTopic != currentTopic) {
-        docTopicCounter(newTopic) += 1D
-        docTopicCounter(currentTopic) -= 1D
+        docTopicCounter(newTopic) += 1
+        docTopicCounter(currentTopic) -= 1
         topics(i) = newTopic
         if (docTopicCounter(currentTopic) == 0) {
           docTopicCounter.compact()
@@ -247,8 +248,8 @@ class DistributedLDAModel private[ml](
     }
     docTopicCounter.map { case (docId, sv) =>
       sv.compact()
-      sv :/= brzNorm(sv, 1)
-      (toDocId(docId), fromBreeze(sv))
+      val norm = brzNorm(sv, 1)
+      (toDocId(docId), fromBreezeConv[Double](sv.map(_.toDouble) / norm))
     }
   }
 
@@ -307,7 +308,7 @@ class DistributedLDAModel private[ml](
     numTopics: Int): Iterator[Edge[ED]] = {
     assert(docId >= 0)
     val newDocId: DocId = genNewDocId(docId)
-    val bdoc = toBreeze[Float](doc)
+    val bdoc = toBreezeConv[Float](doc)
     bdoc.activeIterator.filter(_._2 > 0).map { case (termId, counter) =>
       val topics = new Array[Int](counter.toInt)
       for (i <- 0 until counter.toInt) {
@@ -506,7 +507,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
     val genSum = gen.nextFloat() * distSum
     if (genSum < dSum) {
       val dGenSum = gen.nextFloat() * dSum
-      val pos = binarySearchInterval(data, dGenSum, 0, used, greater = true)
+      val pos = binarySearchInterval[Float](data, dGenSum, 0, used, greater = true)
       index(pos)
     } else if (genSum < (dSum + wSum)) {
       w.sampleAlias(gen)
@@ -742,10 +743,10 @@ object LDAModel extends Loader[DistributedLDAModel] {
       path: String,
       ttc: RDD[(VertexId, VD)],
       numTopics: Int,
-      numTerms: Long,
-      alpha: Double,
-      beta: Double,
-      alphaAS: Double,
+      numTerms: Int,
+      alpha: Float,
+      beta: Float,
+      alphaAS: Float,
       isTransposed: Boolean,
       saveSolid: Boolean = true): Unit = {
       val metadata = compact(render

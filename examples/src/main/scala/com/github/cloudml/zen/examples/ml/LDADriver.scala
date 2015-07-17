@@ -39,9 +39,9 @@ object LDADriver {
       System.exit(1)
     }
     val numTopics = args(0).toInt
-    val alpha = args(1).toDouble
-    val beta = args(2).toDouble
-    val alphaAS = args(3).toDouble
+    val alpha = args(1).toFloat
+    val beta = args(2).toFloat
+    val alphaAS = args(3).toFloat
     val totalIter = args(4).toInt
 
     assert(numTopics > 0)
@@ -94,9 +94,9 @@ object LDADriver {
     outputRootPath: String,
     numTopics: Int,
     totalIter: Int,
-    alpha: Double,
-    beta: Double,
-    alphaAS: Double,
+    alpha: Float,
+    beta: Float,
+    alphaAS: Float,
     trainingDocs: RDD[(Long, SV)],
     useDBHStrategy: Boolean): Double = {
     SparkHacker.gcCleaner(15 * 60, 15 * 60, "LDA_gcCleaner")
@@ -156,26 +156,25 @@ object LDADriver {
       val tokens = line.split("\\t|\\s+")
       val docId = tokens(0).toLong
       if (tokens.length == 1) println(tokens.mkString("\t"))
-      val docTermCount = BSV.zeros[Double](wordsLength)
+      val docTermCount = BSV.zeros[Int](wordsLength)
       for (t <- tokens.tail) {
         val termCountPair = t.split(':')
         val termId = termCountPair(0).toInt
         val termCount = if (termCountPair.length > 1) {
-          termCountPair(1).toDouble
+          termCountPair(1).toInt
         } else {
-          1.0
+          1
         }
         docTermCount(termId) += termCount
       }
       if (docTermCount.activeSize < 1) {
         println(s"docTermCount active iterator: ${docTermCount.activeIterator.mkString(";")}")
       }
-      (docId, fromBreeze(docTermCount))
+      (docId, fromBreezeConv[Int](docTermCount))
     }
     rawDocs.unpersist()
     result
   }
 
 }
-
 

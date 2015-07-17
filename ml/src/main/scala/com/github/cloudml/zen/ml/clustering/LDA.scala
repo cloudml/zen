@@ -428,7 +428,7 @@ object LDA {
     assert(docId >= 0)
     val newDocId: DocId = genNewDocId(docId)
     computedModel.setSeed(gen.nextInt())
-    val tokens = computedModel.vector2Array(doc)
+    val tokens = computedModel.vector2Array(toBreezeConv[Int](doc))
     val topics = new Array[Int](tokens.length)
     var docTopicCounter = computedModel.uniformDistSampler(tokens, topics)
     for (t <- 0 until 15) {
