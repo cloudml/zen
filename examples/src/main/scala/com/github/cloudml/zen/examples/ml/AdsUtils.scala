@@ -91,10 +91,9 @@ object AdsUtils {
       }
       new LabeledPoint(label, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
 
-    }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
-
-    val testSet = dataSet.filter(_._2.features.hashCode() % 5 == 0)
-    val trainSet = dataSet.filter(_._2.features.hashCode() % 5 != 0)
+    }.zipWithIndex().map(_.swap).persist(newLevel)
+    val testSet = dataSet.filter(_._2.features.hashCode() % 5 == 0).persist(newLevel)
+    val trainSet = dataSet.filter(_._2.features.hashCode() % 5 != 0).persist(newLevel)
     trainSet.count()
     testSet.count()
     adaDataSet.unpersist()
@@ -165,10 +164,10 @@ object AdsUtils {
       }
       new LabeledPoint(label, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
 
-    }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
+    }.zipWithIndex().map(_.swap).persist(newLevel)
 
-    val testSet = dataSet.filter(_._2.features.hashCode() % 5 == 0)
-    val trainSet = dataSet.filter(_._2.features.hashCode() % 5 != 0)
+    val testSet = dataSet.filter(_._2.features.hashCode() % 5 == 0).persist(newLevel)
+    val trainSet = dataSet.filter(_._2.features.hashCode() % 5 != 0).persist(newLevel)
     trainSet.count()
     testSet.count()
     adaDataSet.unpersist()
