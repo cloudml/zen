@@ -1,9 +1,16 @@
-# Factorization Machines
+# Factorization Machines and Multi-View Machines
 
-## Road map
- * Support hundereds billions of features
+## Include several model variants:
+    *. (SVM) Support Vector Machine
 
- * Support online learning
+    *. (FM) Factorization Machine
 
- * Support TBs training data
+    *. (MVFM) Multi-View Factorization Machine
 
+    *. (MVFM-3D) Multi-View Factorization Machine with 3-order factorization
+
+    *. (MVFM-REG) Multi-View Factorization Machine with joint 2&3-order factorization
+
+    *. (MVM) Multi-View Machine
+
+    *. (FFM) Field-wise Factorization Machine (TODO)
