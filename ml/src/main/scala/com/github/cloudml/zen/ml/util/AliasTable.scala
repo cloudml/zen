@@ -25,14 +25,14 @@ private[zen] class AliasTable(initUsed: Int) extends Serializable {
 
   private var _l: Array[Int] = new Array[Int](initUsed)
   private var _h: Array[Int] = new Array[Int](initUsed)
-  private var _p: Array[Double] = new Array[Double](initUsed)
+  private var _p: Array[Float] = new Array[Float](initUsed)
   private var _used = initUsed
 
   def l: Array[Int] = _l
 
   def h: Array[Int] = _h
 
-  def p: Array[Double] = _p
+  def p: Array[Float] = _p
 
   def used: Int = _used
 
@@ -43,7 +43,7 @@ private[zen] class AliasTable(initUsed: Int) extends Serializable {
   def sampleAlias(gen: Random): Int = {
     val bin = gen.nextInt(_used)
     val prob = _p(bin)
-    if (_used * prob > gen.nextDouble()) {
+    if (_used * prob > gen.nextFloat()) {
       _l(bin)
     } else {
       _h(bin)
@@ -54,7 +54,7 @@ private[zen] class AliasTable(initUsed: Int) extends Serializable {
     if (_l.length < newSize) {
       _l = new Array[Int](newSize)
       _h = new Array[Int](newSize)
-      _p = new Array[Double](newSize)
+      _p = new Array[Float](newSize)
     }
     _used = newSize
     this
@@ -62,34 +62,34 @@ private[zen] class AliasTable(initUsed: Int) extends Serializable {
 }
 
 private[zen] object AliasTable {
-  @transient private lazy val tableOrdering = new scala.math.Ordering[(Int, Double)] {
-    override def compare(x: (Int, Double), y: (Int, Double)): Int = {
-      Ordering.Double.compare(x._2, y._2)
+  @transient private lazy val tableOrdering = new scala.math.Ordering[(Any, Float)] {
+    override def compare(x: (Any, Float), y: (Any, Float)): Int = {
+      Ordering[Float].compare(x._2, y._2)
     }
   }
   @transient private lazy val tableReverseOrdering = tableOrdering.reverse
 
-  def generateAlias(sv: BV[Double]): AliasTable = {
+  def generateAlias(sv: BV[Float]): AliasTable = {
     val used = sv.activeSize
     val sum = brzSum(sv)
     val probs = sv.activeIterator.slice(0, used)
     generateAlias(probs, sum, used)
   }
 
-  def generateAlias(probs: Iterator[(Int, Double)], sum: Double, used: Int): AliasTable = {
+  def generateAlias(probs: Iterator[(Int, Float)], sum: Float, used: Int): AliasTable = {
     val table = new AliasTable(used)
     generateAlias(probs, sum, used, table)
   }
 
   def generateAlias(
-    probs: Iterator[(Int, Double)],
-    sum: Double,
+    probs: Iterator[(Int, Float)],
+    sum: Float,
     used: Int,
     table: AliasTable): AliasTable = {
     table.reset(used)
-    val pMean = 1.0 / used
-    val lq = new JPriorityQueue[(Int, Double)](used, tableOrdering)
-    val hq = new JPriorityQueue[(Int, Double)](used, tableReverseOrdering)
+    val pMean = 1.0f / used
+    val lq = new JPriorityQueue[(Int, Float)](used, tableOrdering)
+    val hq = new JPriorityQueue[(Int, Float)](used, tableReverseOrdering)
 
     probs.slice(0, used).foreach { pair =>
       val i = pair._1
@@ -136,13 +136,13 @@ private[zen] object AliasTable {
     table
   }
 
-  def generateAlias(sv: BV[Double], sum: Double): AliasTable = {
+  def generateAlias(sv: BV[Float], sum: Float): AliasTable = {
     val used = sv.activeSize
     val probs = sv.activeIterator.slice(0, used)
     generateAlias(probs, sum, used)
   }
 
-  def generateAlias(sv: BV[Double], sum: Double, table: AliasTable): AliasTable = {
+  def generateAlias(sv: BV[Float], sum: Float, table: AliasTable): AliasTable = {
     val used = sv.activeSize
     val probs = sv.activeIterator.slice(0, used)
     generateAlias(probs, sum, used, table)

@@ -18,8 +18,10 @@
 package com.github.cloudml.zen.ml.util
 
 import breeze.linalg.{Vector => BV, SparseVector => BSV, DenseVector => BDV}
+import breeze.storage.Zero
 import org.apache.spark.mllib.linalg.{DenseVector => SDV, Vector => SV, SparseVector => SSV}
 import scala.language.implicitConversions
+import scala.reflect.ClassTag
 
 private[zen] object SparkUtils {
   implicit def toBreeze(sv: SV): BV[Double] = {
@@ -46,6 +48,40 @@ private[zen] object SparkUtils {
           new SSV(v.length, v.index.slice(0, v.used), v.data.slice(0, v.used))
         }
       case v: BV[_] =>
+        sys.error("Unsupported Breeze vector type: " + v.getClass.getName)
+    }
+  }
+
+  private def _conv[T1: ClassTag, T2: ClassTag](data: Array[T1]): Array[T2] = {
+    data.map(_.asInstanceOf[T2]).array
+  }
+
+  def toBreezeConv[T: ClassTag](sv: SV): BV[T] = {
+    implicit val conv: Array[Double] => Array[T] = _conv[Double, T]
+    sv match {
+      case SDV(data) =>
+        new BDV[T](data)
+      case SSV(size, indices, values) =>
+        new BSV[T](indices, values, size)(Zero[T](0.asInstanceOf[T]))
+    }
+  }
+
+  def fromBreezeConv[T: ClassTag](breezeVector: BV[T]): SV = {
+    implicit val conv: Array[T] => Array[Double] = _conv[T, Double]
+    breezeVector match {
+      case v: BDV[T] =>
+        if (v.offset == 0 && v.stride == 1 && v.length == v.data.length) {
+          new SDV(v.data)
+        } else {
+          new SDV(v.toArray) // Can't use underlying array directly, so make a new one
+        }
+      case v: BSV[T] =>
+        if (v.index.length == v.used) {
+          new SSV(v.length, v.index, _conv[T, Double](v.data))
+        } else {
+          new SSV(v.length, v.index.slice(0, v.used), v.data.slice(0, v.used))
+        }
+      case v: BV[T] =>
         sys.error("Unsupported Breeze vector type: " + v.getClass.getName)
     }
   }

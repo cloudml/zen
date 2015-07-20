@@ -56,7 +56,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.size > 0.6)
     assert(pps.head - pps.last > 0)
 
-    val ldaModel = lda.saveTermModel()
+    val ldaModel = lda.saveModel()
     val tempDir = Files.createTempDir()
     tempDir.deleteOnExit()
     val path = tempDir.toURI.toString
@@ -104,7 +104,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.size > 0.6)
     assert(pps.head - pps.last > 0)
 
-    val ldaModel = lda.saveTermModel(3).toLocalLDAModel()
+    val ldaModel = lda.saveModel(3).toLocalLDAModel()
     val rand = new Random
     data.collect().foreach { case (_, sv) =>
       val a = toBreeze(ldaModel.inference(sv))
@@ -120,9 +120,9 @@ object LDASuite {
   val numTerms = 1000
   val numDocs = 100
   val expectedDocLength = 300
-  val alpha = 0.01
-  val alphaAS = 1D
-  val beta = 0.01
+  val alpha = 0.01f
+  val alphaAS = 1f
+  val beta = 0.01f
   val totalIterations = 2
   val burnInIterations = 1
   val incrementalLearning = 10

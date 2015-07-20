@@ -39,9 +39,9 @@ object LDADriver {
       System.exit(1)
     }
     val numTopics = args(0).toInt
-    val alpha = args(1).toDouble
-    val beta = args(2).toDouble
-    val alphaAS = args(3).toDouble
+    val alpha = args(1).toFloat
+    val beta = args(2).toFloat
+    val alphaAS = args(3).toFloat
     val totalIter = args(4).toInt
 
     assert(numTopics > 0)
@@ -53,7 +53,7 @@ object LDADriver {
     val appStartedTime = System.currentTimeMillis()
     val inputDataPath = args(5)
     val outputRootPath = args(6)
-    val checkpointPath = args(6) + "/checkpoint"
+    val checkpointPath = args(6) + ".checkpoint"
     val sampleRate = args(7).toDouble
     val partitionNum = args(8).toInt
     assert(sampleRate > 0)
@@ -94,37 +94,39 @@ object LDADriver {
     outputRootPath: String,
     numTopics: Int,
     totalIter: Int,
-    alpha: Double,
-    beta: Double,
-    alphaAS: Double,
+    alpha: Float,
+    beta: Float,
+    alphaAS: Float,
     trainingDocs: RDD[(Long, SV)],
     useDBHStrategy: Boolean): Double = {
     SparkHacker.gcCleaner(15 * 60, 15 * 60, "LDA_gcCleaner")
     val trainingStartedTime = System.currentTimeMillis()
-    //    val storage =  StorageLevel.DISK_ONLY
+    // val storage =  StorageLevel.DISK_ONLY
     val storage = StorageLevel.MEMORY_AND_DISK
-    val (termModel, docModel) =
-      LDA.train(trainingDocs, totalIter, numTopics, alpha, beta, alphaAS, useDBHStrategy, storageLevel = storage)
+    val termModel = LDA.train(trainingDocs, totalIter, numTopics, alpha, beta, alphaAS,
+      useDBHStrategy, storageLevel = storage)
     val trainingEndedTime = System.currentTimeMillis()
 
     println("save the model both in doc-term view or term-doc view")
-    termModel.save(sc, outputRootPath + "/topic-term", isTransposed = true)
+    termModel.save(sc, outputRootPath, isTransposed = true)
     // docModel.save(sc, outputRootPath + "/doc-topic", isTransposed = false)
 
     // try to delete the checkpoint folder in the HDFS
-    if (sys.env.contains("HADOOP_CONF_DIR") || sys.env.contains("YARN_CONF_DIR")) {
-      val hdfsConfPath = if (sys.env.get("HADOOP_CONF_DIR").isDefined) {
-        sys.env.get("HADOOP_CONF_DIR").get + "/core-site.xml"
-      } else sys.env.get("YARN_CONF_DIR").get + "/core-site.xml"
-      val hdfsConf = new Configuration()
-      hdfsConf.addResource(new Path(hdfsConfPath))
-      val fs = FileSystem.get(hdfsConf)
-      fs.delete(new Path(sc.getCheckpointDir.get), true)
-    } else {
-      val hdfsConf = new Configuration()
-      val fs = FileSystem.get(hdfsConf)
-      fs.delete(new Path(sc.getCheckpointDir.get), true)
-    }
+//    if (sys.env.contains("HADOOP_CONF_DIR") || sys.env.contains("YARN_CONF_DIR")) {
+//      val hdfsConfPath = if (sys.env.get("HADOOP_CONF_DIR").isDefined) {
+//        sys.env.get("HADOOP_CONF_DIR").get + "/core-site.xml"
+//      } else sys.env.get("YARN_CONF_DIR").get + "/core-site.xml"
+//      val hdfsConf = new Configuration()
+//      hdfsConf.addResource(new Path(hdfsConfPath))
+//      val fs = FileSystem.get(hdfsConf)
+//      fs.delete(new Path(sc.getCheckpointDir.get), true)
+//    } else {
+//      val hdfsConf = new Configuration()
+//      val fs = FileSystem.get(hdfsConf)
+//      fs.delete(new Path(sc.getCheckpointDir.get), true)
+//    }
+    val fs = FileSystem.get(sc.hadoopConfiguration)
+    fs.delete(new Path(sc.getCheckpointDir.get), true)
 
     (trainingEndedTime - trainingStartedTime) / 1e3
   }
@@ -154,26 +156,25 @@ object LDADriver {
       val tokens = line.split("\\t|\\s+")
       val docId = tokens(0).toLong
       if (tokens.length == 1) println(tokens.mkString("\t"))
-      val docTermCount = BSV.zeros[Double](wordsLength)
+      val docTermCount = BSV.zeros[Int](wordsLength)
       for (t <- tokens.tail) {
         val termCountPair = t.split(':')
         val termId = termCountPair(0).toInt
         val termCount = if (termCountPair.length > 1) {
-          termCountPair(1).toDouble
+          termCountPair(1).toInt
         } else {
-          1.0
+          1
         }
         docTermCount(termId) += termCount
       }
       if (docTermCount.activeSize < 1) {
         println(s"docTermCount active iterator: ${docTermCount.activeIterator.mkString(";")}")
       }
-      (docId, fromBreeze(docTermCount))
+      (docId, fromBreezeConv[Int](docTermCount))
     }
     rawDocs.unpersist()
     result
   }
 
 }
-
 
