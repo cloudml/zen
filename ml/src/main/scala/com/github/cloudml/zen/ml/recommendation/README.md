@@ -14,3 +14,5 @@
     *. (MVM) Multi-View Machine
 
     *. (FFM) Field-wise Factorization Machine (TODO)
+
+    *. (TF) Tensor Machine
