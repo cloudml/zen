@@ -178,7 +178,7 @@ abstract class LDA private[ml](
         } else {
           l + 1
         }
-      }.asInstanceOf[Count]), c.length)
+      }.toInt), c.length)
       nc
     })
     ttc.persist(storageLevel)
