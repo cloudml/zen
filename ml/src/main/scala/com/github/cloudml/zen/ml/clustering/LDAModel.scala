@@ -650,7 +650,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
         val sv = ttc(offset)
         its.tail.foreach { s =>
           val Array(index, value) = s.split(":")
-          sv(index.toInt) = value.asInstanceOf[Count]
+          sv(index.toInt) = value.toInt
         }
         sv.compact()
 
@@ -682,7 +682,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
         val arr = line.split("\t")
         arr.tail.foreach { sub =>
           val Array(index, value) = sub.split(":")
-          sv(index.toInt) = value.asInstanceOf[Count]
+          sv(index.toInt) = value.toInt
         }
         sv.compact()
         (arr.head.toLong, sv)
@@ -711,7 +711,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
         val arr = line.split("\t")
         arr.tail.foreach { sub =>
           val Array(index, value) = sub.split(":")
-          sv(index.toInt) = value.asInstanceOf[Count]
+          sv(index.toInt) = value.toInt
         }
         sv.compact()
         (arr.head.toLong, sv)
