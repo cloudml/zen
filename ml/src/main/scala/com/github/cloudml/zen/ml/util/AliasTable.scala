@@ -118,7 +118,7 @@ private[zen] object AliasTable {
     }
     while (!hq.isEmpty) {
       val (h, ph) = hq.remove()
-      assert(ph - pMean < 1e-8)
+      assert((ph - pMean) / pMean < 1e-4)
       table.l(offset) = h
       table.h(offset) = h
       table.p(offset) = ph
@@ -127,7 +127,7 @@ private[zen] object AliasTable {
 
     while (!lq.isEmpty) {
       val (i, pi) = lq.remove()
-      assert(pMean - pi < 1e-8)
+      assert((pMean - pi) / pMean < 1e-4)
       table.l(offset) = i
       table.h(offset) = i
       table.p(offset) = pi
