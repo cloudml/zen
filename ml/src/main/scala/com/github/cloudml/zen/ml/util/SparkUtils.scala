@@ -52,22 +52,28 @@ private[zen] object SparkUtils {
     }
   }
 
-  private def _conv[T1: ClassTag, T2: ClassTag](data: Array[T1]): Array[T2] = {
-    data.map(_.asInstanceOf[T2]).array
-  }
-
-  def toBreezeConv[T: ClassTag](sv: SV): BV[T] = {
-    implicit val conv: Array[Double] => Array[T] = _conv[Double, T]
+  def toBreezeConv[T: ClassTag](sv: SV)(implicit num: Numeric[T]): BV[T] = {
+    val zero = num.zero
+    implicit val conv: Array[Double] => Array[T] = (data) => {
+      data.map(ele => (zero match {
+        case zero: Double => ele
+        case zero: Float => ele.toFloat
+        case zero: Int => ele.toInt
+        case zero: Long => ele.toLong
+      }).asInstanceOf[T]).array
+    }
     sv match {
       case SDV(data) =>
         new BDV[T](data)
       case SSV(size, indices, values) =>
-        new BSV[T](indices, values, size)(Zero[T](0.asInstanceOf[T]))
+        new BSV[T](indices, values, size)(Zero[T](zero))
     }
   }
 
-  def fromBreezeConv[T: ClassTag](breezeVector: BV[T]): SV = {
-    implicit val conv: Array[T] => Array[Double] = _conv[T, Double]
+  def fromBreezeConv[T: ClassTag](breezeVector: BV[T])(implicit num: Numeric[T]): SV = {
+    implicit val conv: Array[T] => Array[Double] = (data) => {
+      data.map(num.toDouble).array
+    }
     breezeVector match {
       case v: BDV[T] =>
         if (v.offset == 0 && v.stride == 1 && v.length == v.data.length) {
@@ -77,7 +83,7 @@ private[zen] object SparkUtils {
         }
       case v: BSV[T] =>
         if (v.index.length == v.used) {
-          new SSV(v.length, v.index, _conv[T, Double](v.data))
+          new SSV(v.length, v.index, v.data)
         } else {
           new SSV(v.length, v.index.slice(0, v.used), v.data.slice(0, v.used))
         }

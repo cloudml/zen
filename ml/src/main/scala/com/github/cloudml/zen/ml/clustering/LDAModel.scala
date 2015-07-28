@@ -461,11 +461,11 @@ class DistributedLDAModel private[ml](
   }
 
   override def save(sc: SparkContext, path: String): Unit = {
-    save(sc, path, isTransposed = false)
+    save(sc, path, isTransposed = false, saveSolid = false)
   }
 
   def save(path: String): Unit = {
-    save(ttc.context, path, isTransposed = false)
+    save(ttc.context, path, isTransposed = false, saveSolid = false)
   }
 
   /**
@@ -477,9 +477,11 @@ class DistributedLDAModel private[ml](
    *                     otherwise:
    *                     topicId \grave{termId}:counter \grave{termId}:counter...,
    *                     in which \grave{termId}= termId + 1
+   * @param saveSolid save as whether one HDFS file or an directory
    */
-  def save(sc: SparkContext, path: String, isTransposed: Boolean): Unit = {
-    LDAModel.SaveLoadV1_0.save(sc, path, ttc, numTopics, numTerms, alpha, beta, alphaAS, isTransposed)
+  def save(sc: SparkContext, path: String, isTransposed: Boolean, saveSolid: Boolean): Unit = {
+    LDAModel.SaveLoadV1_0.save(sc, path, ttc, numTopics, numTerms, alpha, beta, alphaAS,
+      isTransposed, saveSolid)
   }
 
   override protected def formatVersion: String = LDAModel.SaveLoadV1_0.formatVersionV1_0
@@ -650,7 +652,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
         val sv = ttc(offset)
         its.tail.foreach { s =>
           val Array(index, value) = s.split(":")
-          sv(index.toInt) = value.asInstanceOf[Count]
+          sv(index.toInt) = value.toInt
         }
         sv.compact()
 
@@ -682,7 +684,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
         val arr = line.split("\t")
         arr.tail.foreach { sub =>
           val Array(index, value) = sub.split(":")
-          sv(index.toInt) = value.asInstanceOf[Count]
+          sv(index.toInt) = value.toInt
         }
         sv.compact()
         (arr.head.toLong, sv)
@@ -711,7 +713,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
         val arr = line.split("\t")
         arr.tail.foreach { sub =>
           val Array(index, value) = sub.split(":")
-          sv(index.toInt) = value.asInstanceOf[Count]
+          sv(index.toInt) = value.toInt
         }
         sv.compact()
         (arr.head.toLong, sv)
@@ -748,7 +750,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
       beta: Float,
       alphaAS: Float,
       isTransposed: Boolean,
-      saveSolid: Boolean = true): Unit = {
+      saveSolid: Boolean): Unit = {
       val metadata = compact(render
         (("class" -> classNameV1_0) ~ ("version" -> formatVersionV1_0) ~
           ("alpha" -> alpha) ~ ("beta" -> beta) ~ ("alphaAS" -> alphaAS) ~
