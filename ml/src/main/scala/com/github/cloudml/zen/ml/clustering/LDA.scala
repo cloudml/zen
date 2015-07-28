@@ -313,7 +313,7 @@ object LDA {
    * @param alpha      recommend to be (5.0 /numTopics)
    * @param beta       recommend to be in range 0.001 - 0.1
    * @param alphaAS    recommend to be in range 0.01 - 1.0
-   * @param useLightLDA use LightLDA sampling algorithm or not, recommend false for short text
+   * @param LDAAlgorithm which LDA sampling algorithm to use, recommend not lightlda for short text
    * @param useDBHStrategy whether DBH Strategy to re partition by the graph
    * @return DistributedLDAModel
    */
@@ -324,14 +324,18 @@ object LDA {
     alpha: Float = 0.001f,
     beta: Float = 0.01f,
     alphaAS: Float = 0.1f,
-    useLightLDA: Boolean = false,
+    LDAAlgorithm: String = "default",
     useDBHStrategy: Boolean = false,
     storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): DistributedLDAModel = {
     require(totalIter > 0, "totalIter is less than 0")
-    val lda = if (useLightLDA) {
-      new LightLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy, storageLevel)
-    } else {
-      new FastLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy, storageLevel)
+    val lda: LDA = LDAAlgorithm match {
+      case "lightlda" =>
+        println("using LightLDA sampling algorithm.")
+        new LightLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy, storageLevel)
+      case "fastlda" | "default" =>
+        println("using FastLDA sampling algorithm.")
+        new FastLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy, storageLevel)
+      case _ => throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     lda.runGibbsSampling(totalIter - 1)
     val termModel = lda.saveModel(1)
