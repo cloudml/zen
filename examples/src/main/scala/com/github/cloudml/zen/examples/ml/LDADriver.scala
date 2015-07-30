@@ -22,7 +22,8 @@ import com.github.cloudml.zen.ml.clustering.LDA
 import com.github.cloudml.zen.ml.util.SparkHacker
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.hadoop.fs.{InvalidPathException, FileSystem, Path}
+import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.mllib.linalg.{Vector => SV}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
@@ -35,7 +36,7 @@ object LDADriver {
     if (args.length < 9) {
       println("usage: LDADriver <numTopics> <alpha> <beta> <alphaAs> <totalIteration>" +
         " <input path> <output path> <sampleRate> <partition num> " +
-        "{<LDA Algorithm>} {<use DBHStrategy>} {<saveAsSolid>} {<use kryo serialize>}")
+        "{<LDA Algorithm>} {<use DBHStrategy>} {<saveAsSolid>}")  // {<use kryo serialize>}")
       System.exit(1)
     }
     val numTopics = args(0).toInt
@@ -50,7 +51,6 @@ object LDADriver {
     assert(alphaAS > 0)
     assert(totalIter > 0)
 
-    val appStartedTime = System.currentTimeMillis()
     val inputDataPath = args(5)
     val outputRootPath = args(6)
     val checkpointPath = args(6) + ".checkpoint"
@@ -64,32 +64,47 @@ object LDADriver {
     val useDBHStrategy: Boolean = if (args.length > 10) args(10).toBoolean else false
     val saveSolid: Boolean = if (args.length > 11) args(11).toBoolean else false
 
-    if (args.length > 12) {
-      conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
-      conf.set("spark.kryo.registrator", "com.github.cloudml.zen.ml.clustering.LDAKryoRegistrator")
-      GraphXUtils.registerKryoClasses(conf)
-    } else {
-      conf.set("spark.serializer", "org.apache.spark.serializer.JavaSerializer")
+//    if (args.length > 12) {
+//      conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+//      conf.set("spark.kryo.registrator", "com.github.cloudml.zen.ml.clustering.LDAKryoRegistrator")
+//      GraphXUtils.registerKryoClasses(conf)
+//    } else {
+//      conf.set("spark.serializer", "org.apache.spark.serializer.JavaSerializer")
+//    }
+    // TODO: Make KryoSerializer work
+    conf.set("spark.serializer", "org.apache.spark.serializer.JavaSerializer")
+
+    val fs = FileSystem.get(SparkHadoopUtil.get.newConfiguration(conf))
+    if (fs.exists(new Path(outputRootPath))) {
+      throw new InvalidPathException("Output path %s already exists.".format(outputRootPath))
     }
+    fs.delete(new Path(checkpointPath), true)
+
     val sc = new SparkContext(conf)
-    sc.setCheckpointDir(checkpointPath)
+    try {
+      val appStartedTime = System.currentTimeMillis()
+      sc.setCheckpointDir(checkpointPath)
 
-    println("start LDA on user profile")
-    println(s"numTopics = $numTopics, totalIteration = $totalIter")
-    println(s"alpha = $alpha, beta = $beta, alphaAS = $alphaAS")
-    println(s"inputDataPath = $inputDataPath")
+      println("start LDA on user profile")
+      println(s"numTopics = $numTopics, totalIteration = $totalIter")
+      println(s"alpha = $alpha, beta = $beta, alphaAS = $alphaAS")
+      println(s"inputDataPath = $inputDataPath")
 
-    // read data from file
-    val trainingDocs = readDocsFromTxt(sc, inputDataPath, sampleRate, partitionNum)
-    println(s"trainingDocs count: ${trainingDocs.count()}")
+      // read data from file
+      val trainingDocs = readDocsFromTxt(sc, inputDataPath, sampleRate, partitionNum)
+      println(s"trainingDocs count: ${trainingDocs.count()}")
 
-    val trainingTime = runTraining(sc, outputRootPath, numTopics, totalIter, alpha, beta, alphaAS,
-      trainingDocs, LDAAlgorithm, useDBHStrategy, saveSolid)
+      val trainingTime = runTraining(sc, outputRootPath, numTopics, totalIter, alpha, beta, alphaAS,
+        trainingDocs, LDAAlgorithm, useDBHStrategy, saveSolid)
 
-    val appEndedTime = System.currentTimeMillis()
-    println(s"Training time consumed: $trainingTime seconds")
-    println(s" Total time consumed: ${(appEndedTime - appStartedTime) / 1e3} seconds")
-    sc.stop()
+      val appEndedTime = System.currentTimeMillis()
+      println(s"Training time consumed: $trainingTime seconds")
+      println(s" Total time consumed: ${(appEndedTime - appStartedTime) / 1e3} seconds")
+
+    } finally {
+      sc.stop()
+      fs.delete(new Path(checkpointPath), true)
+    }
   }
 
   def runTraining(sc: SparkContext,
@@ -129,9 +144,6 @@ object LDADriver {
 //      val fs = FileSystem.get(hdfsConf)
 //      fs.delete(new Path(sc.getCheckpointDir.get), true)
 //    }
-    val fs = FileSystem.get(sc.hadoopConfiguration)
-    fs.delete(new Path(sc.getCheckpointDir.get), true)
-
     (trainingEndedTime - trainingStartedTime) / 1e3
   }
 
@@ -139,13 +151,13 @@ object LDADriver {
     docsPath: String,
     sampleRate: Double,
     partitionNum: Int): RDD[(Long, SV)] = {
-    val rawDocs = sc.textFile(docsPath, partitionNum).sample(false, sampleRate)
+    val rawDocs = sc.textFile(docsPath, partitionNum).sample(false, sampleRate).coalesce(partitionNum)
     convertDocsToBagOfWords(sc, rawDocs)
   }
 
   def convertDocsToBagOfWords(sc: SparkContext,
     rawDocs: RDD[String]): RDD[(Long, SV)] = {
-    rawDocs.cache()
+    rawDocs.persist()
     val wordsLength = rawDocs.mapPartitions { iter =>
       val iterator = iter.map { line =>
         val items = line.split("\\t|\\s+")

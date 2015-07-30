@@ -96,7 +96,7 @@ abstract class LDA private[ml](
 
   private def checkpoint(corpus: Graph[VD, ED]): Unit = {
     val sc = corpus.edges.sparkContext
-    if (innerIter % 12 == 0 && sc.getCheckpointDir.isDefined) {
+    if (innerIter % 10 == 1 && sc.getCheckpointDir.isDefined) {
       corpus.checkpoint()
     }
   }
@@ -126,10 +126,10 @@ abstract class LDA private[ml](
     // completeCorpus.vertices.count()
     totalTopicCounter = collectTotalTopicCounter(corpus)
 
-    previousCorpus.edges.unpersist(blocking = false)
-    previousCorpus.vertices.unpersist(blocking = false)
-    sampledCorpus.edges.unpersist(blocking = false)
-    sampledCorpus.vertices.unpersist(blocking = false)
+    previousCorpus.unpersist(blocking = false)
+    //previousCorpus.vertices.unpersist(blocking = false)
+    sampledCorpus.unpersist(blocking = false)
+    //sampledCorpus.vertices.unpersist(blocking = false)
     innerIter += 1
   }
 
@@ -146,7 +146,7 @@ abstract class LDA private[ml](
     numTerms: Int,
     alpha: Float,
     alphaAS: Float,
-    beta: Float): Graph[VD, ED]
+    beta: Float): Graph[VD, (ED, ED)]
 
   /**
    * Save the term-topic related model
@@ -337,7 +337,7 @@ object LDA {
         new FastLDA(docs, numTopics, alpha, beta, alphaAS, useDBHStrategy, storageLevel)
       case _ => throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
-    lda.runGibbsSampling(totalIter - 1)
+    lda.runGibbsSampling(totalIter)
     val termModel = lda.saveModel(1)
     termModel
   }
@@ -392,13 +392,13 @@ object LDA {
         }
       }
     })
-    edges.persist(storageLevel)
+    //edges.persist(storageLevel)
     var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
     corpus.persist(storageLevel)
     corpus.vertices.count()
     numEdges = corpus.edges.count()
     println(s"edges in the corpus: $numEdges")
-    edges.unpersist(blocking = false)
+    //edges.unpersist(blocking = false)
     corpus = if (useDBHStrategy) {
       DBHPartitioner.partitionByDBH[VD, ED](corpus, storageLevel)
     }else {
@@ -474,8 +474,15 @@ object LDA {
     docTopic
   }
 
-  private def updateCounter(graph: Graph[_, ED], numTopics: Int): Graph[VD, ED] = {
-    val newCounter = graph.aggregateMessages[VD](ctx => {
+  private def updateCounter(
+    prevGraph: Graph[VD, ED],
+    sampledGraph: Graph[_, ED],
+    numTopics: Int): Graph[VD, ED] = {
+    sampledGraph.edges.mapPartitions(iter => {
+      var lastVid = -1
+      iter.map{e => e.srcId}
+    })
+    val newCounter = sampledGraph.aggregateMessages[VD](ctx => {
       val topics = ctx.attr
       val vector = BSV.zeros[Count](numTopics)
       for (topic <- topics) {
@@ -495,8 +502,8 @@ object LDA {
         new BSV[Count](index, data, numTopics)
       }
     })
-    // GraphImpl.fromExistingRDDs(newCounter, graph.edges)
-    GraphImpl(newCounter, graph.edges)
+    // GraphImpl.fromExistingRDDs(newCounter, newGraph.edges)
+    GraphImpl(newCounter, newGraph.edges)
   }
 }
 
@@ -556,7 +563,7 @@ class FastLDA(
     numTerms: Int,
     alpha: Float,
     alphaAS: Float,
-    beta: Float): Graph[VD, ED] = {
+    beta: Float): Graph[VD, (ED, ED)] = {
     val parts = graph.edges.partitions.size
     val nweGraph = graph.mapTriplets(
       (pid, iter) => {
@@ -578,6 +585,7 @@ class FastLDA(
             val termTopicCounter = triplet.srcAttr
             val docTopicCounter = triplet.dstAttr
             val topics = triplet.attr
+            val newTopics = topics.clone()
             for (i <- 0 until topics.length) {
               val currentTopic = topics(i)
               dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, dData,
@@ -591,11 +599,11 @@ class FastLDA(
                 docTopicCounter, dData, currentTopic)
 
               if (newTopic != currentTopic) {
-                topics(i) = newTopic
+                newTopics(i) = newTopic
               }
             }
 
-            topics
+            (topics, newTopics)
         }
       }, TripletFields.All)
     GraphImpl(nweGraph.vertices.mapValues(t => null), nweGraph.edges)
@@ -770,7 +778,7 @@ class LightLDA(
     numTerms: Int,
     alpha: Float,
     alphaAS: Float,
-    beta: Float): Graph[VD, ED] = {
+    beta: Float): Graph[VD, (ED, ED)] = {
     val parts = graph.edges.partitions.size
     val nweGraph = graph.mapTriplets(
       (pid, iter) => {
@@ -801,6 +809,7 @@ class LightLDA(
             val termTopicCounter = triplet.srcAttr
             val docTopicCounter = triplet.dstAttr
             val topics = triplet.attr
+            val newTopics = topics.clone()
 
             if (dD == null || gen.nextDouble() < 1e-6) {
               var dv = dDense(totalTopicCounter, alpha, alphaAS, numTokens)
@@ -846,30 +855,15 @@ class LightLDA(
                   wPFun
                 }
 
-                val newTopic = docTopicCounter.synchronized {
-                  termTopicCounter.synchronized {
-                    tokenSampling(gen, docTopicCounter, termTopicCounter, docProposal,
+                val newTopic = tokenSampling(gen, docTopicCounter, termTopicCounter, docProposal,
                       currentTopic, proposalTopic, q, p)
-                  }
-                }
-
                 assert(newTopic >= 0 && newTopic < numTopics)
                 if (newTopic != currentTopic) {
-                  topics(i) = newTopic
-                  docTopicCounter.synchronized {
-                    docTopicCounter(currentTopic) -= 1
-                    docTopicCounter(newTopic) += 1
-                  }
-                  termTopicCounter.synchronized {
-                    termTopicCounter(currentTopic) -= 1
-                    termTopicCounter(newTopic) += 1
-                  }
-                  totalTopicCounter(currentTopic) -= 1
-                  totalTopicCounter(newTopic) += 1
+                  newTopics(i) = newTopic
                 }
               }
             }
-            topics
+            (topics, newTopics)
         }
       }, TripletFields.All)
     GraphImpl(nweGraph.vertices.mapValues(t => null), nweGraph.edges)
