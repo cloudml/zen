@@ -146,7 +146,7 @@ abstract class LDA private[ml](
     numTerms: Int,
     alpha: Float,
     alphaAS: Float,
-    beta: Float): Graph[VD, (ED, ED)]
+    beta: Float): Graph[VD, ED]
 
   /**
    * Save the term-topic related model
@@ -475,14 +475,9 @@ object LDA {
   }
 
   private def updateCounter(
-    prevGraph: Graph[VD, ED],
-    sampledGraph: Graph[_, ED],
+    graph: Graph[_, ED],
     numTopics: Int): Graph[VD, ED] = {
-    sampledGraph.edges.mapPartitions(iter => {
-      var lastVid = -1
-      iter.map{e => e.srcId}
-    })
-    val newCounter = sampledGraph.aggregateMessages[VD](ctx => {
+    val newCounter = graph.aggregateMessages[VD](ctx => {
       val topics = ctx.attr
       val vector = BSV.zeros[Count](numTopics)
       for (topic <- topics) {
@@ -502,8 +497,8 @@ object LDA {
         new BSV[Count](index, data, numTopics)
       }
     })
-    // GraphImpl.fromExistingRDDs(newCounter, newGraph.edges)
-    GraphImpl(newCounter, newGraph.edges)
+    // GraphImpl.fromExistingRDDs(newCounter, graph.edges)
+    GraphImpl(newCounter, graph.edges)
   }
 }
 
@@ -563,7 +558,7 @@ class FastLDA(
     numTerms: Int,
     alpha: Float,
     alphaAS: Float,
-    beta: Float): Graph[VD, (ED, ED)] = {
+    beta: Float): Graph[VD, ED] = {
     val parts = graph.edges.partitions.size
     val nweGraph = graph.mapTriplets(
       (pid, iter) => {
@@ -585,7 +580,6 @@ class FastLDA(
             val termTopicCounter = triplet.srcAttr
             val docTopicCounter = triplet.dstAttr
             val topics = triplet.attr
-            val newTopics = topics.clone()
             for (i <- 0 until topics.length) {
               val currentTopic = topics(i)
               dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, dData,
@@ -599,11 +593,11 @@ class FastLDA(
                 docTopicCounter, dData, currentTopic)
 
               if (newTopic != currentTopic) {
-                newTopics(i) = newTopic
+                topics(i) = newTopic
               }
             }
 
-            (topics, newTopics)
+            topics
         }
       }, TripletFields.All)
     GraphImpl(nweGraph.vertices.mapValues(t => null), nweGraph.edges)
@@ -778,7 +772,7 @@ class LightLDA(
     numTerms: Int,
     alpha: Float,
     alphaAS: Float,
-    beta: Float): Graph[VD, (ED, ED)] = {
+    beta: Float): Graph[VD, ED] = {
     val parts = graph.edges.partitions.size
     val nweGraph = graph.mapTriplets(
       (pid, iter) => {
@@ -809,7 +803,6 @@ class LightLDA(
             val termTopicCounter = triplet.srcAttr
             val docTopicCounter = triplet.dstAttr
             val topics = triplet.attr
-            val newTopics = topics.clone()
 
             if (dD == null || gen.nextDouble() < 1e-6) {
               var dv = dDense(totalTopicCounter, alpha, alphaAS, numTokens)
@@ -859,11 +852,11 @@ class LightLDA(
                       currentTopic, proposalTopic, q, p)
                 assert(newTopic >= 0 && newTopic < numTopics)
                 if (newTopic != currentTopic) {
-                  newTopics(i) = newTopic
+                  topics(i) = newTopic
                 }
               }
             }
-            (topics, newTopics)
+            topics
         }
       }, TripletFields.All)
     GraphImpl(nweGraph.vertices.mapValues(t => null), nweGraph.edges)
