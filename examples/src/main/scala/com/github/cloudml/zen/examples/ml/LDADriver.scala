@@ -21,10 +21,8 @@ import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDA
 import com.github.cloudml.zen.ml.util.SparkHacker
 import com.github.cloudml.zen.ml.util.SparkUtils._
-import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{InvalidPathException, FileSystem, Path}
 import org.apache.spark.deploy.SparkHadoopUtil
-import org.apache.spark.mllib.linalg.{Vector => SV}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{SparkContext, SparkConf}
@@ -32,39 +30,40 @@ import org.apache.spark.graphx.GraphXUtils
 
 
 object LDADriver {
+  type OptionMap = Map[String, String]
+
   def main(args: Array[String]) {
-    if (args.length < 9) {
-      println("usage: LDADriver <numTopics> <alpha> <beta> <alphaAs> <totalIteration>" +
-        " <input path> <output path> <sampleRate> <partition num> " +
-        "{<LDA Algorithm>} {<use DBHStrategy>} {<saveAsSolid>}")  // {<use kryo serialize>}")
-      System.exit(1)
-    }
-    val numTopics = args(0).toInt
-    val alpha = args(1).toFloat
-    val beta = args(2).toFloat
-    val alphaAS = args(3).toFloat
-    val totalIter = args(4).toInt
+    val options = parseArgs(args)
+    val appStartedTime = System.currentTimeMillis()
 
+    val numTopics = options("numtopics").toInt
+    val alpha = options("alpha").toFloat
+    val beta = options("beta").toFloat
+    val alphaAS = options("alphaas").toFloat
+    val totalIter = options("totaliter").toInt
+    val numPartition = options("numpartition").toInt
     assert(numTopics > 0)
-    assert(alpha > 0)
-    assert(beta > 0)
-    assert(alphaAS > 0)
-    assert(totalIter > 0)
+    assert(alpha > 0.0f)
+    assert(beta > 0.0f)
+    assert(alphaAS > 0.0f)
+    assert(totalIter > 0, "totalIter must be greater than 0")
+    assert(numPartition > 0)
 
-    val inputDataPath = args(5)
-    val outputRootPath = args(6)
-    val checkpointPath = args(6) + ".checkpoint"
-    val sampleRate = args(7).toDouble
-    val partitionNum = args(8).toInt
-    assert(sampleRate > 0)
-    assert(partitionNum > 0)
+    val inputPath = options("inpath")
+    val outputPath = options("outpath")
+    val checkpointPath = outputPath + ".checkpoint"
+
+    val sampleRate = options.getOrElse("samplerate", "1.0").toDouble
+    assert(sampleRate > 0.0)
 
     val conf = new SparkConf()
-    val LDAAlgorithm: String = if (args.length > 9) args(9).toLowerCase else "default"
-    val useDBHStrategy: Boolean = if (args.length > 10) args(10).toBoolean else false
-    val saveSolid: Boolean = if (args.length > 11) args(11).toBoolean else false
+    val LDAAlgorithm = options.getOrElse("ldaalgorithm", "fastlda")
+    val storageLevel = StorageLevel.fromString(options.getOrElse("storagelevel", "MEMORY_AND_DISK").toUpperCase)
+    val partStrategy = options.getOrElse("partstrategy", "dbh")
+    val saveAsSolid = options.getOrElse("saveassolid", "false").toBoolean
 
-//    if (args.length > 12) {
+//    val useKryoSerializer = options.getOrElse("usekryoserializer", "false").toBoolean
+//    if (useKryoSerializer) {
 //      conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
 //      conf.set("spark.kryo.registrator", "com.github.cloudml.zen.ml.clustering.LDAKryoRegistrator")
 //      GraphXUtils.registerKryoClasses(conf)
@@ -75,89 +74,71 @@ object LDADriver {
     conf.set("spark.serializer", "org.apache.spark.serializer.JavaSerializer")
 
     val fs = FileSystem.get(SparkHadoopUtil.get.newConfiguration(conf))
-    if (fs.exists(new Path(outputRootPath))) {
-      throw new InvalidPathException("Output path %s already exists.".format(outputRootPath))
+    if (fs.exists(new Path(outputPath))) {
+      throw new InvalidPathException("Output path %s already exists.".format(outputPath))
     }
     fs.delete(new Path(checkpointPath), true)
 
     val sc = new SparkContext(conf)
     try {
-      val appStartedTime = System.currentTimeMillis()
       sc.setCheckpointDir(checkpointPath)
 
       println("start LDA on user profile")
       println(s"numTopics = $numTopics, totalIteration = $totalIter")
       println(s"alpha = $alpha, beta = $beta, alphaAS = $alphaAS")
-      println(s"inputDataPath = $inputDataPath")
+      println(s"inputDataPath = $inputPath")
 
-      // read data from file
-      val trainingDocs = readDocsFromTxt(sc, inputDataPath, sampleRate, partitionNum)
-      println(s"trainingDocs count: ${trainingDocs.count()}")
-
-      val trainingTime = runTraining(sc, outputRootPath, numTopics, totalIter, alpha, beta, alphaAS,
-        trainingDocs, LDAAlgorithm, useDBHStrategy, saveSolid)
-
-      val appEndedTime = System.currentTimeMillis()
+      val trainingDocs = readDocsFromTxt(sc, inputPath, sampleRate, numPartition, storageLevel)
+      val trainingTime = runTraining(sc, outputPath, numTopics, totalIter, alpha, beta, alphaAS,
+        trainingDocs, LDAAlgorithm, partStrategy, storageLevel, saveAsSolid)
       println(s"Training time consumed: $trainingTime seconds")
-      println(s" Total time consumed: ${(appEndedTime - appStartedTime) / 1e3} seconds")
 
     } finally {
       sc.stop()
-      fs.delete(new Path(checkpointPath), true)
+      fs.deleteOnExit(new Path(checkpointPath))
+      val appEndedTime = System.currentTimeMillis()
+      println(s"Total time consumed: ${(appEndedTime - appStartedTime) / 1e3} seconds")
+      fs.close()
     }
   }
 
   def runTraining(sc: SparkContext,
-    outputRootPath: String,
+    outputPath: String,
     numTopics: Int,
     totalIter: Int,
     alpha: Float,
     beta: Float,
     alphaAS: Float,
-    trainingDocs: RDD[(Long, SV)],
+    trainingDocs: RDD[(Long, BSV[Int])],
     LDAAlgorithm: String,
-    useDBHStrategy: Boolean,
-    saveSolid: Boolean): Double = {
+    partStrategy: String,
+    storageLevel: StorageLevel,
+    saveAsSolid: Boolean): Double = {
     SparkHacker.gcCleaner(15 * 60, 15 * 60, "LDA_gcCleaner")
     val trainingStartedTime = System.currentTimeMillis()
-    // val storage =  StorageLevel.DISK_ONLY
-    val storage = StorageLevel.MEMORY_AND_DISK
     val termModel = LDA.train(trainingDocs, totalIter, numTopics, alpha, beta, alphaAS,
-      LDAAlgorithm, useDBHStrategy, storageLevel = storage)
+      LDAAlgorithm, partStrategy, storageLevel)
     val trainingEndedTime = System.currentTimeMillis()
 
     println("save the model in term-doc view")
-    termModel.save(sc, outputRootPath, isTransposed = true, saveSolid)
-    // docModel.save(sc, outputRootPath + "/doc-topic", isTransposed = false)
+    termModel.save(sc, outputPath, isTransposed = true, saveAsSolid)
 
-    // try to delete the checkpoint folder in the HDFS
-//    if (sys.env.contains("HADOOP_CONF_DIR") || sys.env.contains("YARN_CONF_DIR")) {
-//      val hdfsConfPath = if (sys.env.get("HADOOP_CONF_DIR").isDefined) {
-//        sys.env.get("HADOOP_CONF_DIR").get + "/core-site.xml"
-//      } else sys.env.get("YARN_CONF_DIR").get + "/core-site.xml"
-//      val hdfsConf = new Configuration()
-//      hdfsConf.addResource(new Path(hdfsConfPath))
-//      val fs = FileSystem.get(hdfsConf)
-//      fs.delete(new Path(sc.getCheckpointDir.get), true)
-//    } else {
-//      val hdfsConf = new Configuration()
-//      val fs = FileSystem.get(hdfsConf)
-//      fs.delete(new Path(sc.getCheckpointDir.get), true)
-//    }
     (trainingEndedTime - trainingStartedTime) / 1e3
   }
 
   def readDocsFromTxt(sc: SparkContext,
     docsPath: String,
     sampleRate: Double,
-    partitionNum: Int): RDD[(Long, SV)] = {
-    val rawDocs = sc.textFile(docsPath, partitionNum).sample(false, sampleRate).coalesce(partitionNum)
-    convertDocsToBagOfWords(sc, rawDocs)
+    numPartition: Int,
+    storageLevel: StorageLevel): RDD[(Long, BSV[Int])] = {
+    val rawDocs = sc.textFile(docsPath, numPartition).sample(false, sampleRate).coalesce(numPartition, true)
+    convertDocsToBagOfWords(sc, rawDocs, storageLevel)
   }
 
   def convertDocsToBagOfWords(sc: SparkContext,
-    rawDocs: RDD[String]): RDD[(Long, SV)] = {
-    rawDocs.persist()
+    rawDocs: RDD[String],
+    storageLevel: StorageLevel): RDD[(Long, BSV[Int])] = {
+    rawDocs.persist(storageLevel).setName("rawDocs")
     val wordsLength = rawDocs.mapPartitions { iter =>
       val iterator = iter.map { line =>
         val items = line.split("\\t|\\s+")
@@ -168,7 +149,7 @@ object LDADriver {
       Iterator.single[Int](iterator.max)
     }.collect().max + 1
     println(s"the max words id: $wordsLength")
-    val result = rawDocs.map { line =>
+    val bowDocs = rawDocs.map { line =>
       val tokens = line.split("\\t|\\s+")
       val docId = tokens(0).toLong
       if (tokens.length == 1) println(tokens.mkString("\t"))
@@ -186,11 +167,47 @@ object LDADriver {
       if (docTermCount.activeSize < 1) {
         println(s"docTermCount active iterator: ${docTermCount.activeIterator.mkString(";")}")
       }
-      (docId, fromBreezeConv[Int](docTermCount))
+      (docId, docTermCount)
     }
-    rawDocs.unpersist()
-    result
+    bowDocs.persist(storageLevel).setName("bowDocs")
+    val numDocs = bowDocs.count()
+    println(s"num docs in the corpus: $numDocs")
+    rawDocs.unpersist(blocking = false)
+    bowDocs
   }
 
+  def parseArgs(args: Array[String]): OptionMap = {
+    val usage = "Usage: LDADriver <Args> [Options] <Input path> <Output path>\n" +
+      "  Args: -numTopics:<Int> -alpha:<Float> -beta:<Float> -alphaAS:<Float>\n" +
+      "        -totalIter:<Int> -numPartition:<Int>\n" +
+      "  Options: -sampleRate:<Double(*1.0)>\n" +
+      "           -LDAAlgorithm:<*FastLDA|LightLDA>\n" +
+      "           -storageLevel:<StorageLevel(*MEMORY_AND_DISK)>\n" +
+      "           -partStrategy:<*DBH|Edge2D>\n" +
+      "           -saveAsSolid:<true|*false>"
+      // "-useKryoSerializer <true|*false>"
+    if (args.length < 8) {
+      println(usage)
+      System.exit(1)
+    }
+    val arglist = args.toList
+    def nextOption(map: OptionMap, list: List[String]): OptionMap = {
+      def isSwitch(s: String) = s(0) == '-'
+      list match {
+        case Nil => map
+        case head :: tail if isSwitch(head) =>
+          val kv = head.toLowerCase.split(":", 1)
+          nextOption(map ++ Map(kv(0).substring(1) -> kv(1)), tail)
+        case head :: tail if !isSwitch(head) =>
+          nextOption(map ++ Map("inpath" -> head), tail)
+        case head :: Nil if !isSwitch(head) =>
+          nextOption(map ++ Map("outpath" -> head), Nil)
+        case _ =>
+          println(usage)
+          System.exit(1)
+          null.asInstanceOf[OptionMap]
+      }
+    }
+    nextOption(Map(), arglist)
+  }
 }
-

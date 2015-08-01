@@ -55,8 +55,8 @@ class LocalLDAModel private[ml](
       toBreezeConv[Count](t).asInstanceOf[BSV[Count]]), alpha, beta, alpha)
   }
 
-  @transient private lazy val numTopics = gtc.length
-  @transient private lazy val numTerms = ttc.length
+  @transient lazy val numTopics = gtc.length
+  @transient lazy val numTerms = ttc.length
   @transient private lazy val numTokens = brzSum(gtc)
   @transient private lazy val betaSum = numTerms * beta
   @transient private lazy val alphaSum = numTopics * alpha
