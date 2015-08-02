@@ -79,9 +79,9 @@ abstract class LDA(
 
   def getCorpus: Graph[VD, ED] = corpus
 
-  def termVertices = corpus.vertices.filter(_._1 >= 0)
+  def termVertices: VertexRDD[VD] = corpus.vertices.filter(_._1 >= 0)
 
-  def docVertices = corpus.vertices.filter(_._1 < 0)
+  def docVertices: VertexRDD[VD] = corpus.vertices.filter(_._1 < 0)
 
   private def collectTopicCounter(): BDV[Count] = {
     termVertices.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
