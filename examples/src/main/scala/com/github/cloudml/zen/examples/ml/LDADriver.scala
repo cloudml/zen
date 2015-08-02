@@ -20,13 +20,12 @@ package com.github.cloudml.zen.examples.ml
 import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDA
 import com.github.cloudml.zen.ml.util.SparkHacker
-import com.github.cloudml.zen.ml.util.SparkUtils._
 import org.apache.hadoop.fs.{InvalidPathException, FileSystem, Path}
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{SparkContext, SparkConf}
-import org.apache.spark.graphx.GraphXUtils
+// import org.apache.spark.graphx.GraphXUtils
 
 
 object LDADriver {
@@ -41,13 +40,13 @@ object LDADriver {
     val beta = options("beta").toFloat
     val alphaAS = options("alphaas").toFloat
     val totalIter = options("totaliter").toInt
-    val numPartition = options("numpartition").toInt
+    val numPartitions = options("numpartitions").toInt
     assert(numTopics > 0)
-    assert(alpha > 0.0f)
-    assert(beta > 0.0f)
-    assert(alphaAS > 0.0f)
+    assert(alpha > 0F)
+    assert(beta > 0F)
+    assert(alphaAS > 0F)
     assert(totalIter > 0, "totalIter must be greater than 0")
-    assert(numPartition > 0)
+    assert(numPartitions > 0)
 
     val inputPath = options("inpath")
     val outputPath = options("outpath")
@@ -88,7 +87,7 @@ object LDADriver {
       println(s"alpha = $alpha, beta = $beta, alphaAS = $alphaAS")
       println(s"inputDataPath = $inputPath")
 
-      val trainingDocs = readDocsFromTxt(sc, inputPath, sampleRate, numPartition, storageLevel)
+      val trainingDocs = readDocsFromTxt(sc, inputPath, sampleRate, numPartitions, storageLevel)
       val trainingTime = runTraining(sc, outputPath, numTopics, totalIter, alpha, beta, alphaAS,
         trainingDocs, LDAAlgorithm, partStrategy, storageLevel, saveAsSolid)
       println(s"Training time consumed: $trainingTime seconds")
@@ -129,9 +128,9 @@ object LDADriver {
   def readDocsFromTxt(sc: SparkContext,
     docsPath: String,
     sampleRate: Double,
-    numPartition: Int,
+    numPartitions: Int,
     storageLevel: StorageLevel): RDD[(Long, BSV[Int])] = {
-    val rawDocs = sc.textFile(docsPath, numPartition).sample(false, sampleRate).coalesce(numPartition, true)
+    val rawDocs = sc.textFile(docsPath, numPartitions).sample(false, sampleRate).coalesce(numPartitions, true)
     convertDocsToBagOfWords(sc, rawDocs, storageLevel)
   }
 
@@ -179,7 +178,7 @@ object LDADriver {
   def parseArgs(args: Array[String]): OptionMap = {
     val usage = "Usage: LDADriver <Args> [Options] <Input path> <Output path>\n" +
       "  Args: -numTopics:<Int> -alpha:<Float> -beta:<Float> -alphaAS:<Float>\n" +
-      "        -totalIter:<Int> -numPartition:<Int>\n" +
+      "        -totalIter:<Int> -numPartitions:<Int>\n" +
       "  Options: -sampleRate:<Double(*1.0)>\n" +
       "           -LDAAlgorithm:<*FastLDA|LightLDA>\n" +
       "           -storageLevel:<StorageLevel(*MEMORY_AND_DISK)>\n" +

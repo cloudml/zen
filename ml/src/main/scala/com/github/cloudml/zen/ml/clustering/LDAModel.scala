@@ -32,9 +32,7 @@ import org.apache.hadoop.io.{NullWritable, Text}
 import org.apache.hadoop.mapred.TextOutputFormat
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.GraphImpl
-import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, Vector => SV}
-import org.apache.spark.mllib.regression.LabeledPoint
-import org.apache.spark.mllib.util.{Loader, MLUtils, Saveable}
+import org.apache.spark.mllib.util.{Loader, Saveable}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.collection.AppendOnlyMap
@@ -49,12 +47,6 @@ class LocalLDAModel private[ml](
   val alpha: Float,
   val beta: Float,
   val alphaAS: Float) extends Serializable {
-
-  def this(topicCounts: SDV, topicTermCounts: Array[SSV], alpha: Float, beta: Float) {
-    this(toBreezeConv[Count](topicCounts).asInstanceOf[BDV[Count]], topicTermCounts.map(t =>
-      toBreezeConv[Count](t).asInstanceOf[BSV[Count]]), alpha, beta, alpha)
-  }
-
   @transient lazy val numTopics = gtc.length
   @transient lazy val numTerms = ttc.length
   @transient private lazy val numTokens = brzSum(gtc)
@@ -74,9 +66,9 @@ class LocalLDAModel private[ml](
     rand.setSeed(seed)
   }
 
-  def globalTopicCounter: SV = fromBreezeConv[Count](gtc)
+  def globalTopicCounter: BDV[Count] = gtc
 
-  def topicTermCounter: Array[SV] = ttc.map(t => fromBreezeConv[Count](t))
+  def topicTermCounter: Array[BSV[Count]] = ttc
 
   /**
    * inference interface
@@ -85,15 +77,15 @@ class LocalLDAModel private[ml](
    * @param burnIn
    */
   def inference(
-    doc: SV,
+    doc: BSV[Int],
     totalIter: Int = 10,
-    burnIn: Int = 5): SV = {
+    burnIn: Int = 5): BV[Float] = {
     require(totalIter > burnIn, "totalIter is less than burnInIter")
     require(totalIter > 0, "totalIter is less than 0")
     require(burnIn > 0, "burnInIter is less than 0")
 
     val topicDist = BSV.zeros[Int](numTopics)
-    val tokens = vector2Array(toBreezeConv[Int](doc))
+    val tokens = vector2Array(doc)
     val topics = new Array[Int](tokens.length)
 
     var docTopicCounter = uniformDistSampler(tokens, topics)
@@ -104,7 +96,7 @@ class LocalLDAModel private[ml](
 
     topicDist.compact()
     val norm = brzNorm(topicDist, 1).toFloat
-    fromBreezeConv[Float](topicDist.map(_ / norm))
+    topicDist.map(_ / norm)
   }
 
   private[ml] def vector2Array(vec: BV[Int]): Array[Int] = {
@@ -217,9 +209,9 @@ class DistributedLDAModel private[ml](
    * @param burnIn previous burnIn iters results will discard
    */
   def inference(
-    docs: RDD[(VertexId, SV)],
+    docs: RDD[(VertexId, BSV[Int])],
     totalIter: Int = 25,
-    burnIn: Int = 22): RDD[(VertexId, SV)] = {
+    burnIn: Int = 22): RDD[(VertexId, BSV[Float])] = {
     require(totalIter > burnIn, "totalIter is less than burnInIter")
     require(totalIter > 0, "totalIter is less than 0")
     require(burnIn > 0, "burnIn is less than 0")
@@ -248,8 +240,8 @@ class DistributedLDAModel private[ml](
     }
     docTopicCounter.map { case (docId, sv) =>
       sv.compact()
-      val norm = brzNorm(sv, 1)
-      (toDocId(docId), fromBreezeConv[Double](sv.map(_.toDouble) / norm))
+      val norm = brzNorm(sv, 1).toFloat
+      (toDocId(docId), sv.map(_ / norm))
     }
   }
 
@@ -263,7 +255,7 @@ class DistributedLDAModel private[ml](
     new LocalLDAModel(gtc, ttc1, alpha, beta, alphaAS)
   }
 
-  private[ml] def initializeInferDataset(docs: RDD[(LDA.DocId, SV)],
+  private[ml] def initializeInferDataset(docs: RDD[(LDA.DocId, BSV[Int])],
     numTopics: Int,
     storageLevel: StorageLevel): Graph[VD, ED] = {
     val previousCorpus: Graph[VD, ED] = initializeCorpus(docs, numTopics, storageLevel)
@@ -282,7 +274,7 @@ class DistributedLDAModel private[ml](
   }
 
   private[ml] def initializeCorpus(
-    docs: RDD[(LDA.DocId, SV)],
+    docs: RDD[(LDA.DocId, BSV[Int])],
     numTopics: Int,
     storageLevel: StorageLevel): Graph[VD, ED] = {
     val edges = docs.mapPartitionsWithIndex((pid, iter) => {
@@ -303,15 +295,14 @@ class DistributedLDAModel private[ml](
 
   private def initializeEdges(
     gen: Random,
-    doc: SV,
+    doc: BSV[Int],
     docId: DocId,
     numTopics: Int): Iterator[Edge[ED]] = {
     assert(docId >= 0)
     val newDocId: DocId = genNewDocId(docId)
-    val bdoc = toBreezeConv[Float](doc)
-    bdoc.activeIterator.filter(_._2 > 0).map { case (termId, counter) =>
-      val topics = new Array[Int](counter.toInt)
-      for (i <- 0 until counter.toInt) {
+    doc.activeIterator.filter(_._2 > 0).map { case (termId, counter) =>
+      val topics = new Array[Int](counter)
+      for (i <- 0 until counter) {
         topics(i) = gen.nextInt(numTopics)
       }
       Edge(termId, newDocId, topics)
@@ -755,8 +746,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
         (("class" -> classNameV1_0) ~ ("version" -> formatVersionV1_0) ~
           ("alpha" -> alpha) ~ ("beta" -> beta) ~ ("alphaAS" -> alphaAS) ~
           ("numTopics" -> numTopics) ~ ("numTerms" -> numTerms) ~
-          ("numEdges" -> LDA.numEdges) ~ ("numDocs" -> LDA.numDocs)
-          ~ ("isTransposed" -> isTransposed)))
+          ("isTransposed" -> isTransposed)))
 
       val rdd = if (isTransposed) {
         ttc.flatMap { case (termId, vector) =>

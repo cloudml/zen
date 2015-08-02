@@ -84,10 +84,10 @@ private[ml] object LoaderUtils {
    * @param mapEle The function mapping each element of RDD to a line of String
    */
   def RDD2HDFSFile[T](sc: SparkContext,
-                      rdd: RDD[T],
-                      outPathStr: String,
-                      header: => String,
-                      mapEle: T => String): Unit = {
+    rdd: RDD[T],
+    outPathStr: String,
+    header: => String,
+    mapEle: T => String): Unit = {
     val hdpconf = sc.hadoopConfiguration
     val fs = FileSystem.get(hdpconf)
     val outPath = new Path(outPathStr)
@@ -112,9 +112,9 @@ private[ml] object LoaderUtils {
    * @param lineParser The function parses each line in HDFS file to an element of RDD
    */
   def HDFSFile2RDD[T: ClassTag, M](sc: SparkContext,
-                      inPathStr: String,
-                      init_f: String => M,
-                      lineParser: (M, String) => T): (M, RDD[T]) = {
+    inPathStr: String,
+    init_f: String => M,
+    lineParser: (M, String) => T): (M, RDD[T]) = {
     val rawrdd = sc.textFile(inPathStr)
     val header = rawrdd.first()
     val meta = init_f(header)
@@ -123,7 +123,7 @@ private[ml] object LoaderUtils {
       if (first == header) {
         iter
       } else {
-        Iterator(first) ++ iter
+        Iterator.single(first) ++ iter
       }
     }.map(lineParser(meta, _)))
     (meta, rdd)
