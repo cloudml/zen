@@ -425,7 +425,36 @@ object LDA {
 
   private def initCounter(initCorpus: Graph[VD, ED],
     numTopics: Int): Graph[VD, ED] = {
-    null
+    val newCounter = initCorpus.edges.mapPartitions(iter => {
+      var lastVid = -1L
+      var lastTermSum: BSV[Count] = null
+      val major = iter.flatMap(edge => {
+        val vid = edge.srcId
+        val did = edge.dstId
+        val termSum = if (vid == lastVid) lastTermSum else BSV.zeros[Count](numTopics)
+        var docSum = BSV.zeros[Count](numTopics)
+        val topics = edge.attr
+        for (t <- topics) {
+          termSum(t) += 1
+          docSum(t) += 1
+        }
+        if (vid == lastVid || lastVid == -1L) {
+          Iterator.single((did, docSum))
+        } else {
+          val sendVid = lastVid
+          val sendTermDeltaSum = lastTermSum
+          lastVid = vid
+          lastTermSum = termSum
+          Iterator((sendVid, sendTermDeltaSum), (did, docSum))
+        }
+      })
+      if (lastVid != -1L) {
+        major ++ Iterator((lastVid, lastTermSum))
+      } else {
+        major
+      }
+    }).reduceByKey(_ += _)
+    GraphImpl(VertexRDD(newCounter), initCorpus.edges)
   }
 
   private def updateCounter(sampledCorpus: Graph[VD, (ED, ED)],
