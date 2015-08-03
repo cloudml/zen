@@ -461,42 +461,14 @@ object LDA {
   private def partUpdaterIterator(pit: Iterator[Edge[_]],
     update: (Edge[_], VD, VD) => Unit,
     numTopics: Int): Iterator[(VertexId, VD)] = {
-    new Iterator[(VertexId, VD)] {
-      var lastVid = Long.MaxValue
-      var lastTermSum: BSV[Count] = null
-      var cachedTermItem: (VertexId, VD) = null
-      var isOver = false
-
-      def hasNext: Boolean = {
-        pit.hasNext || cachedTermItem != null
-      }
-
-      def next(): (VertexId, VD) = {
-        if (cachedTermItem != null) {
-          val ret = cachedTermItem
-          cachedTermItem = null
-          ret
-        } else if (!pit.hasNext && !isOver) {
-          isOver = true
-          (lastVid, lastTermSum)
-        } else {
-          val edge = pit.next()
-          val vid = edge.srcId
-          val did = edge.dstId
-          val termSum = if (vid == lastVid) lastTermSum else BSV.zeros[Count](numTopics)
-          var docSum = BSV.zeros[Count](numTopics)
-          update(edge, termSum, docSum)
-          if (vid != lastVid) {
-            if (lastVid != Long.MaxValue) {
-              cachedTermItem = (lastVid, lastTermSum)
-            }
-            lastVid = vid
-            lastTermSum = termSum
-          }
-          (did, docSum)
-        }
-      }
-    }
+    pit.flatMap(edge => {
+      val vid = edge.srcId
+      val did = edge.dstId
+      val termSum = BSV.zeros[Count](numTopics)
+      val docSum = BSV.zeros[Count](numTopics)
+      update(edge, termSum, docSum)
+      Iterator((vid, termSum), (did, docSum))
+    })
   }
 }
 
