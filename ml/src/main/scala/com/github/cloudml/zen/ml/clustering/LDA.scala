@@ -617,6 +617,7 @@ class FastLDA(
     alpha: Float,
     alphaAS: Float,
     beta: Float): (Float, BDV[Float]) = {
+    val numTopics = totalTopicCounter.length
     val t = BDV.zeros[Float](numTopics)
     val alphaSum = alpha * numTopics
     val termSum = numTokens - 1F + alphaAS * numTopics
@@ -643,6 +644,7 @@ class FastLDA(
     alpha: Float,
     alphaAS: Float,
     beta: Float): (Float, BSV[Float]) = {
+    val numTopics = totalTopicCounter.length
     val alphaSum = alpha * numTopics
     val termSum = numTokens - 1F + alphaAS * numTopics
     val betaSum = numTerms * beta
@@ -912,6 +914,7 @@ class LightLDA(
     termTopicCounter: VD,
     numTerms: Int,
     beta: Float): (Float, BV[Float]) = {
+    val numTopics = termTopicCounter.length
     val termSum = beta * numTerms
     val w = BSV.zeros[Float](numTopics)
     var sum = 0F
@@ -933,6 +936,7 @@ class LightLDA(
   private def wDense(totalTopicCounter: BDV[Count],
     numTerms: Int,
     beta: Float): (Float, BV[Float]) = {
+    val numTopics = totalTopicCounter.length
     val t = BDV.zeros[Float](numTopics)
     val termSum = beta * numTerms
     var sum = 0F
@@ -945,6 +949,7 @@ class LightLDA(
   }
 
   private def dSparse(docTopicCounter: VD): (Float, BV[Float]) = {
+    val numTopics = docTopicCounter.length
     val d = BSV.zeros[Float](numTopics)
     var sum = 0F
     docTopicCounter.activeIterator.foreach { t =>
@@ -963,6 +968,7 @@ class LightLDA(
     alpha: Float,
     alphaAS: Float,
     numTokens: Long): (Float, BV[Float]) = {
+    val numTopics = totalTopicCounter.length
     val asPrior = BDV.zeros[Float](numTopics)
     var sum = 0F
     for (topic <- 0 until numTopics) {
