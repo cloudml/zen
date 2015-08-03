@@ -42,12 +42,11 @@ abstract class LDA(
   protected val numTopics: Int,
   protected val numTerms: Int,
   protected val numDocs: Long,
+  protected val numTokens: Long,
   protected var alpha: Float,
   protected var beta: Float,
   protected var alphaAS: Float,
   protected var storageLevel: StorageLevel) extends Serializable with Logging {
-
-  protected val numTokens = corpus.edges.map(e => e.attr.length.toDouble).sum().toLong
 
   @transient protected var seed = new XORShiftRandom().nextInt()
   @transient protected var totalTopicCounter = collectTopicCounter()
@@ -194,7 +193,6 @@ abstract class LDA(
    * N is the number of tokens in corpus
    */
   def perplexity(): Double = {
-    val totalSize = brzSum(totalTopicCounter)
     var totalProb = 0D
 
     // \frac{{\alpha }_{k}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
@@ -239,7 +237,7 @@ abstract class LDA(
       docTermSize * Math.log(prob)
     }.edges.map(t => t.attr).sum()
 
-    math.exp(-1 * termProb / totalSize)
+    math.exp(-1 * termProb / numTokens)
   }
 
 }
@@ -250,6 +248,7 @@ object LDA {
   private[ml] type Count = Int
   private[ml] type ED = Array[Int]
   private[ml] type VD = BSV[Count]
+  private[ml] type BOW = (Long, BSV[Int])
 
   /**
    * LDA training
@@ -268,7 +267,7 @@ object LDA {
    * @return DistributedLDAModel
    */
   def train(
-    docs: RDD[(Long, BSV[Int])],
+    docs: RDD[BOW],
     totalIter: Int,
     numTopics: Int,
     alpha: Float,
@@ -277,43 +276,41 @@ object LDA {
     LDAAlgorithm: String,
     partStrategy: String,
     storageLevel: StorageLevel): DistributedLDAModel = {
-    val numTerms = docs.first()._2.size
-    val numDocs = docs.count()
     val lda: LDA = LDAAlgorithm match {
       case "lightlda" =>
         println("using LightLDA sampling algorithm.")
-        new LightLDA(docs, numTopics, numTerms, alpha, beta, alphaAS, storageLevel, partStrategy)
+        LightLDA(docs, numTopics, alpha, beta, alphaAS, storageLevel, partStrategy)
       case "fastlda" =>
         println("using FastLDA sampling algorithm.")
-        new FastLDA(docs, numTopics, numTerms, alpha, beta, alphaAS, storageLevel, partStrategy)
-      case _ => throw new NoSuchMethodException("No this algorithm or not implemented.")
+        FastLDA(docs, numTopics, alpha, beta, alphaAS, storageLevel, partStrategy)
+      case _ =>
+        throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     lda.runGibbsSampling(totalIter)
     lda.saveModel(1)
   }
 
   def incrementalTrain(
-    docs: RDD[(Long, BSV[Int])],
+    docs: RDD[BOW],
     computedModel: LocalLDAModel,
     totalIter: Int,
     LDAAlgorithm: String,
     partStrategy: String,
     storageLevel: StorageLevel): DistributedLDAModel = {
     val numTopics = computedModel.numTopics
-    val numTerms = computedModel.numTerms
     val alpha = computedModel.alpha
     val beta = computedModel.beta
     val alphaAS = computedModel.alphaAS
-    val numDocs = docs.count()
     val broadcastModel = docs.context.broadcast(computedModel)
     val lda: LDA = LDAAlgorithm match {
       case "lightlda" =>
         println("using LightLDA sampling algorithm.")
-        new LightLDA(docs, numTopics, numTerms,  alpha, beta, alphaAS, storageLevel, partStrategy,broadcastModel)
+        LightLDA(docs, numTopics, alpha, beta, alphaAS, storageLevel, partStrategy, broadcastModel)
       case "fastlda" =>
         println("using FastLDA sampling algorithm.")
-        new FastLDA(docs, numTopics, numTerms,  alpha, beta, alphaAS, storageLevel, partStrategy,broadcastModel)
-      case _ => throw new NoSuchMethodException("No this algorithm or not implemented.")
+        FastLDA(docs, numTopics, alpha, beta, alphaAS, storageLevel, partStrategy, broadcastModel)
+      case _ =>
+        throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     broadcastModel.unpersist(blocking = false)
     lda.runGibbsSampling(totalIter)
@@ -321,7 +318,7 @@ object LDA {
   }
 
   private[ml] def initializeCorpus(
-    docs: RDD[(Long, BSV[Int])],
+    docs: RDD[BOW],
     numTopics: Int,
     storageLevel: StorageLevel,
     partStrategy: String,
@@ -347,7 +344,8 @@ object LDA {
         DBHPartitioner.partitionByDBH[VD, ED](initCorpus, storageLevel)
       case "edge2d" =>
         initCorpus.partitionBy(PartitionStrategy.EdgePartition2D)
-      case _ => throw new NoSuchMethodException("No this algorithm or not implemented.")
+      case _ =>
+        throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     val corpus = initCounter(initCorpus, numTopics)
     corpus.checkpoint()
@@ -442,10 +440,10 @@ object LDA {
           Iterator.single((did, docSum))
         } else {
           val sendVid = lastVid
-          val sendTermDeltaSum = lastTermSum
+          val sendTermSum = lastTermSum
           lastVid = vid
           lastTermSum = termSum
-          Iterator((sendVid, sendTermDeltaSum), (did, docSum))
+          Iterator((sendVid, sendTermSum), (did, docSum))
         }
       })
       if (lastVid != -1L) {
@@ -453,7 +451,7 @@ object LDA {
       } else {
         major
       }
-    }).reduceByKey(_ += _)
+    }).reduceByKey(initCorpus.vertices.partitioner.get, _ += _)
     GraphImpl(VertexRDD(newCounter), initCorpus.edges)
   }
 
@@ -490,7 +488,7 @@ object LDA {
       } else {
         major
       }
-    }).reduceByKey(_ += _)
+    }).reduceByKey(sampledCorpus.vertices.partitioner.get, _ += _)
     sampledCorpus.joinVertices(deltaCounter)((vid, counter, delta) => counter += delta)
       .mapEdges(edge => edge.attr._2)
   }
@@ -498,17 +496,15 @@ object LDA {
 
 private[ml] class LDAKryoRegistrator extends KryoRegistrator {
   def registerClasses(kryo: com.esotericsoftware.kryo.Kryo) {
-    val gkr = new GraphKryoRegistrator
-    gkr.registerClasses(kryo)
-
     kryo.register(classOf[BSV[LDA.Count]])
-    kryo.register(classOf[BSV[Double]])
+    kryo.register(classOf[BSV[Float]])
 
     kryo.register(classOf[BDV[LDA.Count]])
     kryo.register(classOf[BDV[Double]])
 
     kryo.register(classOf[LDA.ED])
     kryo.register(classOf[LDA.VD])
+    kryo.register(classOf[LDA.BOW])
 
     kryo.register(classOf[Random])
     kryo.register(classOf[LDA])
@@ -521,23 +517,12 @@ class FastLDA(
   numTopics: Int,
   numTerms: Int,
   numDocs: Long,
+  numTokens: Long,
   alpha: Float,
   beta: Float,
   alphaAS: Float,
   storageLevel: StorageLevel)
-  extends LDA(corpus, numTopics, numTerms, numDocs, alpha, beta, alphaAS, storageLevel) {
-  def this(bow: RDD[(Long, BSV[Int])],
-    numTopics: Int,
-    numTerms: Int,
-    alpha: Float,
-    beta: Float,
-    alphaAS: Float,
-    storageLevel: StorageLevel,
-    partStrategy: String,
-    computedModel: Broadcast[LocalLDAModel] = null) {
-    this(initializeCorpus(bow, numTopics, storageLevel, partStrategy, computedModel),
-      numTopics, numTerms, bow.first()._2.size, alpha, beta, alphaAS, storageLevel)
-  }
+  extends LDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, storageLevel) {
 
   override protected def sampleTokens(pseudoIter: Int): Graph[VD, (ED, ED)] = {
     val numPartitions = corpus.edges.partitions.length
@@ -695,23 +680,12 @@ class LightLDA(
   numTopics: Int,
   numTerms: Int,
   numDocs: Long,
+  numTokens: Long,
   alpha: Float,
   beta: Float,
   alphaAS: Float,
   storageLevel: StorageLevel)
-  extends LDA(corpus, numTopics, numTerms, numDocs, alpha, beta, alphaAS, storageLevel) {
-  def this(bow: RDD[(Long, BSV[Int])],
-    numTopics: Int,
-    numTerms: Int,
-    alpha: Float,
-    beta: Float,
-    alphaAS: Float,
-    storageLevel: StorageLevel,
-    partStrategy: String,
-    computedModel: Broadcast[LocalLDAModel] = null) {
-    this(initializeCorpus(bow, numTopics, storageLevel, partStrategy, computedModel),
-      numTopics, numTerms, bow.first()._2.size, alpha, beta, alphaAS, storageLevel)
-  }
+  extends LDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, storageLevel) {
 
   override protected def sampleTokens(pseudoIter: Int): Graph[VD, (ED, ED)] = {
     val numPartitions = corpus.edges.partitions.length
@@ -963,5 +937,39 @@ class LightLDA(
     val sv = wSparse(termTopicCounter)
     AliasTable.generateAlias(sv._2, sv._1, table)
     sv._1
+  }
+}
+
+object FastLDA {
+  def apply(bowDocs: RDD[BOW],
+    numTopics: Int,
+    alpha: Float,
+    beta: Float,
+    alphaAS: Float,
+    storageLevel: StorageLevel,
+    partStrategy: String,
+    computedModel: Broadcast[LocalLDAModel] = null) = {
+    val numTerms = bowDocs.first()._2.size
+    val numDocs = bowDocs.count()
+    val corpus = initializeCorpus(bowDocs, numTopics, storageLevel, partStrategy, computedModel)
+    val numTokens = corpus.edges.map(e => e.attr.length.toDouble).sum().toLong
+    new FastLDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, storageLevel)
+  }
+}
+
+object LightLDA {
+  def apply(bowDocs: RDD[BOW],
+    numTopics: Int,
+    alpha: Float,
+    beta: Float,
+    alphaAS: Float,
+    storageLevel: StorageLevel,
+    partStrategy: String,
+    computedModel: Broadcast[LocalLDAModel] = null) = {
+    val numTerms = bowDocs.first()._2.size
+    val numDocs = bowDocs.count()
+    val corpus = initializeCorpus(bowDocs, numTopics, storageLevel, partStrategy, computedModel)
+    val numTokens = corpus.edges.map(e => e.attr.length.toDouble).sum().toLong
+    new LightLDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, storageLevel)
   }
 }
