@@ -454,8 +454,9 @@ object LDA {
       }, numTopics)
     ).reduceByKey(sampledCorpus.vertices.partitioner.get, _ += _)
     println(sampledCorpus.numVertices, deltaCounter.count())
-    sampledCorpus.joinVertices(deltaCounter)((vid, counter, delta) => counter += delta)
-      .mapEdges(edge => edge.attr._2)
+    sampledCorpus.joinVertices(deltaCounter)((vid, counter, delta) => counter += delta
+    ).mapVertices((id, counter) => {counter.compact(); counter}
+      ).mapEdges(edge => edge.attr._2)
   }
 
   private def partUpdaterIterator(pit: Iterator[Edge[_]],
@@ -467,7 +468,10 @@ object LDA {
       val termSum = BSV.zeros[Count](numTopics)
       val docSum = BSV.zeros[Count](numTopics)
       update(edge, termSum, docSum)
-      Iterator((vid, termSum), (did, docSum))
+      val it = Iterator[(VertexId, VD)]()
+      if (termSum.used != 0) it ++ Iterator.single((vid, termSum))
+      if (docSum.used != 0) it ++ Iterator.single((did, docSum))
+      it
     })
   }
 }
@@ -997,7 +1001,7 @@ object FastLDA {
     val numTerms = bowDocs.first()._2.size
     val numDocs = bowDocs.count()
     val corpus = initializeCorpus(bowDocs, numTopics, storageLevel, partStrategy, computedModel)
-    val numTokens = corpus.edges.map(e => e.attr.length.toDouble).sum().toLong
+    val numTokens = corpus.edges.map(e => e.attr.length.toLong).reduce(_ + _)
     new FastLDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, storageLevel)
   }
 }
@@ -1014,7 +1018,7 @@ object LightLDA {
     val numTerms = bowDocs.first()._2.size
     val numDocs = bowDocs.count()
     val corpus = initializeCorpus(bowDocs, numTopics, storageLevel, partStrategy, computedModel)
-    val numTokens = corpus.edges.map(e => e.attr.length.toDouble).sum().toLong
+    val numTokens = corpus.edges.map(e => e.attr.length.toLong).reduce(_ + _)
     new LightLDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, storageLevel)
   }
 }
