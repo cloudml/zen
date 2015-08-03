@@ -427,74 +427,76 @@ object LDA {
 
   private def initCounter(initCorpus: Graph[VD, ED],
     numTopics: Int): Graph[VD, ED] = {
-    val newCounter = initCorpus.edges.mapPartitions(iter => {
-      var lastVid = Long.MaxValue
-      var lastTermSum: BSV[Count] = null
-      iter.flatMap(edge => {
-        val vid = edge.srcId
-        val did = edge.dstId
-        val termSum = if (vid == lastVid) lastTermSum else BSV.zeros[Count](numTopics)
-        var docSum = BSV.zeros[Count](numTopics)
-        val topics = edge.attr
+    val newCounter = initCorpus.edges.mapPartitions(iter =>
+      partUpdaterIterator(iter, (edge, termSum, docSum) => {
+        val topics = edge.attr.asInstanceOf[ED]
         for (t <- topics) {
           termSum(t) += 1
           docSum(t) += 1
         }
-        if (vid == lastVid) {
-          Iterator.single((did, docSum))
-        } else {
-          val sendVid = lastVid
-          val sendTermSum = lastTermSum
-          lastVid = vid
-          lastTermSum = termSum
-          if (sendVid == -1L) {
-            Iterator.single((did, docSum))
-          } else {
-            Iterator((sendVid, sendTermSum), (did, docSum))
-          }
-        }
-      }) ++ Iterator((lastVid, lastTermSum))
-    }).reduceByKey(initCorpus.vertices.partitioner.get, _ += _)
+      }, numTopics)
+    ).reduceByKey(initCorpus.vertices.partitioner.get, _ += _)
     println(initCorpus.numVertices, newCounter.count())
     initCorpus.joinVertices(newCounter)((vid, n, counter) => counter)
   }
 
   private def updateCounter(sampledCorpus: Graph[VD, (ED, ED)],
     numTopics: Int): Graph[VD, ED] = {
-    val deltaCounter = sampledCorpus.edges.mapPartitions(iter => {
-      var lastVid = Long.MaxValue
-      var lastTermDeltaSum: BSV[Count] = null
-      iter.flatMap(edge => {
-        val vid = edge.srcId
-        val did = edge.dstId
-        val termDeltaSum = if (vid == lastVid) lastTermDeltaSum else BSV.zeros[Count](numTopics)
-        var docDeltaSum = BSV.zeros[Count](numTopics)
-        val prevTopics = edge.attr._1
-        val newTopics = edge.attr._2
+    val deltaCounter = sampledCorpus.edges.mapPartitions(iter =>
+      partUpdaterIterator(iter, (edge, termSum, docSum) => {
+        val (prevTopics, newTopics) = edge.attr.asInstanceOf[(ED, ED)]
         for ((t, nt) <- prevTopics.zip(newTopics).filter(t => t._1 != t._2)) {
-          termDeltaSum(t) -= 1
-          termDeltaSum(nt) += 1
-          docDeltaSum(t) -= 1
-          docDeltaSum(nt) += 1
+          termSum(t) -= 1
+          termSum(nt) += 1
+          docSum(t) -= 1
+          docSum(nt) += 1
         }
-        if (vid == lastVid || lastVid == -1L) {
-          Iterator.single((did, docDeltaSum))
-        } else {
-          val sendVid = lastVid
-          val sendTermDeltaSum = lastTermDeltaSum
-          lastVid = vid
-          lastTermDeltaSum = termDeltaSum
-          if (sendVid == -1L) {
-            Iterator.single((did, docDeltaSum))
-          } else {
-            Iterator((sendVid, sendTermDeltaSum), (did, docDeltaSum))
-          }
-        }
-      }) ++ Iterator((lastVid, lastTermDeltaSum))
-    }).reduceByKey(sampledCorpus.vertices.partitioner.get, _ += _)
+      }, numTopics)
+    ).reduceByKey(sampledCorpus.vertices.partitioner.get, _ += _)
     println(sampledCorpus.numVertices, deltaCounter.count())
     sampledCorpus.joinVertices(deltaCounter)((vid, counter, delta) => counter += delta)
       .mapEdges(edge => edge.attr._2)
+  }
+
+  private def partUpdaterIterator(pit: Iterator[Edge[_]],
+    update: (Edge[_], VD, VD) => Unit,
+    numTopics: Int): Iterator[(VertexId, VD)] = {
+    new Iterator[(VertexId, VD)] {
+      var lastVid = Long.MaxValue
+      var lastTermSum: BSV[Count] = null
+      var cachedTermItem: (VertexId, VD) = null
+      var isOver = false
+
+      def hasNext: Boolean = {
+        pit.hasNext || cachedTermItem != null
+      }
+
+      def next(): (VertexId, VD) = {
+        if (cachedTermItem != null) {
+          val ret = cachedTermItem
+          cachedTermItem = null
+          ret
+        } else if (!pit.hasNext && !isOver) {
+          isOver = true
+          (lastVid, lastTermSum)
+        } else {
+          val edge = pit.next()
+          val vid = edge.srcId
+          val did = edge.dstId
+          val termSum = if (vid == lastVid) lastTermSum else BSV.zeros[Count](numTopics)
+          var docSum = BSV.zeros[Count](numTopics)
+          update(edge, termSum, docSum)
+          if (vid != lastVid) {
+            if (lastVid != Long.MaxValue) {
+              cachedTermItem = (lastVid, lastTermSum)
+            }
+            lastVid = vid
+            lastTermSum = termSum
+          }
+          (did, docSum)
+        }
+      }
+    }
   }
 }
 
