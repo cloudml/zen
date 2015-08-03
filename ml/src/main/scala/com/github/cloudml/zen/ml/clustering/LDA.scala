@@ -948,7 +948,7 @@ object FastLDA {
     alphaAS: Float,
     storageLevel: StorageLevel,
     partStrategy: String,
-    computedModel: Broadcast[LocalLDAModel] = null) = {
+    computedModel: Broadcast[LocalLDAModel] = null): FastLDA = {
     val numTerms = bowDocs.first()._2.size
     val numDocs = bowDocs.count()
     val corpus = initializeCorpus(bowDocs, numTopics, storageLevel, partStrategy, computedModel)
@@ -965,7 +965,7 @@ object LightLDA {
     alphaAS: Float,
     storageLevel: StorageLevel,
     partStrategy: String,
-    computedModel: Broadcast[LocalLDAModel] = null) = {
+    computedModel: Broadcast[LocalLDAModel] = null): LightLDA = {
     val numTerms = bowDocs.first()._2.size
     val numDocs = bowDocs.count()
     val corpus = initializeCorpus(bowDocs, numTopics, storageLevel, partStrategy, computedModel)
