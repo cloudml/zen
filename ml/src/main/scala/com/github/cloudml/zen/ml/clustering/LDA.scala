@@ -440,14 +440,18 @@ object LDA {
           termSum(t) += 1
           docSum(t) += 1
         }
-        if (vid == lastVid || lastVid == -1L) {
+        if (vid == lastVid) {
           Iterator.single((did, docSum))
         } else {
           val sendVid = lastVid
           val sendTermSum = lastTermSum
           lastVid = vid
           lastTermSum = termSum
-          Iterator((sendVid, sendTermSum), (did, docSum))
+          if (sendVid == -1L) {
+            Iterator.single((did, docSum))
+          } else {
+            Iterator((sendVid, sendTermSum), (did, docSum))
+          }
         }
       })
       if (lastVid != -1L) {
@@ -456,7 +460,8 @@ object LDA {
         major
       }
     }).reduceByKey(initCorpus.vertices.partitioner.get, _ += _)
-    GraphImpl(VertexRDD(newCounter), initCorpus.edges)
+    println(initCorpus.numVertices, newCounter.count())
+    initCorpus.joinVertices(newCounter)((vid, n, counter) => counter)
   }
 
   private def updateCounter(sampledCorpus: Graph[VD, (ED, ED)],
@@ -484,7 +489,11 @@ object LDA {
           val sendTermDeltaSum = lastTermDeltaSum
           lastVid = vid
           lastTermDeltaSum = termDeltaSum
-          Iterator((sendVid, sendTermDeltaSum), (did, docDeltaSum))
+          if (sendVid == -1L) {
+            Iterator.single((did, docDeltaSum))
+          } else {
+            Iterator((sendVid, sendTermDeltaSum), (did, docDeltaSum))
+          }
         }
       })
       if (lastVid != -1L) {
@@ -493,6 +502,7 @@ object LDA {
         major
       }
     }).reduceByKey(sampledCorpus.vertices.partitioner.get, _ += _)
+    println(sampledCorpus.numVertices, deltaCounter.count())
     sampledCorpus.joinVertices(deltaCounter)((vid, counter, delta) => counter += delta)
       .mapEdges(edge => edge.attr._2)
   }
