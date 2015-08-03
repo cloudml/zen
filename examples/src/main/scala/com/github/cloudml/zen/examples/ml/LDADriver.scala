@@ -177,14 +177,14 @@ object LDADriver {
 
   def parseArgs(args: Array[String]): OptionMap = {
     val usage = "Usage: LDADriver <Args> [Options] <Input path> <Output path>\n" +
-      "  Args: -numTopics:<Int> -alpha:<Float> -beta:<Float> -alphaAS:<Float>\n" +
-      "        -totalIter:<Int> -numPartitions:<Int>\n" +
-      "  Options: -sampleRate:<Double(*1.0)>\n" +
-      "           -LDAAlgorithm:<*FastLDA|LightLDA>\n" +
-      "           -storageLevel:<StorageLevel(*MEMORY_AND_DISK)>\n" +
-      "           -partStrategy:<*DBH|Edge2D>\n" +
-      "           -saveAsSolid:<true|*false>"
-      // "-useKryoSerializer <true|*false>"
+      "  Args: -numTopics=<Int> -alpha=<Float> -beta=<Float> -alphaAS=<Float>\n" +
+      "        -totalIter=<Int> -numPartitions=<Int>\n" +
+      "  Options: -sampleRate=<Double(*1.0)>\n" +
+      "           -LDAAlgorithm=<*FastLDA|LightLDA>\n" +
+      "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK)>\n" +
+      "           -partStrategy=<*DBH|Edge2D>\n" +
+      "           -saveAsSolid=<true|*false>"
+      // "-useKryoSerializer=<true|*false>"
     if (args.length < 8) {
       println(usage)
       System.exit(1)
@@ -194,13 +194,13 @@ object LDADriver {
       def isSwitch(s: String) = s(0) == '-'
       list match {
         case Nil => map
-        case head :: tail if isSwitch(head) =>
-          val kv = head.toLowerCase.split(":", 1)
-          nextOption(map ++ Map(kv(0).substring(1) -> kv(1)), tail)
-        case head :: tail if !isSwitch(head) =>
-          nextOption(map ++ Map("inpath" -> head), tail)
         case head :: Nil if !isSwitch(head) =>
           nextOption(map ++ Map("outpath" -> head), Nil)
+        case head :: tail if !isSwitch(head) =>
+          nextOption(map ++ Map("inpath" -> head), tail)
+        case head :: tail if isSwitch(head) =>
+          val kv = head.toLowerCase.split("=", 2)
+          nextOption(map ++ Map(kv(0).substring(1) -> kv(1)), tail)
         case _ =>
           println(usage)
           System.exit(1)
