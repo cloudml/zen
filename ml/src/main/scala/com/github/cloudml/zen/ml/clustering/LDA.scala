@@ -428,9 +428,9 @@ object LDA {
   private def initCounter(initCorpus: Graph[VD, ED],
     numTopics: Int): Graph[VD, ED] = {
     val newCounter = initCorpus.edges.mapPartitions(iter => {
-      var lastVid = -1L
+      var lastVid = Long.MaxValue
       var lastTermSum: BSV[Count] = null
-      val major = iter.flatMap(edge => {
+      iter.flatMap(edge => {
         val vid = edge.srcId
         val did = edge.dstId
         val termSum = if (vid == lastVid) lastTermSum else BSV.zeros[Count](numTopics)
@@ -453,12 +453,7 @@ object LDA {
             Iterator((sendVid, sendTermSum), (did, docSum))
           }
         }
-      })
-      if (lastVid != -1L) {
-        major ++ Iterator((lastVid, lastTermSum))
-      } else {
-        major
-      }
+      }) ++ Iterator((lastVid, lastTermSum))
     }).reduceByKey(initCorpus.vertices.partitioner.get, _ += _)
     println(initCorpus.numVertices, newCounter.count())
     initCorpus.joinVertices(newCounter)((vid, n, counter) => counter)
@@ -467,9 +462,9 @@ object LDA {
   private def updateCounter(sampledCorpus: Graph[VD, (ED, ED)],
     numTopics: Int): Graph[VD, ED] = {
     val deltaCounter = sampledCorpus.edges.mapPartitions(iter => {
-      var lastVid = -1L
+      var lastVid = Long.MaxValue
       var lastTermDeltaSum: BSV[Count] = null
-      val major = iter.flatMap(edge => {
+      iter.flatMap(edge => {
         val vid = edge.srcId
         val did = edge.dstId
         val termDeltaSum = if (vid == lastVid) lastTermDeltaSum else BSV.zeros[Count](numTopics)
@@ -495,12 +490,7 @@ object LDA {
             Iterator((sendVid, sendTermDeltaSum), (did, docDeltaSum))
           }
         }
-      })
-      if (lastVid != -1L) {
-        major ++ Iterator((lastVid, lastTermDeltaSum))
-      } else {
-        major
-      }
+      }) ++ Iterator((lastVid, lastTermDeltaSum))
     }).reduceByKey(sampledCorpus.vertices.partitioner.get, _ += _)
     println(sampledCorpus.numVertices, deltaCounter.count())
     sampledCorpus.joinVertices(deltaCounter)((vid, counter, delta) => counter += delta)
