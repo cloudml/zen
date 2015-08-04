@@ -27,7 +27,6 @@ import com.github.cloudml.zen.ml.clustering.LDAUtils._
 import com.github.cloudml.zen.ml.util.{XORShiftRandom, AliasTable}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.graphx._
-import org.apache.spark.graphx.impl.GraphImpl
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
 import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
 import org.apache.spark.rdd.RDD
@@ -84,32 +83,33 @@ abstract class LDA(
     termVertices.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
   }
 
-  def runGibbsSampling(totalIter: Int): Unit = {
+  def runGibbsSampling(totalIter: Int, ChkptInterval: Int): Unit = {
     // logInfo(s"Before Gibbs sampling: pplx=${perplexity()}")
     for (iter <- 1 to totalIter) {
       logInfo(s"Start Gibbs sampling (Iteration $iter/$totalIter)")
       val startedAt = System.nanoTime()
-      gibbsSampling(iter)
+      gibbsSampling(iter, ChkptInterval)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
       // logInfo(s"Gibbs sampling (Iteration $iter/$totalIter): pplx=${perplexity()}")
       logInfo(s"End Gibbs sampling (Iteration $iter/$totalIter) takes: $elapsedSeconds secs")
     }
   }
 
-  private def gibbsSampling(sampIter: Int): Unit = {
+  private def gibbsSampling(sampIter: Int, ChkptInterval: Int): Unit = {
     val prevCorpus = corpus
     val sampledCorpus = sampleTokens(corpus, totalTopicCounter, sampIter + seed,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
-    // sampledCorpus.vertices.setName(s"sampledVertices-$sampIter")
     sampledCorpus.edges.persist(storageLevel).setName(s"sampledEdges-$sampIter").count()
     corpus = updateCounter(sampledCorpus, numTopics)
-    corpus.vertices.persist(storageLevel).setName(s"vertices-$sampIter").count()
-    corpus.edges.persist(storageLevel).setName(s"edges-$sampIter").count()
-    prevCorpus.unpersist(blocking = false)
-    if (sampIter % 10 == 0) {
+    corpus.vertices.persist(storageLevel).setName(s"vertices-$sampIter")
+    corpus.edges.persist(storageLevel).setName(s"edges-$sampIter")
+    if (ChkptInterval > 0 && sampIter % ChkptInterval == 0) {
       corpus.checkpoint()
     }
-    sampledCorpus.unpersist(blocking = false)
+    corpus.vertices.count()
+    corpus.edges.count()
+    prevCorpus.unpersist(blocking=false)
+    sampledCorpus.unpersist(blocking=false)
     totalTopicCounter = collectTopicCounter()
   }
 
@@ -132,7 +132,7 @@ abstract class LDA(
     for (iter <- 1 to saveIter) {
       logInfo(s"Save TopicModel (Iteration $iter/$saveIter)")
       var previousTermTopicCounter = termTopicCounter
-      gibbsSampling(iter)
+      gibbsSampling(iter, 0)
       val newTermTopicCounter = termVertices
       termTopicCounter = Option(termTopicCounter).map(_.join(newTermTopicCounter).map {
         case (term, (a, b)) =>
@@ -140,7 +140,7 @@ abstract class LDA(
       }).getOrElse(newTermTopicCounter)
 
       termTopicCounter.persist(storageLevel).count()
-      Option(previousTermTopicCounter).foreach(_.unpersist(blocking = false))
+      Option(previousTermTopicCounter).foreach(_.unpersist(blocking=false))
       previousTermTopicCounter = termTopicCounter
     }
     val rand = new Random()
@@ -280,6 +280,7 @@ object LDA {
     alphaAS: Float,
     LDAAlgorithm: String,
     partStrategy: String,
+    chkptInterval: Int,
     storageLevel: StorageLevel): DistributedLDAModel = {
     val lda: LDA = LDAAlgorithm match {
       case "lightlda" =>
@@ -291,7 +292,7 @@ object LDA {
       case _ =>
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
-    lda.runGibbsSampling(totalIter)
+    lda.runGibbsSampling(totalIter, chkptInterval)
     lda.saveModel(1)
   }
 
@@ -301,6 +302,7 @@ object LDA {
     totalIter: Int,
     LDAAlgorithm: String,
     partStrategy: String,
+    chkptInterval: Int,
     storageLevel: StorageLevel): DistributedLDAModel = {
     val numTopics = computedModel.numTopics
     val alpha = computedModel.alpha
@@ -317,8 +319,8 @@ object LDA {
       case _ =>
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
-    broadcastModel.unpersist(blocking = false)
-    lda.runGibbsSampling(totalIter)
+    broadcastModel.unpersist(blocking=false)
+    lda.runGibbsSampling(totalIter, chkptInterval)
     lda.saveModel(1)
   }
 
@@ -339,11 +341,10 @@ object LDA {
       }
     })
     var initCorpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
-    initCorpus.persist(storageLevel)
-    initCorpus.vertices.setName("initVertices").count()
-    val numEdges = initCorpus.edges.setName("initEdges").count()
+    initCorpus.vertices.persist(storageLevel).setName("initVertices").count()
+    val numEdges = initCorpus.edges.persist(storageLevel).setName("initEdges").count()
     println(s"edges in the corpus: $numEdges")
-    docs.unpersist(blocking = false)
+    docs.unpersist(blocking=false)
     initCorpus = partStrategy match {
       case "dbh" =>
         DBHPartitioner.partitionByDBH[VD, ED](initCorpus, storageLevel)
@@ -353,10 +354,12 @@ object LDA {
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     val corpus = initCounter(initCorpus, numTopics)
+    corpus.vertices.persist(storageLevel).setName("vertices")
+    corpus.edges.persist(storageLevel).setName("edges")
     corpus.checkpoint()
-    corpus.vertices.persist(storageLevel).setName("vertices").count()
-    corpus.edges.persist(storageLevel).setName("edges").count()
-    initCorpus.unpersist(blocking = false)
+    corpus.vertices.count()
+    corpus.edges.count()
+    initCorpus.unpersist(blocking=false)
     corpus
   }
 
@@ -429,23 +432,22 @@ object LDA {
   private def initCounter(initCorpus: Graph[VD, ED],
     numTopics: Int): Graph[VD, ED] = {
     val newCounter = initCorpus.edges.mapPartitions(iter =>
-      partUpdaterIterator(iter, (edge, termSum, docSum) => {
-        val topics = edge.attr.asInstanceOf[ED]
+      partUpdaterIterator[ED](iter, (edge, termSum, docSum) => {
+        val topics = edge.attr
         for (t <- topics) {
           termSum(t) += 1
           docSum(t) += 1
         }
       }, numTopics)
     ).reduceByKey(initCorpus.vertices.partitioner.get, _ += _)
-    println(initCorpus.numVertices, newCounter.count())
-    initCorpus.joinVertices(newCounter)((vid, n, counter) => counter)
+    initCorpus.joinVertices(newCounter)((_, _, counter) => counter)
   }
 
   private def updateCounter(sampledCorpus: Graph[VD, (ED, ED)],
     numTopics: Int): Graph[VD, ED] = {
     val deltaCounter = sampledCorpus.edges.mapPartitions(iter =>
-      partUpdaterIterator(iter, (edge, termSum, docSum) => {
-        val (prevTopics, newTopics) = edge.attr.asInstanceOf[(ED, ED)]
+      partUpdaterIterator[(ED, ED)](iter, (edge, termSum, docSum) => {
+        val (prevTopics, newTopics) = edge.attr
         for ((t, nt) <- prevTopics.zip(newTopics).filter(t => t._1 != t._2)) {
           termSum(t) -= 1
           termSum(nt) += 1
@@ -454,14 +456,13 @@ object LDA {
         }
       }, numTopics)
     ).reduceByKey(sampledCorpus.vertices.partitioner.get, _ += _)
-    println(sampledCorpus.numVertices, deltaCounter.count())
-    sampledCorpus.joinVertices(deltaCounter)((vid, counter, delta) => {
+    sampledCorpus.joinVertices(deltaCounter)((_, counter, delta) => {
       counter += delta; counter.compact(); counter }
-    ).mapEdges(edge => edge.attr._2)
+    ).mapEdges(_.attr._2)
   }
 
-  private def partUpdaterIterator(pit: Iterator[Edge[_]],
-    update: (Edge[_], VD, VD) => Unit,
+  private def partUpdaterIterator[T](pit: Iterator[Edge[T]],
+    update: (Edge[T], VD, VD) => Unit,
     numTopics: Int): Iterator[(VertexId, VD)] = {
     pit.flatMap(edge => {
       val vid = edge.srcId
@@ -521,7 +522,7 @@ class FastLDA(
     alphaAS: Float,
     beta: Float): Graph[VD, (ED, ED)] = {
     val numPartitions = corpus.edges.partitions.length
-    val nweGraph = corpus.mapTriplets((pid, iter) => {
+    corpus.mapTriplets((pid, iter) => {
       val gen = new XORShiftRandom(numPartitions * pseudoIter + pid)
       // table is a per term data structure
       // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
@@ -561,8 +562,6 @@ class FastLDA(
           (topics, newTopics)
       }
     }, TripletFields.All)
-    // GraphImpl(nweGraph.vertices.mapValues(t => null), nweGraph.edges)
-    nweGraph
   }
 
   private def tokenSampling(gen: Random,
@@ -719,7 +718,7 @@ class LightLDA(
     alphaAS: Float,
     beta: Float): Graph[VD, (ED, ED)] = {
     val numPartitions = corpus.edges.partitions.length
-    val nweGraph = corpus.mapTriplets((pid, iter) => {
+    corpus.mapTriplets((pid, iter) => {
       val gen = new Random(numPartitions * pseudoIter + pid)
       val docTableCache = new AppendOnlyMap[VertexId, SoftReference[(Float, AliasTable)]]()
 
@@ -804,7 +803,6 @@ class LightLDA(
           (topics, newTopics)
       }
     }, TripletFields.All)
-    GraphImpl(nweGraph.vertices.mapValues(t => null), nweGraph.edges)
   }
 
   /**
