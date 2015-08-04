@@ -454,9 +454,9 @@ object LDA {
       }, numTopics)
     ).reduceByKey(sampledCorpus.vertices.partitioner.get, _ += _)
     println(sampledCorpus.numVertices, deltaCounter.count())
-    sampledCorpus.joinVertices(deltaCounter)((vid, counter, delta) => counter += delta
-    ).mapVertices((id, counter) => {counter.compact(); counter}
-      ).mapEdges(edge => edge.attr._2)
+    sampledCorpus.joinVertices(deltaCounter)((vid, counter, delta) => {
+      counter += delta; counter.compact(); counter }
+    ).mapEdges(edge => edge.attr._2)
   }
 
   private def partUpdaterIterator(pit: Iterator[Edge[_]],
@@ -468,9 +468,13 @@ object LDA {
       val termSum = BSV.zeros[Count](numTopics)
       val docSum = BSV.zeros[Count](numTopics)
       update(edge, termSum, docSum)
-      val it = Iterator[(VertexId, VD)]()
-      if (termSum.used != 0) it ++ Iterator.single((vid, termSum))
-      if (docSum.used != 0) it ++ Iterator.single((did, docSum))
+      var it = Iterator[(VertexId, VD)]()
+      if (termSum.used != 0) {
+        it = it ++ Iterator.single((vid, termSum))
+      }
+      if (docSum.used != 0) {
+        it = it ++ Iterator.single((did, docSum))
+      }
       it
     })
   }
