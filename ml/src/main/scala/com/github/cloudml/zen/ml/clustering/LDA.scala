@@ -353,7 +353,7 @@ object LDA {
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     val corpus = initCounter(initCorpus, numTopics)
-    // corpus.checkpoint()
+    corpus.checkpoint()
     corpus.vertices.persist(storageLevel).setName("vertices").count()
     corpus.edges.persist(storageLevel).setName("edges").count()
     initCorpus.unpersist(blocking = false)
@@ -561,7 +561,8 @@ class FastLDA(
           (topics, newTopics)
       }
     }, TripletFields.All)
-    GraphImpl(nweGraph.vertices.mapValues(t => null), nweGraph.edges)
+    // GraphImpl(nweGraph.vertices.mapValues(t => null), nweGraph.edges)
+    nweGraph
   }
 
   private def tokenSampling(gen: Random,
