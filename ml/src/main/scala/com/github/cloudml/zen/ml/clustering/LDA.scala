@@ -103,7 +103,7 @@ abstract class LDA(
     corpus = updateCounter(sampledCorpus, numTopics)
     corpus.vertices.persist(storageLevel).setName(s"vertices-$sampIter")
     corpus.edges.persist(storageLevel).setName(s"edges-$sampIter")
-    if (ChkptInterval > 0 && sampIter % ChkptInterval == 0) {
+    if (ChkptInterval > 0 && sampIter % ChkptInterval == 1) {
       corpus.checkpoint()
     }
     corpus.vertices.count()
@@ -354,11 +354,8 @@ object LDA {
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     val corpus = initCounter(initCorpus, numTopics)
-    corpus.vertices.persist(storageLevel).setName("vertices")
-    corpus.edges.persist(storageLevel).setName("edges")
-    corpus.checkpoint()
-    corpus.vertices.count()
-    corpus.edges.count()
+    corpus.vertices.persist(storageLevel).setName("vertices").count()
+    corpus.edges.persist(storageLevel).setName("edges").count()
     initCorpus.unpersist(blocking=false)
     corpus
   }
