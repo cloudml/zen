@@ -24,9 +24,8 @@ import breeze.linalg.functions.euclideanDistance
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import breeze.stats.distributions.Poisson
 import com.github.cloudml.zen.ml.util.SharedSparkContext
-import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.google.common.io.Files
-import org.apache.spark.mllib.linalg.{Vector => SV}
+import org.apache.spark.storage.StorageLevel
 import org.scalatest.FunSuite
 
 class LDASuite extends FunSuite with SharedSparkContext {
@@ -40,12 +39,12 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val data = sc.parallelize(corpus, 2)
     data.cache()
     val pps = new Array[Double](incrementalLearning)
-    val lda = new FastLDA(data, numTopics, alpha, beta, alphaAS, useDBHStrategy = true)
+    val lda = FastLDA(data, numTopics, alpha, beta, alphaAS, storageLevel, partStrategy)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
-      lda.runGibbsSampling(totalIterations)
-      pps(i) = lda.perplexity
+      lda.runGibbsSampling(totalIterations, chkptInterval)
+      pps(i) = lda.perplexity()
       i += 1
     }
 
@@ -53,7 +52,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     pps.foreach(println)
 
     val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
-    assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.size > 0.6)
+    assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
     assert(pps.head - pps.last > 0)
 
     val ldaModel = lda.saveModel()
@@ -88,12 +87,12 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val data = sc.parallelize(corpus, 2)
     data.cache()
     val pps = new Array[Double](incrementalLearning)
-    val lda = new LightLDA(data, numTopics, alpha, beta, alphaAS, useDBHStrategy = true)
+    val lda = LightLDA(data, numTopics, alpha, beta, alphaAS, storageLevel, partStrategy)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
-      lda.runGibbsSampling(totalIterations)
-      pps(i) = lda.perplexity
+      lda.runGibbsSampling(totalIterations, chkptInterval)
+      pps(i) = lda.perplexity()
       i += 1
     }
 
@@ -101,14 +100,13 @@ class LDASuite extends FunSuite with SharedSparkContext {
     pps.foreach(println)
 
     val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
-    assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.size > 0.6)
+    assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
     assert(pps.head - pps.last > 0)
 
     val ldaModel = lda.saveModel(3).toLocalLDAModel()
-    val rand = new Random
     data.collect().foreach { case (_, sv) =>
-      val a = toBreeze(ldaModel.inference(sv))
-      val b = toBreeze(ldaModel.inference(sv))
+      val a = ldaModel.inference(sv)
+      val b = ldaModel.inference(sv)
       val sim: Double = euclideanDistance(a, b)
       assert(sim < 0.1)
     }
@@ -126,25 +124,28 @@ object LDASuite {
   val totalIterations = 2
   val burnInIterations = 1
   val incrementalLearning = 10
+  val partStrategy = "dbh"
+  val chkptInterval = 10
+  val storageLevel = StorageLevel.MEMORY_AND_DISK
 
   /**
    * Generate a random LDA model, i.e. the topic-term matrix.
    */
-  def generateRandomLDAModel(numTopics: Int, numTerms: Int): Array[BDV[Double]] = {
-    val model = new Array[BDV[Double]](numTopics)
-    val width = numTerms * 1.0 / numTopics
+  def generateRandomLDAModel(numTopics: Int, numTerms: Int): Array[BDV[Float]] = {
+    val model = new Array[BDV[Float]](numTopics)
+    val width = numTerms.toFloat / numTopics
     var topic = 0
     var i = 0
     while (topic < numTopics) {
       val topicCentroid = width * (topic + 1)
-      model(topic) = BDV.zeros[Double](numTerms)
+      model(topic) = BDV.zeros[Float](numTerms)
       i = 0
       while (i < numTerms) {
         // treat the term list as a circle, so the distance between the first one and the last one
         // is 1, not n-1.
         val distance = Math.abs(topicCentroid - i) % (numTerms / 2)
         // Possibility is decay along with distance
-        model(topic)(i) = 1.0 / (1 + Math.abs(distance))
+        model(topic)(i) = 1F / (1F + Math.abs(distance))
         i += 1
       }
       topic += 1
@@ -156,8 +157,8 @@ object LDASuite {
    * Sample one document given the topic-term matrix.
    */
   def ldaSampler(
-    model: Array[BDV[Double]],
-    topicDist: BDV[Double],
+    model: Array[BDV[Float]],
+    topicDist: BDV[Float],
     numTermsPerDoc: Int): Array[Int] = {
     val samples = new Array[Int](numTermsPerDoc)
     val rand = new Random()
@@ -174,31 +175,31 @@ object LDASuite {
    * Sample corpus (many documents) from a given topic-term matrix.
    */
   def sampleCorpus(
-    model: Array[BDV[Double]],
+    model: Array[BDV[Float]],
     numDocs: Int,
     numTerms: Int,
-    numTopics: Int): Array[(Long, SV)] = {
+    numTopics: Int): Array[(Long, BSV[Int])] = {
     (0 until numDocs).map { i =>
       val rand = new Random()
       val numTermsPerDoc = Poisson.distribution(expectedDocLength).sample()
       val numTopicsPerDoc = rand.nextInt(numTopics / 2) + 1
-      val topicDist = BDV.zeros[Double](numTopics)
+      val topicDist = BDV.zeros[Float](numTopics)
       (0 until numTopicsPerDoc).foreach { _ =>
         topicDist(rand.nextInt(numTopics)) += 1
       }
-      val sv = BSV.zeros[Double](numTerms)
+      val sv = BSV.zeros[Int](numTerms)
       ldaSampler(model, topicDist, numTermsPerDoc).foreach { term => sv(term) += 1 }
-      (i.toLong, fromBreeze(sv))
+      (i.toLong, sv)
     }.toArray
   }
 
   /**
    * A multinomial distribution sampler, using roulette method to sample an Int back.
    */
-  def multinomialDistSampler(rand: Random, dist: BDV[Double]): Int = {
-    val distSum = rand.nextDouble() * breeze.linalg.sum[BDV[Double], Double](dist)
+  def multinomialDistSampler(rand: Random, dist: BDV[Float]): Int = {
+    val distSum = rand.nextFloat() * breeze.linalg.sum[BDV[Float], Float](dist)
 
-    def loop(index: Int, accum: Double): Int = {
+    def loop(index: Int, accum: Float): Int = {
       if (index == dist.length) return dist.length - 1
       val sum = accum - dist(index)
       if (sum <= 0) index else loop(index + 1, sum)
