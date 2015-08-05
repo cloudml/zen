@@ -57,7 +57,7 @@ object LDADriver {
 
     val conf = new SparkConf()
     val LDAAlgorithm = options.getOrElse("ldaalgorithm", "fastlda")
-    val storageLevel = StorageLevel.fromString(options.getOrElse("storagelevel", "MEMORY_AND_DISK").toUpperCase)
+    val storageLevel = StorageLevel.fromString(options.getOrElse("storagelevel", "MEMORY_AND_DISK_SER").toUpperCase)
     val partStrategy = options.getOrElse("partstrategy", "dbh")
     val chkptInterval = options.getOrElse("chkptinterval", "10").toInt
     val saveAsSolid = options.getOrElse("saveassolid", "false").toBoolean
@@ -183,7 +183,7 @@ object LDADriver {
       "        -totalIter=<Int> -numPartitions=<Int>\n" +
       "  Options: -sampleRate=<Double(*1.0)>\n" +
       "           -LDAAlgorithm=<*FastLDA|LightLDA>\n" +
-      "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK)>\n" +
+      "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK_SER)>\n" +
       "           -partStrategy=<*DBH|Edge2D>\n" +
       "           -chkptInterval=<Int(*10)>(0 or negative disables checkpoint)\n" +
       "           -saveAsSolid=<true|*false>"
