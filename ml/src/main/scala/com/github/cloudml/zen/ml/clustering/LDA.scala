@@ -99,17 +99,16 @@ abstract class LDA(
     val prevCorpus = corpus
     val sampledCorpus = sampleTokens(corpus, totalTopicCounter, sampIter + seed,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
-    sampledCorpus.edges.persist(storageLevel).setName(s"edges-$sampIter").first()
+    sampledCorpus.edges.persist(storageLevel).setName(s"edges-$sampIter").count()
     prevCorpus.edges.unpersist(blocking=false)
     corpus = updateCounter(sampledCorpus, numTopics)
-    corpus.vertices.persist(storageLevel).setName(s"vertices-$sampIter").first()
-    prevCorpus.vertices.unpersist(blocking=false)
+    corpus.vertices.persist(storageLevel).setName(s"vertices-$sampIter")
     if (ChkptInterval > 0 && sampIter % ChkptInterval == 1) {
       corpus.checkpoint()
       corpus.edges.first()
-      corpus.vertices.first()
     }
     totalTopicCounter = collectTopicCounter()
+    prevCorpus.vertices.unpersist(blocking=false)
   }
 
   protected def sampleTokens(graph: Graph[VD, ED],
@@ -336,7 +335,6 @@ object LDA {
       }
     })
     var initCorpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
-    initCorpus.vertices.persist(storageLevel).first()
     val numEdges = initCorpus.edges.persist(storageLevel).setName("initEdges").count()
     println(s"edges in the corpus: $numEdges")
     docs.unpersist(blocking=false)
@@ -349,8 +347,7 @@ object LDA {
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     val corpus = updateCounter(initCorpus, numTopics)
-    corpus.vertices.persist(storageLevel).setName("initVertices").first()
-    initCorpus.vertices.unpersist(blocking=false)
+    corpus.vertices.persist(storageLevel).setName("initVertices")
     corpus
   }
 
