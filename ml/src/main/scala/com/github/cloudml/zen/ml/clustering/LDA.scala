@@ -84,14 +84,14 @@ abstract class LDA(
   }
 
   def runGibbsSampling(totalIter: Int, ChkptInterval: Int): Unit = {
-    // logInfo(s"Before Gibbs sampling: pplx=${perplexity()}")
+    // println(s"Before Gibbs sampling: pplx=${perplexity()}")
     for (iter <- 1 to totalIter) {
-      logInfo(s"Start Gibbs sampling (Iteration $iter/$totalIter)")
+      println(s"Start Gibbs sampling (Iteration $iter/$totalIter)")
       val startedAt = System.nanoTime()
       gibbsSampling(iter, ChkptInterval)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      // logInfo(s"Gibbs sampling (Iteration $iter/$totalIter): pplx=${perplexity()}")
-      logInfo(s"End Gibbs sampling (Iteration $iter/$totalIter) takes: $elapsedSeconds secs")
+      // println(s"Gibbs sampling (Iteration $iter/$totalIter): pplx=${perplexity()}")
+      println(s"End Gibbs sampling (Iteration $iter/$totalIter) takes: $elapsedSeconds secs")
     }
   }
 
@@ -99,17 +99,16 @@ abstract class LDA(
     val prevCorpus = corpus
     val sampledCorpus = sampleTokens(corpus, totalTopicCounter, sampIter + seed,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
-    sampledCorpus.edges.persist(storageLevel).setName(s"sampledEdges-$sampIter").count()
+    sampledCorpus.edges.persist(storageLevel).setName(s"edges-$sampIter").first()
+    prevCorpus.edges.unpersist(blocking=false)
     corpus = updateCounter(sampledCorpus, numTopics)
-    corpus.vertices.persist(storageLevel).setName(s"vertices-$sampIter")
-    corpus.edges.persist(storageLevel).setName(s"edges-$sampIter")
+    corpus.vertices.persist(storageLevel).setName(s"vertices-$sampIter").first()
+    prevCorpus.vertices.unpersist(blocking=false)
     if (ChkptInterval > 0 && sampIter % ChkptInterval == 1) {
       corpus.checkpoint()
+      corpus.edges.first()
+      corpus.vertices.first()
     }
-    corpus.vertices.count()
-    corpus.edges.count()
-    prevCorpus.unpersist(blocking=false)
-    sampledCorpus.unpersist(blocking=false)
     totalTopicCounter = collectTopicCounter()
   }
 
@@ -121,7 +120,7 @@ abstract class LDA(
     numTerms: Int,
     alpha: Float,
     alphaAS: Float,
-    beta: Float): Graph[VD, (ED, ED)]
+    beta: Float): Graph[VD, ED]
 
   /**
    * Save the term-topic related model
@@ -174,13 +173,9 @@ abstract class LDA(
       (topic, simTopics.min)
     }.collect().toMap
     if (minMap.nonEmpty) {
-      val mergingCorpus = corpus.mapEdges(edges => {
-        val topics = edges.attr
-        val newTopics = edges.attr.map { topic =>
-          minMap.getOrElse(topic, topic)
-        }
-        (topics, newTopics)
-      })
+      val mergingCorpus = corpus.mapEdges{
+        _.attr.map(topic => minMap.getOrElse(topic, topic))
+      }
       corpus = updateCounter(mergingCorpus, numTopics)
     }
     minMap
@@ -341,7 +336,7 @@ object LDA {
       }
     })
     var initCorpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
-    initCorpus.vertices.persist(storageLevel).setName("initVertices").count()
+    initCorpus.vertices.persist(storageLevel).first()
     val numEdges = initCorpus.edges.persist(storageLevel).setName("initEdges").count()
     println(s"edges in the corpus: $numEdges")
     docs.unpersist(blocking=false)
@@ -353,10 +348,9 @@ object LDA {
       case _ =>
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
-    val corpus = initCounter(initCorpus, numTopics)
-    corpus.vertices.persist(storageLevel).setName("vertices").count()
-    corpus.edges.persist(storageLevel).setName("edges").count()
-    initCorpus.unpersist(blocking=false)
+    val corpus = updateCounter(initCorpus, numTopics)
+    corpus.vertices.persist(storageLevel).setName("initVertices").first()
+    initCorpus.vertices.unpersist(blocking=false)
     corpus
   }
 
@@ -426,40 +420,24 @@ object LDA {
     docTopic
   }
 
-  private def initCounter(initCorpus: Graph[VD, ED],
+  private def updateCounter(semiCorpus: Graph[VD, ED],
     numTopics: Int): Graph[VD, ED] = {
-    val newCounter = initCorpus.edges.mapPartitions(iter =>
-      partUpdaterIterator[ED](iter, (edge, termSum, docSum) => {
+    val newCounter = semiCorpus.edges.mapPartitions(iter =>
+      partUpdaterIterator(iter, (edge, termSum, docSum) => {
         val topics = edge.attr
         for (t <- topics) {
           termSum(t) += 1
           docSum(t) += 1
         }
       }, numTopics)
-    ).reduceByKey(initCorpus.vertices.partitioner.get, _ += _)
-    initCorpus.joinVertices(newCounter)((_, _, counter) => counter)
+    ).reduceByKey(semiCorpus.vertices.partitioner.get, _ += _)
+      .map((t) => (t._1, { t._2.compact(); t._2 }))
+    semiCorpus.mapVertices[VD]((_, _) => null)
+      .joinVertices(newCounter)((_, _, counter) => counter)
   }
 
-  private def updateCounter(sampledCorpus: Graph[VD, (ED, ED)],
-    numTopics: Int): Graph[VD, ED] = {
-    val deltaCounter = sampledCorpus.edges.mapPartitions(iter =>
-      partUpdaterIterator[(ED, ED)](iter, (edge, termSum, docSum) => {
-        val (prevTopics, newTopics) = edge.attr
-        for ((t, nt) <- prevTopics.zip(newTopics).filter(t => t._1 != t._2)) {
-          termSum(t) -= 1
-          termSum(nt) += 1
-          docSum(t) -= 1
-          docSum(nt) += 1
-        }
-      }, numTopics)
-    ).reduceByKey(sampledCorpus.vertices.partitioner.get, _ += _)
-    sampledCorpus.joinVertices(deltaCounter)((_, counter, delta) => {
-      counter += delta; counter.compact(); counter }
-    ).mapEdges(_.attr._2)
-  }
-
-  private def partUpdaterIterator[T](pit: Iterator[Edge[T]],
-    update: (Edge[T], VD, VD) => Unit,
+  private def partUpdaterIterator(pit: Iterator[Edge[ED]],
+    update: (Edge[ED], VD, VD) => Unit,
     numTopics: Int): Iterator[(VertexId, VD)] = {
     pit.flatMap(edge => {
       val vid = edge.srcId
@@ -467,14 +445,7 @@ object LDA {
       val termSum = BSV.zeros[Count](numTopics)
       val docSum = BSV.zeros[Count](numTopics)
       update(edge, termSum, docSum)
-      var it = Iterator[(VertexId, VD)]()
-      if (termSum.used != 0) {
-        it = it ++ Iterator.single((vid, termSum))
-      }
-      if (docSum.used != 0) {
-        it = it ++ Iterator.single((did, docSum))
-      }
-      it
+      Iterator((vid, termSum), (did, docSum))
     })
   }
 }
@@ -517,7 +488,7 @@ class FastLDA(
     numTerms: Int,
     alpha: Float,
     alphaAS: Float,
-    beta: Float): Graph[VD, (ED, ED)] = {
+    beta: Float): Graph[VD, ED] = {
     val numPartitions = corpus.edges.partitions.length
     corpus.mapTriplets((pid, iter) => {
       val gen = new XORShiftRandom(numPartitions * pseudoIter + pid)
@@ -538,7 +509,6 @@ class FastLDA(
           val termTopicCounter = triplet.srcAttr
           val docTopicCounter = triplet.dstAttr
           val topics = triplet.attr
-          val newTopics = topics.clone()
           for (i <- topics.indices) {
             val currentTopic = topics(i)
             dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, dData,
@@ -552,11 +522,11 @@ class FastLDA(
               docTopicCounter, dData, currentTopic)
 
             if (newTopic != currentTopic) {
-              newTopics(i) = newTopic
+              topics(i) = newTopic
             }
           }
 
-          (topics, newTopics)
+          topics
       }
     }, TripletFields.All)
   }
@@ -713,7 +683,7 @@ class LightLDA(
     numTerms: Int,
     alpha: Float,
     alphaAS: Float,
-    beta: Float): Graph[VD, (ED, ED)] = {
+    beta: Float): Graph[VD, ED] = {
     val numPartitions = corpus.edges.partitions.length
     corpus.mapTriplets((pid, iter) => {
       val gen = new Random(numPartitions * pseudoIter + pid)
@@ -743,7 +713,6 @@ class LightLDA(
           val termTopicCounter = triplet.srcAttr
           val docTopicCounter = triplet.dstAttr
           val topics = triplet.attr
-          val newTopics = topics.clone()
 
           if (dD == null || gen.nextDouble() < 1e-6) {
             var dv = dDense(totalTopicCounter, alpha, alphaAS, numTokens)
@@ -793,11 +762,11 @@ class LightLDA(
                     currentTopic, proposalTopic, q, p)
               assert(newTopic >= 0 && newTopic < numTopics)
               if (newTopic != currentTopic) {
-                newTopics(i) = newTopic
+                topics(i) = newTopic
               }
             }
           }
-          (topics, newTopics)
+          topics
       }
     }, TripletFields.All)
   }

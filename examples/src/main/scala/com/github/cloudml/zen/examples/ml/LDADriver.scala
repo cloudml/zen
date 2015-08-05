@@ -173,7 +173,7 @@ object LDADriver {
     bowDocs.persist(storageLevel).setName("bowDocs")
     val numDocs = bowDocs.count()
     println(s"num docs in the corpus: $numDocs")
-    rawDocs.unpersist(blocking = false)
+    rawDocs.unpersist(blocking=false)
     bowDocs
   }
 
