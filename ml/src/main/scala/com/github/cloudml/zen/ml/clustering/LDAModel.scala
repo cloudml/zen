@@ -116,7 +116,7 @@ class LocalLDAModel private[ml](
     tokens: Array[Int],
     topics: Array[Int]): BSV[Count] = {
     val docTopicCounter = BSV.zeros[Count](numTopics)
-    for (i <- 0 until tokens.length) {
+    for (i <- tokens.indices) {
       val topic = uniformSampler(rand, numTopics)
       topics(i) = topic
       docTopicCounter(topic) += 1
@@ -128,7 +128,7 @@ class LocalLDAModel private[ml](
     docTopicCounter: BSV[Count],
     tokens: Array[Int],
     topics: Array[Int]): BSV[Count] = {
-    for (i <- 0 until topics.length) {
+    for (i <- topics.indices) {
       val termId = tokens(i)
       val currentTopic = topics(i)
       val d = LDAModel.dSparse(gtc, ttc(termId), docTopicCounter, currentTopic,
@@ -175,7 +175,7 @@ class LocalLDAModel private[ml](
     val fw = Files.newWriter(file, Charsets.UTF_8)
     fw.write(s"$numTopics $numTerms $alpha $beta $alphaAS \n")
     ttc.zipWithIndex.foreach { case (sv, index) =>
-      val line = s"${index} ${sv.activeIterator.filter(_._2 != 0.0).map(t => s"${t._1}:${t._2}").mkString(" ")}\n"
+      val line = s"$index ${sv.activeIterator.filter(_._2 != 0.0).map(t => s"${t._1}:${t._2}").mkString(" ")}\n"
       fw.write(line)
     }
     fw.flush()
@@ -358,7 +358,7 @@ class DistributedLDAModel private[ml](
     alpha: Float,
     alphaAS: Float,
     beta: Float): Graph[VD, ED] = {
-    val parts = graph.edges.partitions.size
+    val parts = graph.edges.partitions.length
     val nweGraph = graph.mapTriplets(
       (pid, iter) => {
         val gen = new Random(parts * innerIter + pid)
@@ -374,11 +374,11 @@ class DistributedLDAModel private[ml](
         iter.map {
           triplet =>
             val termId = triplet.srcId
-            val docId = triplet.dstId
+            //  val docId = triplet.dstId
             val termTopicCounter = triplet.srcAttr
             val docTopicCounter = triplet.dstAttr
             val topics = triplet.attr
-            for (i <- 0 until topics.length) {
+            for (i <- topics.indices) {
               val currentTopic = topics(i)
               val d = docTopicCounter.synchronized {
                 LDAModel.dSparse(gtc, termTopicCounter, docTopicCounter, currentTopic,
@@ -571,10 +571,10 @@ object LDAModel extends Loader[DistributedLDAModel] {
     // val termSum = numTokens - 1D + alphaAS * numTopics
     val betaSum = numTerms * beta
     val d = BSV.zeros[Float](numTopics)
-    var sum = 0.0f
-    docTopicCounter.activeIterator.filter(_._2 > 0f).foreach { t =>
+    var sum = 0.0F
+    docTopicCounter.activeIterator.filter(_._2 > 0F).foreach { t =>
       val topic = t._1
-      val count = if (currentTopic == topic && t._2 != 1f) t._2 - 1 else t._2
+      val count = if (currentTopic == topic && t._2 != 1F) t._2 - 1 else t._2
       // val last = count * termSum * (termTopicCounter(topic) + beta) /
       //  ((totalTopicCounter(topic) + betaSum) * termSum)
       val last = count * (termTopicCounter(topic) + beta) /
@@ -683,7 +683,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
     }
 
     def loadDataFromSolidFile(sc: SparkContext,
-                              path: String): DistributedLDAModel = {
+      path: String): DistributedLDAModel = {
       type MT = Tuple6[Int, Int, Float, Float, Float, Boolean]
       val (metas, rdd) = LoaderUtils.HDFSFile2RDD[(VertexId, VD), MT](sc, path, header => {
         implicit val formats = DefaultFormats

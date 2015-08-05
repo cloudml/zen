@@ -75,9 +75,9 @@ abstract class LDA(
     this
   }
 
-  private def termVertices: VertexRDD[VD] = corpus.vertices.filter(_._1 >= 0)
+  def termVertices: VertexRDD[VD] = corpus.vertices.filter(t => !isDocId(t._1))
 
-  private def docVertices: VertexRDD[VD] = corpus.vertices.filter(_._1 < 0)
+  def docVertices: VertexRDD[VD] = corpus.vertices.filter(t => isDocId(t._1))
 
   private def collectTopicCounter(): BDV[Count] = {
     termVertices.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
@@ -96,6 +96,7 @@ abstract class LDA(
   }
 
   private def gibbsSampling(sampIter: Int, ChkptInterval: Int): Unit = {
+    val sc = corpus.vertices.context
     val prevCorpus = corpus
     val sampledCorpus = sampleTokens(corpus, totalTopicCounter, sampIter + seed,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
@@ -103,13 +104,13 @@ abstract class LDA(
     corpus = updateCounter(sampledCorpus, numTopics)
     corpus.vertices.persist(storageLevel).setName(s"vertices-$sampIter")
     corpus.edges.persist(storageLevel).setName(s"edges-$sampIter")
-    if (ChkptInterval > 0 && sampIter % ChkptInterval == 1) {
+    if (ChkptInterval > 0 && sampIter % ChkptInterval == 1 && sc.getCheckpointDir.isDefined) {
       corpus.checkpoint()
     }
     corpus.vertices.count()
     corpus.edges.count()
-    prevCorpus.unpersist(blocking=false)
-    sampledCorpus.unpersist(blocking=false)
+    prevCorpus.unpersist(blocking = false)
+    sampledCorpus.unpersist(blocking = false)
     totalTopicCounter = collectTopicCounter()
   }
 
@@ -140,10 +141,10 @@ abstract class LDA(
       }).getOrElse(newTermTopicCounter)
 
       termTopicCounter.persist(storageLevel).count()
-      Option(previousTermTopicCounter).foreach(_.unpersist(blocking=false))
+      Option(previousTermTopicCounter).foreach(_.unpersist(blocking = false))
       previousTermTopicCounter = termTopicCounter
     }
-    val rand = new Random()
+    val rand = new XORShiftRandom()
     val ttc = termTopicCounter.mapValues(c => {
       val nc = new BSV[Count](c.index.slice(0, c.used), c.data.slice(0, c.used).map(v => {
         val mid = v.toDouble / saveIter
@@ -198,6 +199,10 @@ abstract class LDA(
    * N is the number of tokens in corpus
    */
   def perplexity(): Double = {
+    if (this.totalTopicCounter == null) {
+      this.totalTopicCounter = collectTopicCounter()
+    }
+    val totalTopicCounter = this.totalTopicCounter
     var totalProb = 0D
 
     // \frac{{\alpha }_{k}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
@@ -211,8 +216,7 @@ abstract class LDA(
         val termTopicCounter = counter
         // \frac{{n}_{kw}{\alpha }_{k}}{{n}_{k}+\bar{\beta }}
         termTopicCounter.activeIterator.foreach { case (topic, cn) =>
-          probDist(topic) = cn * alpha /
-            (totalTopicCounter(topic) + numTerms * beta)
+          probDist(topic) = cn * alpha / (totalTopicCounter(topic) + numTerms * beta)
         }
       } else {
         val docTopicCounter = counter
@@ -319,7 +323,7 @@ object LDA {
       case _ =>
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
-    broadcastModel.unpersist(blocking=false)
+    broadcastModel.unpersist(blocking = false)
     lda.runGibbsSampling(totalIter, chkptInterval)
     lda.saveModel(1)
   }
@@ -344,7 +348,7 @@ object LDA {
     initCorpus.vertices.persist(storageLevel).setName("initVertices").count()
     val numEdges = initCorpus.edges.persist(storageLevel).setName("initEdges").count()
     println(s"edges in the corpus: $numEdges")
-    docs.unpersist(blocking=false)
+    docs.unpersist(blocking = false)
     initCorpus = partStrategy match {
       case "dbh" =>
         DBHPartitioner.partitionByDBH[VD, ED](initCorpus, storageLevel)
@@ -356,7 +360,7 @@ object LDA {
     val corpus = initCounter(initCorpus, numTopics)
     corpus.vertices.persist(storageLevel).setName("vertices").count()
     corpus.edges.persist(storageLevel).setName("edges").count()
-    initCorpus.unpersist(blocking=false)
+    initCorpus.unpersist(blocking = false)
     corpus
   }
 
@@ -387,8 +391,7 @@ object LDA {
     val topics = new Array[Int](tokens.length)
     var docTopicCounter = computedModel.uniformDistSampler(tokens, topics)
     for (t <- 0 until 15) {
-      docTopicCounter = computedModel.sampleTokens(docTopicCounter,
-        tokens, topics)
+      docTopicCounter = computedModel.sampleTokens(docTopicCounter, tokens, topics)
     }
     doc.activeIterator.filter(_._2 > 0).map { case (term, counter) =>
       val ev = topics.zipWithIndex.filter { case (topic, offset) =>
@@ -399,9 +402,13 @@ object LDA {
   }
 
   // make docId always be negative, so that the doc vertex always be the dest vertex
-  private def genNewDocId(docId: Long): Long = {
+  @inline private def genNewDocId(docId: Long): Long = {
     assert(docId >= 0)
     -(docId + 1L)
+  }
+
+  @inline private def isDocId(docId: Long): Boolean = {
+    docId < 0L
   }
 
   private[ml] def sampleSV(
@@ -454,8 +461,10 @@ object LDA {
       }, numTopics)
     ).reduceByKey(sampledCorpus.vertices.partitioner.get, _ += _)
     sampledCorpus.joinVertices(deltaCounter)((_, counter, delta) => {
-      counter += delta; counter.compact(); counter }
-    ).mapEdges(_.attr._2)
+      counter += delta
+      counter.compact()
+      counter
+    }).mapEdges(_.attr._2)
   }
 
   private def partUpdaterIterator[T](pit: Iterator[Edge[T]],
@@ -534,7 +543,7 @@ class FastLDA(
       iter.map {
         triplet =>
           val termId = triplet.srcId
-          val docId = triplet.dstId
+          // val docId = triplet.dstId
           val termTopicCounter = triplet.srcAttr
           val docTopicCounter = triplet.dstAttr
           val topics = triplet.attr
@@ -577,7 +586,7 @@ class FastLDA(
     val genSum = gen.nextFloat() * distSum
     if (genSum < dSum) {
       val dGenSum = gen.nextFloat() * dSum
-      val pos = binarySearchInterval[Float](dData, dGenSum, 0, used, greater=true)
+      val pos = binarySearchInterval[Float](dData, dGenSum, 0, used, greater = true)
       index(pos)
     } else if (genSum < (dSum + wSum)) {
       sampleSV(gen, w, termTopicCounter, currentTopic)
@@ -716,7 +725,7 @@ class LightLDA(
     beta: Float): Graph[VD, (ED, ED)] = {
     val numPartitions = corpus.edges.partitions.length
     corpus.mapTriplets((pid, iter) => {
-      val gen = new Random(numPartitions * pseudoIter + pid)
+      val gen = new XORShiftRandom(numPartitions * pseudoIter + pid)
       val docTableCache = new AppendOnlyMap[VertexId, SoftReference[(Float, AliasTable)]]()
 
       // table is a per term data structure
@@ -790,7 +799,7 @@ class LightLDA(
               }
 
               val newTopic = tokenSampling(gen, docTopicCounter, termTopicCounter, docProposal,
-                    currentTopic, proposalTopic, q, p)
+                currentTopic, proposalTopic, q, p)
               assert(newTopic >= 0 && newTopic < numTopics)
               if (newTopic != currentTopic) {
                 newTopics(i) = newTopic

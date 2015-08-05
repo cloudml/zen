@@ -58,7 +58,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val ldaModel = lda.saveModel()
     val tempDir = Files.createTempDir()
     tempDir.deleteOnExit()
-    val path = tempDir.toURI.toString
+    val path = tempDir.toURI.toString + File.separator + "lda"
     ldaModel.save(sc, path, isTransposed = true, saveSolid = true)
     val sameModel = LDAModel.load(sc, path)
     assert(sameModel.toLocalLDAModel().ttc === ldaModel.toLocalLDAModel().ttc)
