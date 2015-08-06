@@ -196,6 +196,12 @@ abstract class LDA(
    * N is the number of tokens in corpus
    */
   def perplexity(): Double = {
+    val totalTopicCounter = this.totalTopicCounter
+    val numTopics = this.numTopics
+    val numTerms = this.numTerms
+    val alpha = this.alpha
+    val beta = this.beta
+    val numTokens = this.numTokens
     var totalProb = 0D
 
     // \frac{{\alpha }_{k}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
