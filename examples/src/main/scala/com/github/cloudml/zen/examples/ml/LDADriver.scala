@@ -57,9 +57,10 @@ object LDADriver {
 
     val conf = new SparkConf()
     val LDAAlgorithm = options.getOrElse("ldaalgorithm", "fastlda")
-    val storageLevel = StorageLevel.fromString(options.getOrElse("storagelevel", "MEMORY_AND_DISK").toUpperCase)
+    val storageLevel = StorageLevel.fromString(options.getOrElse("storagelevel", "MEMORY_AND_DISK_SER").toUpperCase)
     val partStrategy = options.getOrElse("partstrategy", "dbh")
     val chkptInterval = options.getOrElse("chkptinterval", "10").toInt
+    val calcPerplexity = options.getOrElse("calcperplexity", "false").toBoolean
     val saveAsSolid = options.getOrElse("saveassolid", "false").toBoolean
 
 //    val useKryoSerializer = options.getOrElse("usekryoserializer", "false").toBoolean
@@ -89,8 +90,8 @@ object LDADriver {
       println(s"inputDataPath = $inputPath")
 
       val trainingDocs = readDocsFromTxt(sc, inputPath, sampleRate, numPartitions, storageLevel)
-      val trainingTime = runTraining(sc, outputPath, numTopics, totalIter, alpha, beta, alphaAS,
-        trainingDocs, LDAAlgorithm, partStrategy, chkptInterval, storageLevel, saveAsSolid)
+      val trainingTime = runTraining(sc, outputPath, numTopics, totalIter, alpha, beta, alphaAS, trainingDocs,
+        LDAAlgorithm, partStrategy, chkptInterval, calcPerplexity, storageLevel, saveAsSolid)
       println(s"Training time consumed: $trainingTime seconds")
 
     } finally {
@@ -113,12 +114,13 @@ object LDADriver {
     LDAAlgorithm: String,
     partStrategy: String,
     chkptInterval: Int,
+    calcPerplexity: Boolean,
     storageLevel: StorageLevel,
     saveAsSolid: Boolean): Double = {
     SparkHacker.gcCleaner(15 * 60, 15 * 60, "LDA_gcCleaner")
     val trainingStartedTime = System.currentTimeMillis()
     val termModel = LDA.train(trainingDocs, totalIter, numTopics, alpha, beta, alphaAS,
-      LDAAlgorithm, partStrategy, chkptInterval, storageLevel)
+      LDAAlgorithm, partStrategy, chkptInterval, calcPerplexity, storageLevel)
     val trainingEndedTime = System.currentTimeMillis()
 
     println("save the model in term-topic view")
@@ -173,7 +175,7 @@ object LDADriver {
     bowDocs.persist(storageLevel).setName("bowDocs")
     val numDocs = bowDocs.count()
     println(s"num docs in the corpus: $numDocs")
-    rawDocs.unpersist(blocking = false)
+    rawDocs.unpersist(blocking=false)
     bowDocs
   }
 
@@ -183,9 +185,10 @@ object LDADriver {
       "        -totalIter=<Int> -numPartitions=<Int>\n" +
       "  Options: -sampleRate=<Double(*1.0)>\n" +
       "           -LDAAlgorithm=<*FastLDA|LightLDA>\n" +
-      "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK)>\n" +
+      "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK_SER)>\n" +
       "           -partStrategy=<*DBH|Edge2D>\n" +
       "           -chkptInterval=<Int(*10)>(0 or negative disables checkpoint)\n" +
+      "           -calcPerplexity=<true|*false>\n" +
       "           -saveAsSolid=<true|*false>"
       // "-useKryoSerializer=<true|*false>"
     if (args.length < 8) {

@@ -43,7 +43,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
-      lda.runGibbsSampling(totalIterations, chkptInterval)
+      lda.runGibbsSampling(totalIterations)
       pps(i) = lda.perplexity()
       i += 1
     }
@@ -58,15 +58,15 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val ldaModel = lda.saveModel()
     val tempDir = Files.createTempDir()
     tempDir.deleteOnExit()
-    val path = tempDir.toURI.toString
+    val path = tempDir.toURI.toString + File.separator + "lda"
     ldaModel.save(sc, path, isTransposed = true, saveSolid = true)
     val sameModel = LDAModel.load(sc, path)
-    assert(sameModel.toLocalLDAModel().ttc === ldaModel.toLocalLDAModel().ttc)
+    assert(sameModel.toLocalLDAModel.ttc === ldaModel.toLocalLDAModel.ttc)
     assert(sameModel.alpha === ldaModel.alpha)
     assert(sameModel.beta === ldaModel.beta)
     assert(sameModel.alphaAS === ldaModel.alphaAS)
 
-    val localLdaModel = sameModel.toLocalLDAModel()
+    val localLdaModel = sameModel.toLocalLDAModel
     val tempDir2 = Files.createTempDir()
     tempDir2.deleteOnExit()
     val path2 = tempDir2.toString + File.separator + "lda.txt"
@@ -91,7 +91,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
-      lda.runGibbsSampling(totalIterations, chkptInterval)
+      lda.runGibbsSampling(totalIterations)
       pps(i) = lda.perplexity()
       i += 1
     }
@@ -103,7 +103,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
     assert(pps.head - pps.last > 0)
 
-    val ldaModel = lda.saveModel(3).toLocalLDAModel()
+    val ldaModel = lda.saveModel(3).toLocalLDAModel
     data.collect().foreach { case (_, sv) =>
       val a = ldaModel.inference(sv)
       val b = ldaModel.inference(sv)
@@ -125,7 +125,6 @@ object LDASuite {
   val burnInIterations = 1
   val incrementalLearning = 10
   val partStrategy = "dbh"
-  val chkptInterval = 10
   val storageLevel = StorageLevel.MEMORY_AND_DISK
 
   /**
