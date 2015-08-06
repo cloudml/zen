@@ -43,7 +43,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
-      lda.runGibbsSampling(totalIterations, 0)
+      lda.runGibbsSampling(totalIterations)
       pps(i) = lda.perplexity()
       i += 1
     }
@@ -91,7 +91,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
-      lda.runGibbsSampling(totalIterations, 0)
+      lda.runGibbsSampling(totalIterations)
       pps(i) = lda.perplexity()
       i += 1
     }
