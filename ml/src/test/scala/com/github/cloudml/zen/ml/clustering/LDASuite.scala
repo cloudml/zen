@@ -43,7 +43,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
-      lda.runGibbsSampling(totalIterations, chkptInterval)
+      lda.runGibbsSampling(totalIterations, 0)
       pps(i) = lda.perplexity()
       i += 1
     }
@@ -58,7 +58,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val ldaModel = lda.saveModel()
     val tempDir = Files.createTempDir()
     tempDir.deleteOnExit()
-    val path = tempDir.toURI.toString
+    val path = tempDir.toURI.toString + File.separator + "lda"
     ldaModel.save(sc, path, isTransposed = true, saveSolid = true)
     val sameModel = LDAModel.load(sc, path)
     assert(sameModel.toLocalLDAModel().ttc === ldaModel.toLocalLDAModel().ttc)
@@ -91,7 +91,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
-      lda.runGibbsSampling(totalIterations, chkptInterval)
+      lda.runGibbsSampling(totalIterations, 0)
       pps(i) = lda.perplexity()
       i += 1
     }
@@ -125,7 +125,6 @@ object LDASuite {
   val burnInIterations = 1
   val incrementalLearning = 10
   val partStrategy = "dbh"
-  val chkptInterval = 10
   val storageLevel = StorageLevel.MEMORY_AND_DISK
 
   /**
