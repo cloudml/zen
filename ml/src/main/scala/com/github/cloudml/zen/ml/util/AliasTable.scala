@@ -92,8 +92,8 @@ private[zen] object AliasTable {
     var ltail = 0
     var htail = used
     def putPair: (Int, Float) => Unit = (t, pt) => {
-      @inline def isClose: (Float, Float) => Boolean = (a, b) => abs(a - b) <= 1e-8 + abs(a) * 1e-5
-      if (isClose(pt, 0F)) {
+      @inline def isClose: (Float, Float) => Boolean = (a, b) => abs(a - b) <= 1e-7 + abs(a) * 5e-4
+      if (pt <= 0 || isClose(pt, 0F)) {
       } else if (isClose(pt, 1F)) {
         htail -= 1
         table.l(htail) = t
@@ -119,7 +119,9 @@ private[zen] object AliasTable {
     }
     lit.foreach(t => putPair(t._1, t._2))
     hit.foreach(t => putPair(t._1, t._2))
-    assert(lhead == ltail && ltail == htail)
+    assert(lhead == ltail && ltail == htail ||  // normal end
+      lhead == ltail - 1 && ltail == htail ||  // last pt=1F saved as pt<1F
+      lhead == ltail - 1 && lhead == htail)  // last small fraction left
     table
   }
 
