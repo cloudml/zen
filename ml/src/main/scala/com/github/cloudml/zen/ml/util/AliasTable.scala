@@ -17,8 +17,8 @@
 
 package com.github.cloudml.zen.ml.util
 
-import java.util.{PriorityQueue => JPriorityQueue, Random}
-
+import java.util.Random
+import math.abs
 import breeze.linalg.{Vector => BV, sum => brzSum}
 
 private[zen] class AliasTable(initUsed: Int) extends Serializable {
@@ -43,7 +43,7 @@ private[zen] class AliasTable(initUsed: Int) extends Serializable {
   def sampleAlias(gen: Random): Int = {
     val bin = gen.nextInt(_used)
     val prob = _p(bin)
-    if (_used * prob > gen.nextFloat()) {
+    if (prob > gen.nextFloat()) {
       _l(bin)
     } else {
       _h(bin)
@@ -87,50 +87,39 @@ private[zen] object AliasTable {
     used: Int,
     table: AliasTable): AliasTable = {
     table.reset(used)
-    val pMean = 1.0f / used
-    val lq = new JPriorityQueue[(Int, Float)](used, tableOrdering)
-    val hq = new JPriorityQueue[(Int, Float)](used, tableReverseOrdering)
-
-    probs.slice(0, used).foreach { pair =>
-      val i = pair._1
-      val pi = pair._2 / sum
-      if (pi < pMean) {
-        lq.add((i, pi))
+    val normed = probs.map(t => (t._1, t._2 * used / sum))
+    var lhead = 0
+    var ltail = 0
+    var htail = used
+    def putPair: (Int, Float) => Unit = (t, pt) => {
+      @inline def isClose: (Float, Float) => Boolean = (a, b) => abs(a - b) <= 1e-8 + abs(a) * 1e-5
+      if (isClose(pt, 0F)) {
+      } else if (isClose(pt, 1F)) {
+        htail -= 1
+        table.l(htail) = t
+        table.h(htail) = t
+      } else if (pt < 1F) {
+        table.l(ltail) = t
+        table.p(ltail) = pt
+        ltail += 1
       } else {
-        hq.add((i, pi))
+        val pd = if (lhead == ltail) {  // no to-be-filled bucket
+          htail -= 1
+          table.l(htail) = t
+          table.h(htail) = t
+          pt - 1F
+        } else {  // first tbf bucket
+          table.h(lhead) = t
+          val pl = table.p(lhead)
+          lhead += 1
+          pl + pt - 1F
+        }
+        putPair(t, pd)
       }
     }
-
-    var offset = 0
-    while (!lq.isEmpty & !hq.isEmpty) {
-      val (i, pi) = lq.remove()
-      val (h, ph) = hq.remove()
-      table.l(offset) = i
-      table.h(offset) = h
-      table.p(offset) = pi
-      val pd = ph - (pMean - pi)
-      if (pd >= pMean) {
-        hq.add((h, pd))
-      } else {
-        lq.add((h, pd))
-      }
-      offset += 1
-    }
-    while (!hq.isEmpty) {
-      val (h, ph) = hq.remove()
-      table.l(offset) = h
-      table.h(offset) = h
-      table.p(offset) = ph
-      offset += 1
-    }
-
-    while (!lq.isEmpty) {
-      val (i, pi) = lq.remove()
-      table.l(offset) = i
-      table.h(offset) = i
-      table.p(offset) = pi
-      offset += 1
-    }
+    normed.filter(_._2 <= 1F).foreach(t => putPair(t._1, t._2))
+    normed.filter(_._2 > 1F).foreach(t => putPair(t._1, t._2))
+    assert(lhead == ltail && ltail == htail)
     table
   }
 
