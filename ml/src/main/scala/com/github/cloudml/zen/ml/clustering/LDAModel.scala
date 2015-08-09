@@ -452,11 +452,11 @@ class DistributedLDAModel private[ml](
   }
 
   override def save(sc: SparkContext, path: String): Unit = {
-    save(sc, path, isTransposed = false, saveSolid = false)
+    save(sc, path, isTransposed = false, saveAsSolid = false)
   }
 
   def save(path: String): Unit = {
-    save(ttc.context, path, isTransposed = false, saveSolid = false)
+    save(ttc.context, path, isTransposed = false, saveAsSolid = false)
   }
 
   /**
@@ -468,11 +468,11 @@ class DistributedLDAModel private[ml](
    *                     otherwise:
    *                     topicId \grave{termId}:counter \grave{termId}:counter...,
    *                     in which \grave{termId}= termId + 1
-   * @param saveSolid save as whether one HDFS file or an directory
+   * @param saveAsSolid save as whether one HDFS file or an directory
    */
-  def save(sc: SparkContext, path: String, isTransposed: Boolean, saveSolid: Boolean): Unit = {
+  def save(sc: SparkContext, path: String, isTransposed: Boolean, saveAsSolid: Boolean): Unit = {
     LDAModel.SaveLoadV1_0.save(sc, path, ttc, numTopics, numTerms, alpha, beta, alphaAS,
-      isTransposed, saveSolid)
+      isTransposed, saveAsSolid)
   }
 
   override protected def formatVersion: String = LDAModel.SaveLoadV1_0.formatVersionV1_0
