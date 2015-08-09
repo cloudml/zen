@@ -87,7 +87,7 @@ private[zen] object AliasTable {
     used: Int,
     table: AliasTable): AliasTable = {
     table.reset(used)
-    val normed = probs.map(t => (t._1, t._2 * used / sum))
+    val (lit, hit) = probs.map(t => (t._1, t._2 * used / sum)).partition(_._2 <= 1F)
     var lhead = 0
     var ltail = 0
     var htail = used
@@ -117,8 +117,8 @@ private[zen] object AliasTable {
         putPair(t, pd)
       }
     }
-    normed.filter(_._2 <= 1F).foreach(t => putPair(t._1, t._2))
-    normed.filter(_._2 > 1F).foreach(t => putPair(t._1, t._2))
+    lit.foreach(t => putPair(t._1, t._2))
+    hit.foreach(t => putPair(t._1, t._2))
     assert(lhead == ltail && ltail == htail)
     table
   }
