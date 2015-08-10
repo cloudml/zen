@@ -119,9 +119,9 @@ private[zen] object AliasTable {
     }
     lit.foreach(t => putPair(t._1, t._2))
     hit.foreach(t => putPair(t._1, t._2))
-    assert(lhead == ltail && ltail == htail ||  // normal end
-      lhead == ltail - 1 && ltail == htail ||  // last pt=1F saved as pt<1F
-      lhead == ltail - 1 && lhead == htail)  // last small fraction left
+    // assert(lhead == ltail && ltail == htail ||  // normal end
+    //   lhead == ltail - 1 && ltail == htail ||  // last pt=1F saved as pt<1F
+    //   lhead == ltail - 1 && lhead == htail)  // last small fraction left
     table
   }
 
