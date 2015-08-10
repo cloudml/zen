@@ -23,7 +23,7 @@ import java.util.Random
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, Vector => BV}
 import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.clustering.LDA._
-import com.github.cloudml.zen.ml.clustering.LDAUtils._
+import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.util.{XORShiftRandom, AliasTable}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.graphx._
@@ -81,6 +81,8 @@ abstract class LDA(
 
   def docVertices: VertexRDD[VD] = corpus.vertices.filter(t => isDocId(t._1))
 
+  private def ScConf = corpus.edges.context.getConf
+
   private def collectTopicCounter(): BDV[Count] = {
     val gtc = termVertices.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
     val count = gtc.activeValuesIterator.map(_.toLong).sum
@@ -89,8 +91,8 @@ abstract class LDA(
   }
 
   def runGibbsSampling(totalIter: Int,
-    ChkptInterval: Int = 0,
-    calcPerplexity: Boolean = false): Unit = {
+    ChkptInterval: Int = 0): Unit = {
+    val calcPerplexity = ScConf.getBoolean(cs_calcPerplexity, false)
     if (calcPerplexity) {
       println(s"Before Gibbs sampling: perplexity=${perplexity()}")
     }
@@ -274,7 +276,6 @@ object LDA {
     LDAAlgorithm: String,
     partStrategy: String,
     chkptInterval: Int,
-    calcPerplexity: Boolean,
     storageLevel: StorageLevel): DistributedLDAModel = {
     val lda: LDA = LDAAlgorithm match {
       case "lightlda" =>
@@ -286,7 +287,7 @@ object LDA {
       case _ =>
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
-    lda.runGibbsSampling(totalIter, chkptInterval, calcPerplexity)
+    lda.runGibbsSampling(totalIter, chkptInterval)
     lda.saveModel(1)
   }
 
@@ -297,7 +298,6 @@ object LDA {
     LDAAlgorithm: String,
     partStrategy: String,
     chkptInterval: Int,
-    calcPerplexity: Boolean,
     storageLevel: StorageLevel): DistributedLDAModel = {
     val numTopics = computedModel.numTopics
     val alpha = computedModel.alpha
@@ -315,7 +315,7 @@ object LDA {
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     broadcastModel.unpersist(blocking=false)
-    lda.runGibbsSampling(totalIter, chkptInterval, calcPerplexity)
+    lda.runGibbsSampling(totalIter, chkptInterval)
     lda.saveModel(1)
   }
 
@@ -546,7 +546,7 @@ class FastLDA(
     val genSum = gen.nextFloat() * distSum
     if (genSum < dSum) {
       val dGenSum = gen.nextFloat() * dSum
-      val pos = binarySearchInterval[Float](dData, dGenSum, 0, used, greater=true)
+      val pos = binarySearchInterval(dData, dGenSum, 0, used, greater=true)
       index(pos)
     } else if (genSum < (dSum + wSum)) {
       sampleSV(gen, w, termTopicCounter, currentTopic)

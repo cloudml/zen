@@ -19,6 +19,7 @@ package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDA
+import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.util.SparkHacker
 import org.apache.hadoop.fs.{InvalidPathException, FileSystem, Path}
 import org.apache.spark.deploy.SparkHadoopUtil
@@ -60,7 +61,7 @@ object LDADriver {
     val storageLevel = StorageLevel.fromString(options.getOrElse("storagelevel", "MEMORY_AND_DISK_SER").toUpperCase)
     val partStrategy = options.getOrElse("partstrategy", "dbh")
     val chkptInterval = options.getOrElse("chkptinterval", "10").toInt
-    val calcPerplexity = options.getOrElse("calcperplexity", "false").toBoolean
+    conf.set(cs_calcPerplexity, options.getOrElse("calcperplexity", "false"))
     val saveAsSolid = options.getOrElse("saveassolid", "false").toBoolean
 
 //    val useKryoSerializer = options.getOrElse("usekryoserializer", "false").toBoolean
@@ -91,7 +92,7 @@ object LDADriver {
 
       val trainingDocs = readDocsFromTxt(sc, inputPath, sampleRate, numPartitions, storageLevel)
       val trainingTime = runTraining(sc, outputPath, numTopics, totalIter, alpha, beta, alphaAS, trainingDocs,
-        LDAAlgorithm, partStrategy, chkptInterval, calcPerplexity, storageLevel, saveAsSolid)
+        LDAAlgorithm, partStrategy, chkptInterval, storageLevel, saveAsSolid)
       println(s"Training time consumed: $trainingTime seconds")
 
     } finally {
@@ -114,13 +115,12 @@ object LDADriver {
     LDAAlgorithm: String,
     partStrategy: String,
     chkptInterval: Int,
-    calcPerplexity: Boolean,
     storageLevel: StorageLevel,
     saveAsSolid: Boolean): Double = {
     SparkHacker.gcCleaner(15 * 60, 15 * 60, "LDA_gcCleaner")
     val trainingStartedTime = System.currentTimeMillis()
     val termModel = LDA.train(trainingDocs, totalIter, numTopics, alpha, beta, alphaAS,
-      LDAAlgorithm, partStrategy, chkptInterval, calcPerplexity, storageLevel)
+      LDAAlgorithm, partStrategy, chkptInterval, storageLevel)
     val trainingEndedTime = System.currentTimeMillis()
 
     println("save the model in term-topic view")

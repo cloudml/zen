@@ -22,9 +22,8 @@ import java.util.Random
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, norm => brzNorm, sum => brzSum}
 import com.github.cloudml.zen.ml.DBHPartitioner
+import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.clustering.LDAModel.{Count, DocId, ED, VD}
-import com.github.cloudml.zen.ml.clustering.LDAUtils._
-import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.{AliasTable, LoaderUtils}
 import com.google.common.base.Charsets
 import com.google.common.io.Files
@@ -500,7 +499,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
     val genSum = gen.nextFloat() * distSum
     if (genSum < dSum) {
       val dGenSum = gen.nextFloat() * dSum
-      val pos = binarySearchInterval[Float](data, dGenSum, 0, used, greater = true)
+      val pos = binarySearchInterval(data, dGenSum, 0, used, greater = true)
       index(pos)
     } else if (genSum < (dSum + wSum)) {
       w.sampleAlias(gen)
@@ -778,58 +777,4 @@ object LDAModel extends Loader[DistributedLDAModel] {
     }
   }
 
-}
-
-private[ml] object LDAUtils {
-
-  def uniformSampler(rand: Random, dimension: Int): Int = {
-    rand.nextInt(dimension)
-  }
-
-  def binarySearchInterval[T](
-    index: Array[T],
-    key: T,
-    begin: Int,
-    end: Int,
-    greater: Boolean)(implicit num: Numeric[T]): Int = {
-    if (begin == end) {
-      return if (greater) end else begin - 1
-    }
-    var b = begin
-    var e = end - 1
-
-    var mid: Int = (e + b) >> 1
-    while (b <= e) {
-      mid = (e + b) >> 1
-      val v = index(mid)
-      if (num.lt(v, key)) {
-        b = mid + 1
-      }
-      else if (num.gt(v, key)) {
-        e = mid - 1
-      }
-      else {
-        return mid
-      }
-    }
-    val v = index(mid)
-    mid = if ((greater && num.gteq(v, key)) || (!greater && num.lteq(v, key))) {
-      mid
-    }
-    else if (greater) {
-      mid + 1
-    }
-    else {
-      mid - 1
-    }
-
-    if (greater) {
-      if (mid < end) assert(num.gteq(index(mid), key))
-      if (mid > 0) assert(num.lteq(index(mid - 1), key))
-    } else {
-      if (mid > 0) assert(num.lteq(index(mid), key))
-      if (mid < end - 1) assert(num.gteq(index(mid + 1), key))
-    }
-    mid
-  }
 }
