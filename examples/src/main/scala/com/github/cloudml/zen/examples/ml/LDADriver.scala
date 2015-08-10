@@ -206,6 +206,9 @@ object LDADriver {
           nextOption(map ++ Map("inpath" -> head), tail)
         case head :: tail if isSwitch(head) =>
           val kv = head.toLowerCase.split("=", 2)
+          if (kv.length == 1) {
+            throw new Exception("Wrong command line format: " + head)
+          }
           nextOption(map ++ Map(kv(0).substring(1) -> kv(1)), tail)
         case _ =>
           println(usage)
