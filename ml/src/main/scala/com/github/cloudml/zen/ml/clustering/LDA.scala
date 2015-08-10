@@ -122,7 +122,7 @@ abstract class LDA(
       corpus.checkpoint()
       corpus.edges.first()
     }
-    if (sampIter % saveInterval == 0) {
+    if (saveInterval > 0 && sampIter % saveInterval == 0) {
       val outputPath = ScConf.get(cs_outputpath)
       saveModel().save(sc, s"$outputPath-iter$sampIter", isTransposed=true, saveAsSolid=false)
     }
