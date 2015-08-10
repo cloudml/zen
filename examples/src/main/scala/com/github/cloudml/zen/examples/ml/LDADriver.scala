@@ -209,7 +209,10 @@ object LDADriver {
         case head :: tail if !isSwitch(head) =>
           nextOption(map ++ Map("inpath" -> head), tail)
         case head :: tail if isSwitch(head) =>
-          val kv = head.toLowerCase.split("=", 2)
+          var kv = head.toLowerCase.split("=", 2)
+          if (kv.length == 1) {
+            kv = head.toLowerCase.split(":", 2)
+          }
           if (kv.length == 1) {
             throw new Exception("Wrong command line format: " + head)
           }
