@@ -205,52 +205,35 @@ abstract class LDA(
    */
   def perplexity(): Double = {
     val totalTopicCounter = this.totalTopicCounter
-    val numTopics = this.numTopics
-    val numTerms = this.numTerms
     val alpha = this.alpha
     val beta = this.beta
+    val alpha_bar = this.numTopics * alpha
+    val beta_bar = this.numTerms * beta
     val numTokens = this.numTokens
-    var totalProb = 0D
 
     // \frac{{\alpha }_{k}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
-    totalTopicCounter.activeIterator.foreach { case (topic, cn) =>
-      totalProb += alpha * beta / (cn + numTerms * beta)
-    }
+    val tDenseSum = totalTopicCounter.valuesIterator.map(c => alpha * beta / (c + beta_bar)).sum
 
     val termProb = corpus.mapVertices { (vid, counter) =>
-      val probDist = BSV.zeros[Double](numTopics)
-      if (vid >= 0) {
-        val termTopicCounter = counter
-        // \frac{{n}_{kw}{\alpha }_{k}}{{n}_{k}+\bar{\beta }}
-        termTopicCounter.activeIterator.foreach { case (topic, cn) =>
-          probDist(topic) = cn * alpha / (totalTopicCounter(topic) + numTerms * beta)
-        }
+      val probDist = if (isDocId(vid)) {
+        counter.mapActivePairs((t, c) => c * beta / (totalTopicCounter(t) + beta_bar))
       } else {
-        val docTopicCounter = counter
-        // \frac{{n}_{kd}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
-        docTopicCounter.activeIterator.foreach { case (topic, cn) =>
-          probDist(topic) = cn * beta / (totalTopicCounter(topic) + numTerms * beta)
-        }
+        counter.mapActivePairs((t, c) => c * alpha / (totalTopicCounter(t) + beta_bar))
       }
-      probDist.compact()
-      (counter, probDist)
+      (counter, brzSum(probDist), brzSum(counter))
     }.mapTriplets { triplet =>
-      val (termTopicCounter, termProb) = triplet.srcAttr
-      val (docTopicCounter, docProb) = triplet.dstAttr
-      val docSize = brzSum(docTopicCounter)
-      val docTermSize = triplet.attr.length
-      var prob = 0D
+      val (termTopicCounter, wSparseSum, _) = triplet.srcAttr
+      val (docTopicCounter, dSparseSum, docSize) = triplet.dstAttr
+      val dwCooccur = triplet.attr.length
 
       // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
-      docTopicCounter.activeIterator.foreach { case (topic, cn) =>
-        prob += cn * termTopicCounter(topic) /
-          (totalTopicCounter(topic) + numTerms * beta)
-      }
-      prob += brzSum(docProb) + brzSum(termProb) + totalProb
-      prob += prob / (docSize + numTopics * alpha)
+      val dwSparseSum = docTopicCounter.activeIterator.map { case (t, c) =>
+        c * termTopicCounter(t) / (totalTopicCounter(t) + beta_bar)
+      }.sum
+      val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alpha_bar)
 
-      docTermSize * Math.log(prob)
-    }.edges.map(t => t.attr).sum()
+      dwCooccur * Math.log(prob)
+    }.edges.map(_.attr).sum()
 
     math.exp(-1 * termProb / numTokens)
   }
@@ -412,8 +395,8 @@ object LDA {
     -(docId + 1L)
   }
 
-  @inline private def isDocId(docId: Long): Boolean = {
-    docId < 0L
+  @inline private def isDocId(id: Long): Boolean = {
+    id < 0L
   }
 
   private[ml] def sampleSV(
