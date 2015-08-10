@@ -21,6 +21,9 @@ import java.util.Random
 
 object LDADefines {
   val cs_calcPerplexity = "zen.lda.calcPerplexity"
+  val cs_saveInterval = "zen.lda.saveInterval"
+  val cs_inputPath = "zen.lda.inputPath"
+  val cs_outputpath = "zen.lda.outputPath"
 
   def uniformSampler(rand: Random, dimension: Int): Int = {
     rand.nextInt(dimension)

@@ -110,6 +110,7 @@ abstract class LDA(
 
   private def gibbsSampling(sampIter: Int, ChkptInterval: Int = 0): Unit = {
     val sc = corpus.edges.context
+    val saveInterval = ScConf.getInt(cs_saveInterval, 0)
     val prevCorpus = corpus
     val sampledCorpus = sampleTokens(corpus, totalTopicCounter, sampIter + seed,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
@@ -120,6 +121,10 @@ abstract class LDA(
     if (ChkptInterval > 0 && sampIter % ChkptInterval == 1 && sc.getCheckpointDir.isDefined) {
       corpus.checkpoint()
       corpus.edges.first()
+    }
+    if (sampIter % saveInterval == 0) {
+      val outputPath = ScConf.get(cs_outputpath)
+      saveModel().save(sc, s"$outputPath-iter$sampIter", isTransposed=true, saveAsSolid=false)
     }
     totalTopicCounter = collectTopicCounter()
     prevCorpus.vertices.unpersist(blocking=false)
