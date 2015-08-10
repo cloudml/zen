@@ -451,11 +451,11 @@ class DistributedLDAModel private[ml](
   }
 
   override def save(sc: SparkContext, path: String): Unit = {
-    save(sc, path, isTransposed = false, saveAsSolid = false)
+    save(sc, path, isTransposed = false)
   }
 
   def save(path: String): Unit = {
-    save(ttc.context, path, isTransposed = false, saveAsSolid = false)
+    save(ttc.context, path, isTransposed = false)
   }
 
   /**
@@ -467,11 +467,10 @@ class DistributedLDAModel private[ml](
    *                     otherwise:
    *                     topicId \grave{termId}:counter \grave{termId}:counter...,
    *                     in which \grave{termId}= termId + 1
-   * @param saveAsSolid save as whether one HDFS file or an directory
    */
-  def save(sc: SparkContext, path: String, isTransposed: Boolean, saveAsSolid: Boolean): Unit = {
+  def save(sc: SparkContext, path: String, isTransposed: Boolean): Unit = {
     LDAModel.SaveLoadV1_0.save(sc, path, ttc, numTopics, numTerms, alpha, beta, alphaAS,
-      isTransposed, saveAsSolid)
+      isTransposed)
   }
 
   override protected def formatVersion: String = LDAModel.SaveLoadV1_0.formatVersionV1_0
@@ -739,8 +738,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
       alpha: Float,
       beta: Float,
       alphaAS: Float,
-      isTransposed: Boolean,
-      saveSolid: Boolean): Unit = {
+      isTransposed: Boolean): Unit = {
       val metadata = compact(render
         (("class" -> classNameV1_0) ~ ("version" -> formatVersionV1_0) ~
           ("alpha" -> alpha) ~ ("beta" -> beta) ~ ("alphaAS" -> alphaAS) ~
@@ -759,7 +757,8 @@ object LDAModel extends Loader[DistributedLDAModel] {
         ttc
       }
 
-      if (saveSolid) {
+      val saveAsSolid = sc.getConf.getBoolean(cs_saveAsSolid, false)
+      if (saveAsSolid) {
         val metadata_line = metadata.replaceAll("\n", "")
         val rdd_txt = rdd.map { case (id, vector) =>
           val list = vector.activeIterator.toList.sortWith((a, b) => a._2 > b._2)

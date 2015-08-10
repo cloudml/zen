@@ -90,27 +90,27 @@ abstract class LDA(
     gtc
   }
 
-  def runGibbsSampling(totalIter: Int,
-    ChkptInterval: Int = 0): Unit = {
-    val calcPerplexity = ScConf.getBoolean(cs_calcPerplexity, false)
-    if (calcPerplexity) {
+  def runGibbsSampling(totalIter: Int): Unit = {
+    val pplx = ScConf.getBoolean(cs_calcPerplexity, false)
+    if (pplx) {
       println(s"Before Gibbs sampling: perplexity=${perplexity()}")
     }
     for (iter <- 1 to totalIter) {
       println(s"Start Gibbs sampling (Iteration $iter/$totalIter)")
       val startedAt = System.nanoTime()
-      gibbsSampling(iter, ChkptInterval)
+      gibbsSampling(iter)
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      if (calcPerplexity) {
+      if (pplx) {
         println(s"Gibbs sampling (Iteration $iter/$totalIter): perplexity=${perplexity()}")
       }
       println(s"End Gibbs sampling (Iteration $iter/$totalIter) takes: $elapsedSeconds secs")
     }
   }
 
-  private def gibbsSampling(sampIter: Int, ChkptInterval: Int = 0): Unit = {
+  private def gibbsSampling(sampIter: Int): Unit = {
     val sc = corpus.edges.context
-    val saveInterval = ScConf.getInt(cs_saveInterval, 0)
+    val chkptIntv = ScConf.getInt(cs_chkptInterval, 0)
+    val saveIntv = ScConf.getInt(cs_saveInterval, 0)
     val prevCorpus = corpus
     val sampledCorpus = sampleTokens(corpus, totalTopicCounter, sampIter + seed,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
@@ -118,13 +118,13 @@ abstract class LDA(
     prevCorpus.edges.unpersist(blocking=false)
     corpus = updateCounter(sampledCorpus, numTopics)
     corpus.vertices.persist(storageLevel).setName(s"vertices-$sampIter")
-    if (ChkptInterval > 0 && sampIter % ChkptInterval == 1 && sc.getCheckpointDir.isDefined) {
+    if (chkptIntv > 0 && sampIter % chkptIntv == 1 && sc.getCheckpointDir.isDefined) {
       corpus.checkpoint()
       corpus.edges.first()
     }
-    if (saveInterval > 0 && sampIter % saveInterval == 0) {
+    if (saveIntv > 0 && sampIter % saveIntv == 0) {
       val outputPath = ScConf.get(cs_outputpath)
-      saveModel().save(sc, s"$outputPath-iter$sampIter", isTransposed=true, saveAsSolid=false)
+      saveModel(0).save(sc, s"$outputPath-iter$sampIter", isTransposed=true)
     }
     totalTopicCounter = collectTopicCounter()
     prevCorpus.vertices.unpersist(blocking=false)
@@ -145,9 +145,9 @@ abstract class LDA(
    * @param saveIter saved these iters' averaged model
    */
   def saveModel(saveIter: Int = 1): DistributedLDAModel = {
-    var termTopicCounter: RDD[(VertexId, VD)] = null
+    var termTopicCounter: RDD[(VertexId, VD)] = termVertices
     for (iter <- 1 to saveIter) {
-      logInfo(s"Save TopicModel (Iteration $iter/$saveIter)")
+      println(s"Save TopicModel (Iteration $iter/$saveIter)")
       var previousTermTopicCounter = termTopicCounter
       gibbsSampling(iter)
       val newTermTopicCounter = termVertices
@@ -253,7 +253,6 @@ object LDA {
   private[ml] type Count = Int
   private[ml] type ED = Array[Int]
   private[ml] type VD = BSV[Count]
-  private[ml] type BOW = (Long, BSV[Int])
 
   /**
    * LDA training
@@ -266,8 +265,6 @@ object LDA {
    * @param alpha      recommend to be (5.0 /numTopics)
    * @param beta       recommend to be in range 0.001 - 0.1
    * @param alphaAS    recommend to be in range 0.01 - 1.0
-   * @param LDAAlgorithm which LDA sampling algorithm to use, recommend not lightlda for short text
-   * @param partStrategy which partition strategy to re partition by the graph
    * @param storageLevel StorageLevel that the LDA Model RDD uses
    * @return DistributedLDAModel
    */
@@ -278,21 +275,20 @@ object LDA {
     alpha: Float,
     beta: Float,
     alphaAS: Float,
-    LDAAlgorithm: String,
-    partStrategy: String,
-    chkptInterval: Int,
     storageLevel: StorageLevel): DistributedLDAModel = {
+    val conf = docs.context.getConf
+    val LDAAlgorithm = conf.get(cs_LDAAlgorithm, "fastlda")
     val lda: LDA = LDAAlgorithm match {
       case "lightlda" =>
         println("using LightLDA sampling algorithm.")
-        LightLDA(docs, numTopics, alpha, beta, alphaAS, storageLevel, partStrategy)
+        LightLDA(docs, numTopics, alpha, beta, alphaAS, storageLevel)
       case "fastlda" =>
         println("using FastLDA sampling algorithm.")
-        FastLDA(docs, numTopics, alpha, beta, alphaAS, storageLevel, partStrategy)
+        FastLDA(docs, numTopics, alpha, beta, alphaAS, storageLevel)
       case _ =>
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
-    lda.runGibbsSampling(totalIter, chkptInterval)
+    lda.runGibbsSampling(totalIter)
     lda.saveModel(1)
   }
 
@@ -300,10 +296,9 @@ object LDA {
     docs: RDD[BOW],
     computedModel: LocalLDAModel,
     totalIter: Int,
-    LDAAlgorithm: String,
-    partStrategy: String,
-    chkptInterval: Int,
     storageLevel: StorageLevel): DistributedLDAModel = {
+    val conf = docs.context.getConf
+    val LDAAlgorithm = conf.get(cs_LDAAlgorithm, "fastlda")
     val numTopics = computedModel.numTopics
     val alpha = computedModel.alpha
     val beta = computedModel.beta
@@ -312,15 +307,15 @@ object LDA {
     val lda: LDA = LDAAlgorithm match {
       case "lightlda" =>
         println("using LightLDA sampling algorithm.")
-        LightLDA(docs, numTopics, alpha, beta, alphaAS, storageLevel, partStrategy, broadcastModel)
+        LightLDA(docs, numTopics, alpha, beta, alphaAS, storageLevel, broadcastModel)
       case "fastlda" =>
         println("using FastLDA sampling algorithm.")
-        FastLDA(docs, numTopics, alpha, beta, alphaAS, storageLevel, partStrategy, broadcastModel)
+        FastLDA(docs, numTopics, alpha, beta, alphaAS, storageLevel, broadcastModel)
       case _ =>
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     broadcastModel.unpersist(blocking=false)
-    lda.runGibbsSampling(totalIter, chkptInterval)
+    lda.runGibbsSampling(totalIter)
     lda.saveModel(1)
   }
 
@@ -328,8 +323,9 @@ object LDA {
     docs: RDD[BOW],
     numTopics: Int,
     storageLevel: StorageLevel,
-    partStrategy: String,
     computedModel: Broadcast[LocalLDAModel] = null): Graph[VD, ED] = {
+    val conf = docs.context.getConf
+    val partStrategy = conf.get(cs_partStrategy, "dbh")
     val edges = docs.mapPartitionsWithIndex((pid, iter) => {
       val gen = new XORShiftRandom(pid + 117)
       iter.flatMap { case (docId, doc) =>
@@ -346,8 +342,10 @@ object LDA {
     docs.unpersist(blocking=false)
     initCorpus = partStrategy match {
       case "dbh" =>
+        println("using Degree-based Hashing partition strategy.")
         DBHPartitioner.partitionByDBH[VD, ED](initCorpus, storageLevel)
       case "edge2d" =>
+        println("using Edge2D partition strategy.")
         initCorpus.partitionBy(PartitionStrategy.EdgePartition2D)
       case _ =>
         throw new NoSuchMethodException("No this algorithm or not implemented.")
@@ -466,7 +464,7 @@ private[ml] class LDAKryoRegistrator extends KryoRegistrator {
 
     kryo.register(classOf[LDA.ED])
     kryo.register(classOf[LDA.VD])
-    kryo.register(classOf[LDA.BOW])
+    kryo.register(classOf[BOW])
 
     kryo.register(classOf[Random])
     kryo.register(classOf[LDA])
@@ -968,11 +966,10 @@ object FastLDA {
     beta: Float,
     alphaAS: Float,
     storageLevel: StorageLevel,
-    partStrategy: String,
     computedModel: Broadcast[LocalLDAModel] = null): FastLDA = {
     val numTerms = bowDocs.first()._2.size
     val numDocs = bowDocs.count()
-    val corpus = initializeCorpus(bowDocs, numTopics, storageLevel, partStrategy, computedModel)
+    val corpus = initializeCorpus(bowDocs, numTopics, storageLevel, computedModel)
     val numTokens = corpus.edges.map(e => e.attr.length.toLong).reduce(_ + _)
     new FastLDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, storageLevel)
   }
@@ -985,11 +982,10 @@ object LightLDA {
     beta: Float,
     alphaAS: Float,
     storageLevel: StorageLevel,
-    partStrategy: String,
     computedModel: Broadcast[LocalLDAModel] = null): LightLDA = {
     val numTerms = bowDocs.first()._2.size
     val numDocs = bowDocs.count()
-    val corpus = initializeCorpus(bowDocs, numTopics, storageLevel, partStrategy, computedModel)
+    val corpus = initializeCorpus(bowDocs, numTopics, storageLevel, computedModel)
     val numTokens = corpus.edges.map(e => e.attr.length.toLong).reduce(_ + _)
     new LightLDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, storageLevel)
   }

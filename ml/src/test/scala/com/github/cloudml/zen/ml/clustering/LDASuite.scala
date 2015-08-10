@@ -39,7 +39,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val data = sc.parallelize(corpus, 2)
     data.cache()
     val pps = new Array[Double](incrementalLearning)
-    val lda = FastLDA(data, numTopics, alpha, beta, alphaAS, storageLevel, partStrategy)
+    val lda = FastLDA(data, numTopics, alpha, beta, alphaAS, storageLevel)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
@@ -59,7 +59,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val tempDir = Files.createTempDir()
     tempDir.deleteOnExit()
     val path = tempDir.toURI.toString + File.separator + "lda"
-    ldaModel.save(sc, path, isTransposed = true, saveAsSolid=false)
+    ldaModel.save(sc, path, isTransposed = true)
     val sameModel = LDAModel.load(sc, path)
     assert(sameModel.toLocalLDAModel.ttc === ldaModel.toLocalLDAModel.ttc)
     assert(sameModel.alpha === ldaModel.alpha)
@@ -87,7 +87,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val data = sc.parallelize(corpus, 2)
     data.cache()
     val pps = new Array[Double](incrementalLearning)
-    val lda = LightLDA(data, numTopics, alpha, beta, alphaAS, storageLevel, partStrategy)
+    val lda = LightLDA(data, numTopics, alpha, beta, alphaAS, storageLevel)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
@@ -124,7 +124,6 @@ object LDASuite {
   val totalIterations = 2
   val burnInIterations = 1
   val incrementalLearning = 10
-  val partStrategy = "dbh"
   val storageLevel = StorageLevel.MEMORY_AND_DISK
 
   /**

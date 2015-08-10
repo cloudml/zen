@@ -18,12 +18,21 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
+import breeze.linalg.SparseVector
 
 object LDADefines {
+  type BOW = (Long, SparseVector[Int])
+
+  val cs_sampleRate = "zen.lda.sampleRate"
+  val cs_LDAAlgorithm = "zen.lda.cs_LDAAlgorithm"
+  val cs_storageLevel = "zen.lda.storageLevel"
+  val cs_partStrategy = "zen.lda.partStrategy"
+  val cs_chkptInterval = "zen.lda.chkptInterval"
   val cs_calcPerplexity = "zen.lda.calcPerplexity"
   val cs_saveInterval = "zen.lda.saveInterval"
   val cs_inputPath = "zen.lda.inputPath"
   val cs_outputpath = "zen.lda.outputPath"
+  val cs_saveAsSolid = "zen.lda.saveAsSolid"
 
   def uniformSampler(rand: Random, dimension: Int): Int = {
     rand.nextInt(dimension)

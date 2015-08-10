@@ -42,30 +42,31 @@ object LDADriver {
     val alphaAS = options("alphaas").toFloat
     val totalIter = options("totaliter").toInt
     val numPartitions = options("numpartitions").toInt
-    assert(numTopics > 0)
+    assert(numTopics > 0, "numTopics must be greater than 0")
     assert(alpha > 0F)
     assert(beta > 0F)
     assert(alphaAS > 0F)
     assert(totalIter > 0, "totalIter must be greater than 0")
-    assert(numPartitions > 0)
+    assert(numPartitions > 0, "numPartitions must be greater than 0")
 
     val inputPath = options("inpath")
     val outputPath = options("outpath")
     val checkpointPath = outputPath + ".checkpoint"
 
-    val sampleRate = options.getOrElse("samplerate", "1.0").toDouble
-    assert(sampleRate > 0.0)
+    val slvlStr = options.getOrElse("storagelevel", "MEMORY_AND_DISK_SER").toUpperCase
+    val storageLevel = StorageLevel.fromString(slvlStr)
 
     val conf = new SparkConf()
     conf.set(cs_inputPath, inputPath)
     conf.set(cs_outputpath, outputPath)
-    val LDAAlgorithm = options.getOrElse("ldaalgorithm", "fastlda")
-    val storageLevel = StorageLevel.fromString(options.getOrElse("storagelevel", "MEMORY_AND_DISK_SER").toUpperCase)
-    val partStrategy = options.getOrElse("partstrategy", "dbh")
-    val chkptInterval = options.getOrElse("chkptinterval", "10").toInt
+    conf.set(cs_storageLevel, slvlStr)
+    conf.set(cs_sampleRate, options.getOrElse("samplerate", "1.0"))
+    conf.set(cs_LDAAlgorithm, options.getOrElse("ldaalgorithm", "fastlda"))
+    conf.set(cs_partStrategy, options.getOrElse("partstrategy", "dbh"))
+    conf.set(cs_chkptInterval, options.getOrElse("chkptinterval", "10"))
     conf.set(cs_calcPerplexity, options.getOrElse("calcperplexity", "false"))
     conf.set(cs_saveInterval, options.getOrElse("saveinterval", "0"))
-    val saveAsSolid = options.getOrElse("saveassolid", "false").toBoolean
+    conf.set(cs_saveAsSolid, options.getOrElse("saveassolid", "false"))
 
 //    val useKryoSerializer = options.getOrElse("usekryoserializer", "false").toBoolean
 //    if (useKryoSerializer) {
@@ -93,9 +94,8 @@ object LDADriver {
       println(s"alpha = $alpha, beta = $beta, alphaAS = $alphaAS")
       println(s"inputDataPath = $inputPath")
 
-      val trainingDocs = readDocsFromTxt(sc, sampleRate, numPartitions, storageLevel)
-      val trainingTime = runTraining(sc, numTopics, totalIter, alpha, beta, alphaAS, trainingDocs,
-        LDAAlgorithm, partStrategy, chkptInterval, storageLevel, saveAsSolid)
+      val trainingDocs = readDocsFromTxt(sc, numPartitions, storageLevel)
+      val trainingTime = runTraining(sc, numTopics, totalIter, alpha, beta, alphaAS, trainingDocs, storageLevel)
       println(s"Training time consumed: $trainingTime seconds")
 
     } finally {
@@ -113,31 +113,27 @@ object LDADriver {
     alpha: Float,
     beta: Float,
     alphaAS: Float,
-    trainingDocs: RDD[(Long, BSV[Int])],
-    LDAAlgorithm: String,
-    partStrategy: String,
-    chkptInterval: Int,
-    storageLevel: StorageLevel,
-    saveAsSolid: Boolean): Double = {
+    trainingDocs: RDD[BOW],
+    storageLevel: StorageLevel): Double = {
     SparkHacker.gcCleaner(15 * 60, 15 * 60, "LDA_gcCleaner")
     val trainingStartedTime = System.currentTimeMillis()
-    val termModel = LDA.train(trainingDocs, totalIter, numTopics, alpha, beta, alphaAS,
-      LDAAlgorithm, partStrategy, chkptInterval, storageLevel)
+    val termModel = LDA.train(trainingDocs, totalIter, numTopics, alpha, beta, alphaAS, storageLevel)
     val trainingEndedTime = System.currentTimeMillis()
 
     println("save the model in term-topic view")
     val outputPath = sc.getConf.get(cs_outputpath)
-    termModel.save(sc, outputPath, isTransposed = true, saveAsSolid)
+    termModel.save(sc, outputPath, isTransposed = true)
 
     (trainingEndedTime - trainingStartedTime) / 1e3
   }
 
   def readDocsFromTxt(sc: SparkContext,
-    sampleRate: Double,
     numPartitions: Int,
-    storageLevel: StorageLevel): RDD[(Long, BSV[Int])] = {
-    val docsPath = sc.getConf.get(cs_inputPath)
-    val rawDocs = sc.textFile(docsPath, numPartitions).sample(false, sampleRate)
+    storageLevel: StorageLevel): RDD[BOW] = {
+    val conf = sc.getConf
+    val docsPath = conf.get(cs_inputPath)
+    val sr = conf.getDouble(cs_sampleRate, 1.0)
+    val rawDocs = sc.textFile(docsPath, numPartitions).sample(false, sr)
     convertDocsToBagOfWords(sc, rawDocs, storageLevel)
   }
 
