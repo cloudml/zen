@@ -79,9 +79,20 @@ object LDADriver {
     // TODO: Make KryoSerializer work
     conf.set("spark.serializer", "org.apache.spark.serializer.JavaSerializer")
 
-    val fs = FileSystem.get(SparkHadoopUtil.get.newConfiguration(conf))
-    if (fs.exists(new Path(outputPath))) {
-      throw new InvalidPathException("Output path %s already exists.".format(outputPath))
+    val hadoopConf = SparkHadoopUtil.get.newConfiguration(conf)
+    if (sys.env.contains("HADOOP_CONF_DIR") || sys.env.contains("YARN_CONF_DIR")) {
+      val hdfsConfPath = if (sys.env.get("HADOOP_CONF_DIR").isDefined) {
+        sys.env.get("HADOOP_CONF_DIR").get + "/core-site.xml"
+      } else {
+        sys.env.get("YARN_CONF_DIR").get + "/core-site.xml"
+      }
+      hadoopConf.addResource(new Path(hdfsConfPath))
+    }
+    val outPath = new Path(outputPath)
+    val fs = outPath.getFileSystem(hadoopConf)
+    if (fs.exists(outPath)) {
+      println(s"Error: output path $outputPath already exists.")
+      System.exit(2)
     }
     fs.delete(new Path(checkpointPath), true)
 
@@ -210,7 +221,8 @@ object LDADriver {
             kv = head.toLowerCase.split(":", 2)
           }
           if (kv.length == 1) {
-            throw new Exception("Wrong command line format: " + head)
+            println(s"Error: wrong command line format: $head")
+            System.exit(1)
           }
           nextOption(map ++ Map(kv(0).substring(1) -> kv(1)), tail)
         case _ =>
