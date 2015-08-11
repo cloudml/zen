@@ -17,7 +17,7 @@
 
 package com.github.cloudml.zen.ml
 
-import org.apache.spark.{HashPartitioner, Partitioner}
+import org.apache.spark.Partitioner
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.GraphImpl
 import org.apache.spark.storage.StorageLevel
@@ -38,7 +38,7 @@ private[ml] class DBHPartitioner(val partitions: Int, val threshold: Int = 0) ex
    * Default DBH doesn't consider the situation where both the degree of src and
    * dst vertices are both small than a given threshold value
    */
-  def getKey(et: EdgeTriplet[Int, _]): Int = {
+  def getKey(et: EdgeTriplet[Int, _]): Long = {
     val srcId = et.srcId
     val dstId = et.dstId
     val srcDeg = et.srcAttr
@@ -47,9 +47,9 @@ private[ml] class DBHPartitioner(val partitions: Int, val threshold: Int = 0) ex
     val maxId = max(srcId, dstId)
     val maxDeg = max(srcDeg, dstDeg)
     if (maxDeg < threshold) {
-      getPartition(maxId)
+      maxId
     } else {
-      getPartition(minId)
+      minId
     }
   }
 
