@@ -38,15 +38,14 @@ private[ml] class DBHPartitioner(val partitions: Int, val threshold: Int = 0) ex
    * Default DBH doesn't consider the situation where both the degree of src and
    * dst vertices are both small than a given threshold value
    */
-  def getPartition(key: Any): Int = {
-    val edge = key.asInstanceOf[EdgeTriplet[Int, _]]
-    val srcDeg = edge.srcAttr
-    val dstDeg = edge.dstAttr
-    val srcId = edge.srcId
-    val dstId = edge.dstId
-    val minId = if (srcDeg < dstDeg) srcId else dstId
-    val maxId = if (srcDeg < dstDeg) dstId else srcId
-    val maxDeg = if (srcDeg < dstDeg) dstDeg else srcDeg
+  def getKey(et: EdgeTriplet[Int, _]): Int = {
+    val srcId = et.srcId
+    val dstId = et.dstId
+    val srcDeg = et.srcAttr
+    val dstDeg = et.dstAttr
+    val minId = min(srcId, dstId)
+    val maxId = max(srcId, dstId)
+    val maxDeg = max(srcDeg, dstDeg)
     if (maxDeg < threshold) {
       getPartition(maxId)
     } else {
@@ -54,11 +53,8 @@ private[ml] class DBHPartitioner(val partitions: Int, val threshold: Int = 0) ex
     }
   }
 
-  def getPartition(idx: Int): PartitionID = {
-    getPartition(idx.toLong)
-  }
-
-  def getPartition(idx: Long): PartitionID = {
+  def getPartition(key: Any): PartitionID = {
+    val idx = key.asInstanceOf[Long]
     (abs(idx * mixingPrime) % partitions).toInt
   }
 
@@ -78,26 +74,12 @@ object DBHPartitioner {
     storageLevel: StorageLevel): Graph[VD, ED] = {
     val edges = input.edges
     val vertices = input.vertices
-    val degrees = input.degrees.setName("degrees").persist(storageLevel)
-    val degreesGraph = GraphImpl(degrees, edges)
-    degreesGraph.persist(storageLevel)
     val numPartitions = edges.partitions.length
-    val partitionStrategy = new DBHPartitioner(numPartitions, 0)
-    val newEdges = degreesGraph.triplets.mapPartitions { iter =>
-      iter.map { e =>
-        (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
-      }
-    }.partitionBy(new HashPartitioner(numPartitions)).map(_._2).persist(storageLevel)
-    val dataSet = GraphImpl(vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
-    dataSet.persist(storageLevel)
-    dataSet.vertices.count()
-    dataSet.edges.count()
-    degrees.unpersist(blocking = false)
-    degreesGraph.vertices.unpersist(blocking = false)
-    degreesGraph.edges.unpersist(blocking = false)
-    input.vertices.unpersist(blocking = false)
-    input.edges.unpersist(blocking = false)
-    newEdges.unpersist(blocking = false)
-    dataSet
+    val dbh = new DBHPartitioner(numPartitions, 0)
+    val degGraph = GraphImpl(input.degrees, edges)
+    val newEdges = degGraph.triplets.mapPartitions { iter =>
+      iter.map(e => (dbh.getKey(e), Edge(e.srcId, e.dstId, e.attr)))
+    }.partitionBy(dbh).map(_._2)
+    GraphImpl(vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
   }
 }
