@@ -225,7 +225,8 @@ object LDADriver {
             kv = head.toLowerCase.split(":", 2)
           }
           if (kv.length == 1) {
-            throw new Exception("Wrong command line format: " + head)
+            println(s"Error: wrong command line format: $head")
+            System.exit(1)
           }
           nextOption(map ++ Map(kv(0).substring(1) -> kv(1)), tail)
         case _ =>
