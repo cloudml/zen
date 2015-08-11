@@ -91,7 +91,9 @@ abstract class LDA(
   }
 
   def runGibbsSampling(totalIter: Int): Unit = {
+    val sc = corpus.edges.context
     val pplx = ScConf.getBoolean(cs_calcPerplexity, false)
+    val saveIntv = ScConf.getInt(cs_saveInterval, 0)
     if (pplx) {
       println(s"Before Gibbs sampling: perplexity=${perplexity()}")
     }
@@ -104,13 +106,16 @@ abstract class LDA(
         println(s"Gibbs sampling (Iteration $iter/$totalIter): perplexity=${perplexity()}")
       }
       println(s"End Gibbs sampling (Iteration $iter/$totalIter) takes: $elapsedSeconds secs")
+      if (saveIntv > 0 && iter % saveIntv == 0) {
+        val outputPath = ScConf.get(cs_outputpath)
+        saveModel(0).save(sc, s"$outputPath-iter$iter", isTransposed=true)
+      }
     }
   }
 
   private def gibbsSampling(sampIter: Int): Unit = {
     val sc = corpus.edges.context
     val chkptIntv = ScConf.getInt(cs_chkptInterval, 0)
-    val saveIntv = ScConf.getInt(cs_saveInterval, 0)
     val prevCorpus = corpus
     val sampledCorpus = sampleTokens(corpus, totalTopicCounter, sampIter + seed,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
@@ -121,10 +126,6 @@ abstract class LDA(
     if (chkptIntv > 0 && sampIter % chkptIntv == 1 && sc.getCheckpointDir.isDefined) {
       corpus.checkpoint()
       corpus.edges.first()
-    }
-    if (saveIntv > 0 && sampIter % saveIntv == 0) {
-      val outputPath = ScConf.get(cs_outputpath)
-      saveModel(0).save(sc, s"$outputPath-iter$sampIter", isTransposed=true)
     }
     totalTopicCounter = collectTopicCounter()
     prevCorpus.vertices.unpersist(blocking=false)
@@ -142,28 +143,22 @@ abstract class LDA(
 
   /**
    * Save the term-topic related model
-   * @param saveIter saved these iters' averaged model
+   * @param runIter saved these iters' averaged model
    */
-  def saveModel(saveIter: Int = 1): DistributedLDAModel = {
-    var termTopicCounter: RDD[(VertexId, VD)] = termVertices
-    for (iter <- 1 to saveIter) {
-      println(s"Save TopicModel (Iteration $iter/$saveIter)")
-      var previousTermTopicCounter = termTopicCounter
+  def saveModel(runIter: Int = 1): DistributedLDAModel = {
+    var termTopicCounter: RDD[(VertexId, VD)] = termVertices.persist(storageLevel)
+    termTopicCounter.count()
+    for (iter <- 1 to runIter) {
+      println(s"Save TopicModel (Iteration $iter/$runIter)")
       gibbsSampling(iter)
-      val newTermTopicCounter = termVertices
-      termTopicCounter = Option(termTopicCounter).map(_.join(newTermTopicCounter).map {
-        case (term, (a, b)) =>
-          (term, a :+ b)
-      }).getOrElse(newTermTopicCounter)
-
-      termTopicCounter.persist(storageLevel).count()
-      Option(previousTermTopicCounter).foreach(_.unpersist(blocking=false))
-      previousTermTopicCounter = termTopicCounter
+      termTopicCounter.join(termVertices).map {
+        case (term, (a,b)) => (term, a += b)
+      }
     }
     val rand = new XORShiftRandom()
     val ttc = termTopicCounter.mapValues(c => {
       val nc = new BSV[Count](c.index.slice(0, c.used), c.data.slice(0, c.used).map(v => {
-        val mid = v.toDouble / saveIter
+        val mid = v.toDouble / runIter
         val l = math.floor(mid)
         if (rand.nextDouble() > mid - l) l else l + 1
       }.toInt), c.length)
@@ -424,33 +419,22 @@ object LDA {
     docTopic
   }
 
-  private def updateCounter(semiCorpus: Graph[VD, ED],
+  private def updateCounter(corpus: Graph[VD, ED],
     numTopics: Int): Graph[VD, ED] = {
-    val newCounter = semiCorpus.edges.mapPartitions(iter =>
-      partUpdaterIterator(iter, (edge, termSum, docSum) => {
+    val newCounter = corpus.edges.mapPartitions(iter =>
+      iter.flatMap(edge => {
+        val vid = edge.srcId
+        val did = edge.dstId
         val topics = edge.attr
-        for (t <- topics) {
-          termSum(t) += 1
-          docSum(t) += 1
-        }
-      }, numTopics)
-    ).reduceByKey(semiCorpus.vertices.partitioner.get, _ += _)
-      .map((t) => (t._1, { t._2.compact(); t._2 }))
-    semiCorpus.mapVertices[VD]((_, _) => null)
-      .joinVertices(newCounter)((_, _, counter) => counter)
-  }
-
-  private def partUpdaterIterator(pit: Iterator[Edge[ED]],
-    update: (Edge[ED], VD, VD) => Unit,
-    numTopics: Int): Iterator[(VertexId, VD)] = {
-    pit.flatMap(edge => {
-      val vid = edge.srcId
-      val did = edge.dstId
-      val termSum = BSV.zeros[Count](numTopics)
-      val docSum = BSV.zeros[Count](numTopics)
-      update(edge, termSum, docSum)
-      Iterator((vid, termSum), (did, docSum))
-    })
+        Iterator((vid, topics), (did, topics))
+      })
+    ).aggregateByKey(BSV.zeros[Count](numTopics), corpus.vertices.partitioner.get)((agg, cur) => {
+      for (t <- cur) {
+        agg(t) += 1
+      }
+      agg
+    }, _ += _)
+    corpus.joinVertices(newCounter)((_, _, counter) => counter)
   }
 }
 
