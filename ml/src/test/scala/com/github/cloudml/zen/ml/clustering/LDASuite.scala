@@ -118,9 +118,9 @@ object LDASuite {
   val numTerms = 1000
   val numDocs = 100
   val expectedDocLength = 300
-  val alpha = 0.01f
-  val alphaAS = 1f
-  val beta = 0.01f
+  val alpha = 0.01
+  val alphaAS = 1D
+  val beta = 0.01
   val totalIterations = 2
   val burnInIterations = 1
   val incrementalLearning = 10
@@ -129,21 +129,21 @@ object LDASuite {
   /**
    * Generate a random LDA model, i.e. the topic-term matrix.
    */
-  def generateRandomLDAModel(numTopics: Int, numTerms: Int): Array[BDV[Float]] = {
-    val model = new Array[BDV[Float]](numTopics)
-    val width = numTerms.toFloat / numTopics
+  def generateRandomLDAModel(numTopics: Int, numTerms: Int): Array[BDV[Double]] = {
+    val model = new Array[BDV[Double]](numTopics)
+    val width = numTerms.toDouble / numTopics
     var topic = 0
     var i = 0
     while (topic < numTopics) {
       val topicCentroid = width * (topic + 1)
-      model(topic) = BDV.zeros[Float](numTerms)
+      model(topic) = BDV.zeros[Double](numTerms)
       i = 0
       while (i < numTerms) {
         // treat the term list as a circle, so the distance between the first one and the last one
         // is 1, not n-1.
         val distance = Math.abs(topicCentroid - i) % (numTerms / 2)
         // Possibility is decay along with distance
-        model(topic)(i) = 1F / (1F + Math.abs(distance))
+        model(topic)(i) = 1D / (1D + Math.abs(distance))
         i += 1
       }
       topic += 1
@@ -155,8 +155,8 @@ object LDASuite {
    * Sample one document given the topic-term matrix.
    */
   def ldaSampler(
-    model: Array[BDV[Float]],
-    topicDist: BDV[Float],
+    model: Array[BDV[Double]],
+    topicDist: BDV[Double],
     numTermsPerDoc: Int): Array[Int] = {
     val samples = new Array[Int](numTermsPerDoc)
     val rand = new Random()
@@ -173,7 +173,7 @@ object LDASuite {
    * Sample corpus (many documents) from a given topic-term matrix.
    */
   def sampleCorpus(
-    model: Array[BDV[Float]],
+    model: Array[BDV[Double]],
     numDocs: Int,
     numTerms: Int,
     numTopics: Int): Array[(Long, BSV[Int])] = {
@@ -181,7 +181,7 @@ object LDASuite {
       val rand = new Random()
       val numTermsPerDoc = Poisson.distribution(expectedDocLength).sample()
       val numTopicsPerDoc = rand.nextInt(numTopics / 2) + 1
-      val topicDist = BDV.zeros[Float](numTopics)
+      val topicDist = BDV.zeros[Double](numTopics)
       (0 until numTopicsPerDoc).foreach { _ =>
         topicDist(rand.nextInt(numTopics)) += 1
       }
@@ -194,10 +194,10 @@ object LDASuite {
   /**
    * A multinomial distribution sampler, using roulette method to sample an Int back.
    */
-  def multinomialDistSampler(rand: Random, dist: BDV[Float]): Int = {
-    val distSum = rand.nextFloat() * breeze.linalg.sum[BDV[Float], Float](dist)
+  def multinomialDistSampler(rand: Random, dist: BDV[Double]): Int = {
+    val distSum = rand.nextDouble() * breeze.linalg.sum[BDV[Double], Double](dist)
 
-    def loop(index: Int, accum: Float): Int = {
+    def loop(index: Int, accum: Double): Int = {
       if (index == dist.length) return dist.length - 1
       val sum = accum - dist(index)
       if (sum <= 0) index else loop(index + 1, sum)

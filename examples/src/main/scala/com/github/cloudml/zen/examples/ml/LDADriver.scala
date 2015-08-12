@@ -37,15 +37,15 @@ object LDADriver {
     val appStartedTime = System.currentTimeMillis()
 
     val numTopics = options("numtopics").toInt
-    val alpha = options("alpha").toFloat
-    val beta = options("beta").toFloat
-    val alphaAS = options("alphaas").toFloat
+    val alpha = options("alpha").toDouble
+    val beta = options("beta").toDouble
+    val alphaAS = options("alphaas").toDouble
     val totalIter = options("totaliter").toInt
     val numPartitions = options("numpartitions").toInt
     assert(numTopics > 0, "numTopics must be greater than 0")
-    assert(alpha > 0F)
-    assert(beta > 0F)
-    assert(alphaAS > 0F)
+    assert(alpha > 0D)
+    assert(beta > 0D)
+    assert(alphaAS > 0D)
     assert(totalIter > 0, "totalIter must be greater than 0")
     assert(numPartitions > 0, "numPartitions must be greater than 0")
 
@@ -121,9 +121,9 @@ object LDADriver {
   def runTraining(sc: SparkContext,
     numTopics: Int,
     totalIter: Int,
-    alpha: Float,
-    beta: Float,
-    alphaAS: Float,
+    alpha: Double,
+    beta: Double,
+    alphaAS: Double,
     trainingDocs: RDD[BOW],
     storageLevel: StorageLevel): Double = {
     SparkHacker.gcCleaner(15 * 60, 15 * 60, "LDA_gcCleaner")
@@ -191,7 +191,7 @@ object LDADriver {
 
   def parseArgs(args: Array[String]): OptionMap = {
     val usage = "Usage: LDADriver <Args> [Options] <Input path> <Output path>\n" +
-      "  Args: -numTopics=<Int> -alpha=<Float> -beta=<Float> -alphaAS=<Float>\n" +
+      "  Args: -numTopics=<Int> -alpha=<Double> -beta=<Double> -alphaAS=<Double>\n" +
       "        -totalIter=<Int> -numPartitions=<Int>\n" +
       "  Options: -sampleRate=<Double(*1.0)>\n" +
       "           -LDAAlgorithm=<*FastLDA|LightLDA>\n" +

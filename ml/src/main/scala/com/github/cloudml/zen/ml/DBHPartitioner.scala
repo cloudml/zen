@@ -47,7 +47,7 @@ private[ml] class DBHPartitioner(val partitions: Int, val threshold: Int = 0) ex
     val minDegId = if (maxDeg == srcDeg) dstId else srcId
     val maxDegId = if (maxDeg == srcDeg) srcId else dstId
     if (maxDeg < threshold) {
-      minDegId
+      maxDegId
     } else {
       minDegId
     }

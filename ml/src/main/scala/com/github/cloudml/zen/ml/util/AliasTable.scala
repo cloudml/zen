@@ -25,14 +25,15 @@ private[zen] class AliasTable(initUsed: Int) extends Serializable {
 
   private var _l: Array[Int] = new Array[Int](initUsed)
   private var _h: Array[Int] = new Array[Int](initUsed)
-  private var _p: Array[Float] = new Array[Float](initUsed)
+  private var _p: Array[Double] = new Array[Double](initUsed)
   private var _used = initUsed
+  private var _norm = 0D
 
   def l: Array[Int] = _l
 
   def h: Array[Int] = _h
 
-  def p: Array[Float] = _p
+  def p: Array[Double] = _p
 
   def used: Int = _used
 
@@ -40,10 +41,12 @@ private[zen] class AliasTable(initUsed: Int) extends Serializable {
 
   def size: Int = l.length
 
+  def norm: Double = _norm
+
   def sampleAlias(gen: Random): Int = {
     val bin = gen.nextInt(_used)
     val prob = _p(bin)
-    if (prob > gen.nextFloat()) {
+    if (gen.nextDouble() * _norm < prob) {
       _l(bin)
     } else {
       _h(bin)
@@ -54,84 +57,90 @@ private[zen] class AliasTable(initUsed: Int) extends Serializable {
     if (_l.length < newSize) {
       _l = new Array[Int](newSize)
       _h = new Array[Int](newSize)
-      _p = new Array[Float](newSize)
+      _p = new Array[Double](newSize)
     }
     _used = newSize
+    _norm = 0D
+    this
+  }
+
+  private[AliasTable] def setNorm(norm: Double): this.type = {
+    _norm = norm
     this
   }
 }
 
 private[zen] object AliasTable {
-  @transient private lazy val tableOrdering = new scala.math.Ordering[(Any, Float)] {
-    override def compare(x: (Any, Float), y: (Any, Float)): Int = {
-      Ordering[Float].compare(x._2, y._2)
+  type Pair = (Int, Double)
+
+  @transient private lazy val tableOrdering = new scala.math.Ordering[Pair] {
+    override def compare(x: Pair, y: Pair): Int = {
+      Ordering[Double].compare(x._2, y._2)
     }
   }
   @transient private lazy val tableReverseOrdering = tableOrdering.reverse
 
-  def generateAlias(sv: BV[Float]): AliasTable = {
+  def generateAlias(sv: BV[Double]): AliasTable = {
     val used = sv.activeSize
     val sum = brzSum(sv)
     val probs = sv.activeIterator.slice(0, used)
     generateAlias(probs, sum, used)
   }
 
-  def generateAlias(probs: Iterator[(Int, Float)], sum: Float, used: Int): AliasTable = {
+  def generateAlias(probs: Iterator[Pair], sum: Double, used: Int): AliasTable = {
     val table = new AliasTable(used)
     generateAlias(probs, sum, used, table)
   }
 
   def generateAlias(
-    probs: Iterator[(Int, Float)],
-    sum: Float,
+    probs: Iterator[Pair],
+    sum: Double,
     used: Int,
     table: AliasTable): AliasTable = {
     table.reset(used)
-    val (lit, hit) = probs.map(t => (t._1, t._2 * used / sum)).partition(_._2 <= 1F)
-    var lhead = 0
-    var ltail = 0
-    var htail = used
-    def putPair: (Int, Float) => Unit = (t, pt) => {
-      @inline def isClose: (Float, Float) => Boolean = (a, b) => abs(a - b) <= 1e-7 + abs(a) * 5e-4
-      if (pt <= 0 || isClose(pt, 0F)) {
-      } else if (isClose(pt, 1F)) {
-        htail -= 1
-        table.l(htail) = t
-        table.h(htail) = t
-      } else if (pt < 1F) {
-        table.l(ltail) = t
-        table.p(ltail) = pt
-        ltail += 1
-      } else {
-        val pd = if (lhead == ltail) {  // no to-be-filled bucket
-          htail -= 1
-          table.l(htail) = t
-          table.h(htail) = t
-          pt - 1F
-        } else {  // first tbf bucket
-          table.h(lhead) = t
-          val pl = table.p(lhead)
-          lhead += 1
-          pl + pt - 1F
-        }
-        putPair(t, pd)
-      }
+    val (loList, hiList) = probs.map(t => (t._1, t._2 * used)).toList.partition(_._2 < sum)
+    var ls = 0
+    var le = 0
+    var end = used
+    @inline def isClose(a: Double, b: Double): Boolean = abs(a - b) <= (1e-8 + abs(a) * 1e-6)
+    def putAlias(list: List[Pair], rest: List[Pair]): List[Pair] = list match {
+      case Nil => rest
+      case (t, pt) :: rlist if pt < sum =>
+        table.l(le) = t
+        table.p(le) = pt
+        le += 1
+        putAlias(rlist, rest)
+      case (t, pt) :: rlist if ls < le =>
+        table.h(ls) = t
+        val pl = table.p(ls)
+        ls += 1
+        val pd = pt - (sum - pl)
+        putAlias(List((t, pd)) ++ rlist, rest)
+      case (t, pt) :: rlist=>
+        putAlias(rlist, rest ++ List((t, pt)))
     }
-    lit.foreach(t => putPair(t._1, t._2))
-    hit.foreach(t => putPair(t._1, t._2))
-    // assert(lhead == ltail && ltail == htail ||  // normal end
-    //   lhead == ltail - 1 && ltail == htail ||  // last pt=1F saved as pt<1F
-    //   lhead == ltail - 1 && lhead == htail)  // last small fraction left
+    def putRest(rest: List[Pair]): Unit = rest match {
+      case Nil => Unit
+      case (t, pt) :: rrest =>
+        assert(isClose(pt, sum))
+        end -= 1
+        table.l(end) = t
+        table.h(end) = t
+        putRest(rrest)
+    }
+    putRest(putAlias(hiList, putAlias(loList, List())))
+    assert(ls == le && end == ls || ls == le - 1 && (end == ls || end == le))
+    table.setNorm(sum)
     table
   }
 
-  def generateAlias(sv: BV[Float], sum: Float): AliasTable = {
+  def generateAlias(sv: BV[Double], sum: Double): AliasTable = {
     val used = sv.activeSize
     val probs = sv.activeIterator.slice(0, used)
     generateAlias(probs, sum, used)
   }
 
-  def generateAlias(sv: BV[Float], sum: Float, table: AliasTable): AliasTable = {
+  def generateAlias(sv: BV[Double], sum: Double, table: AliasTable): AliasTable = {
     val used = sv.activeSize
     val probs = sv.activeIterator.slice(0, used)
     generateAlias(probs, sum, used, table)

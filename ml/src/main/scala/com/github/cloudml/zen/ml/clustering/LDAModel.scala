@@ -42,9 +42,9 @@ import org.json4s.jackson.JsonMethods._
 class LocalLDAModel private[ml](
   private[ml] val gtc: BDV[Count],
   private[ml] val ttc: Array[BSV[Count]],
-  val alpha: Float,
-  val beta: Float,
-  val alphaAS: Float) extends Serializable {
+  val alpha: Double,
+  val beta: Double,
+  val alphaAS: Double) extends Serializable {
   @transient lazy val numTopics = gtc.length
   @transient lazy val numTerms = ttc.length
   @transient private lazy val numTokens = brzSum(gtc)
@@ -53,7 +53,7 @@ class LocalLDAModel private[ml](
   @transient private lazy val termSum = numTokens + alphaAS * numTopics
 
   @transient private lazy val wordTableCache = new AppendOnlyMap[Int,
-    SoftReference[(Float, AliasTable)]](ttc.length / 2)
+    SoftReference[(Double, AliasTable)]](ttc.length / 2)
   @transient private lazy val (t, tSum) = {
     val dv = LDAModel.tDense(gtc, numTokens, numTerms, alpha, alphaAS, beta)
     (AliasTable.generateAlias(dv._2, dv._1), dv._1)
@@ -77,7 +77,7 @@ class LocalLDAModel private[ml](
   def inference(
     doc: BSV[Int],
     totalIter: Int = 10,
-    burnIn: Int = 5): BV[Float] = {
+    burnIn: Int = 5): BV[Double] = {
     require(totalIter > burnIn, "totalIter is less than burnInIter")
     require(totalIter > 0, "totalIter is less than 0")
     require(burnIn > 0, "burnInIter is less than 0")
@@ -93,7 +93,7 @@ class LocalLDAModel private[ml](
     }
 
     topicDist.compact()
-    val norm = brzNorm(topicDist, 1).toFloat
+    val norm = brzNorm(topicDist, 1).toDouble
     topicDist.map(_ / norm)
   }
 
@@ -146,15 +146,15 @@ class LocalLDAModel private[ml](
   }
 
   private[ml] def wordTable(
-    cacheMap: AppendOnlyMap[Int, SoftReference[(Float, AliasTable)]],
+    cacheMap: AppendOnlyMap[Int, SoftReference[(Double, AliasTable)]],
     totalTopicCounter: BDV[Count],
     termTopicCounter: BSV[Count],
     termId: Int,
     numTokens: Long,
     numTerms: Int,
-    alpha: Float,
-    alphaAS: Float,
-    beta: Float): (Float, AliasTable) = {
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): (Double, AliasTable) = {
     if (termTopicCounter.used == 0) return (0f, null)
     var w = cacheMap(termId)
     if (w == null || w.get() == null) {
@@ -187,9 +187,9 @@ class DistributedLDAModel private[ml](
   private[ml] val ttc: RDD[(VertexId, VD)],
   val numTopics: Int,
   val numTerms: Int,
-  val alpha: Float,
-  val beta: Float,
-  val alphaAS: Float) extends Serializable with Saveable with Logging {
+  val alpha: Double,
+  val beta: Double,
+  val alphaAS: Double) extends Serializable with Saveable with Logging {
 
   @transient private lazy val numTokens = brzSum(gtc)
   @transient private lazy val betaSum = numTerms * beta
@@ -209,7 +209,7 @@ class DistributedLDAModel private[ml](
   def inference(
     docs: RDD[BOW],
     totalIter: Int = 25,
-    burnIn: Int = 22): RDD[(VertexId, BSV[Float])] = {
+    burnIn: Int = 22): RDD[(VertexId, BSV[Double])] = {
     require(totalIter > burnIn, "totalIter is less than burnInIter")
     require(totalIter > 0, "totalIter is less than 0")
     require(burnIn > 0, "burnIn is less than 0")
@@ -238,7 +238,7 @@ class DistributedLDAModel private[ml](
     }
     docTopicCounter.map { case (docId, sv) =>
       sv.compact()
-      val norm = brzNorm(sv, 1).toFloat
+      val norm = brzNorm(sv, 1).toDouble
       (toDocId(docId), sv.map(_ / norm))
     }
   }
@@ -353,9 +353,9 @@ class DistributedLDAModel private[ml](
     numTokens: Long,
     numTopics: Int,
     numTerms: Int,
-    alpha: Float,
-    alphaAS: Float,
-    beta: Float): Graph[VD, ED] = {
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): Graph[VD, ED] = {
     val parts = graph.edges.partitions.length
     val nweGraph = graph.mapTriplets(
       (pid, iter) => {
@@ -363,9 +363,9 @@ class DistributedLDAModel private[ml](
         // table is a per term data structure
         // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
         // so, use below simple cache to avoid calculating table each time
-        val lastWTable = new AliasTable(numTopics.toInt)
+        val lastWTable = new AliasTable(numTopics)
         var lastVid: VertexId = -1
-        var lastWSum = 0.0f
+        var lastWSum = 0D
         val dv = LDAModel.tDense(totalTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
         val t = AliasTable.generateAlias(dv._2, dv._1)
         val tSum = dv._1
@@ -417,9 +417,9 @@ class DistributedLDAModel private[ml](
     termId: VertexId,
     numTokens: Long,
     numTerms: Int,
-    alpha: Float,
-    alphaAS: Float,
-    beta: Float): Float = {
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): Double = {
     val sv = LDAModel.wSparse(totalTopicCounter, termTopicCounter,
       numTokens, numTerms, alpha, alphaAS, beta)
     AliasTable.generateAlias(sv._2, sv._1, table)
@@ -479,18 +479,18 @@ object LDAModel extends Loader[DistributedLDAModel] {
   private[ml] def tokenSampling(
     gen: Random,
     t: AliasTable,
-    tSum: Float,
+    tSum: Double,
     w: AliasTable,
-    wSum: Float,
-    d: BSV[Float]): Int = {
+    wSum: Double,
+    d: BSV[Double]): Int = {
     val index = d.index
     val data = d.data
     val used = d.used
     val dSum = data(d.used - 1)
     val distSum = tSum + wSum + dSum
-    val genSum = gen.nextFloat() * distSum
+    val genSum = gen.nextDouble() * distSum
     if (genSum < dSum) {
-      val dGenSum = gen.nextFloat() * dSum
+      val dGenSum = gen.nextDouble() * dSum
       val pos = binarySearchInterval(data, dGenSum, 0, used, greater = true)
       index(pos)
     } else if (genSum < (dSum + wSum)) {
@@ -505,16 +505,16 @@ object LDAModel extends Loader[DistributedLDAModel] {
     termTopicCounter: BSV[Count],
     numTokens: Long,
     numTerms: Int,
-    alpha: Float,
-    alphaAS: Float,
-    beta: Float): (Float, BSV[Float]) = {
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): (Double, BSV[Double]) = {
     val numTopics = totalTopicCounter.length
     val betaSum = numTerms * beta
     val alphaSum = numTopics * alpha
     val termSum = numTokens + alphaAS * numTopics
 
-    val w = BSV.zeros[Float](numTopics)
-    var sum = 0.0f
+    val w = BSV.zeros[Double](numTopics)
+    var sum = 0D
     termTopicCounter.activeIterator.foreach { t =>
       val topic = t._1
       val count = t._2
@@ -530,15 +530,15 @@ object LDAModel extends Loader[DistributedLDAModel] {
     totalTopicCounter: BDV[Count],
     numTokens: Long,
     numTerms: Int,
-    alpha: Float,
-    alphaAS: Float,
-    beta: Float): (Float, BDV[Float]) = {
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): (Double, BDV[Double]) = {
     val numTopics = totalTopicCounter.length
     val betaSum = numTerms * beta
     val alphaSum = numTopics * alpha
     val termSum = numTokens + alphaAS * numTopics
-    val t = BDV.zeros[Float](numTopics)
-    var sum = 0.0f
+    val t = BDV.zeros[Double](numTopics)
+    var sum = 0D
     for (topic <- 0 until numTopics) {
       val last = beta * alphaSum * (totalTopicCounter(topic) + alphaAS) /
         ((totalTopicCounter(topic) + betaSum) * termSum)
@@ -555,15 +555,15 @@ object LDAModel extends Loader[DistributedLDAModel] {
     currentTopic: Int,
     numTokens: Long,
     numTerms: Int,
-    alpha: Float,
-    alphaAS: Float,
-    beta: Float): BSV[Float] = {
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): BSV[Double] = {
     val numTopics = totalTopicCounter.length
     // val termSum = numTokens - 1D + alphaAS * numTopics
     val betaSum = numTerms * beta
-    val d = BSV.zeros[Float](numTopics)
-    var sum = 0F
-    docTopicCounter.activeIterator.filter(_._2 > 0F).foreach { t =>
+    val d = BSV.zeros[Double](numTopics)
+    var sum = 0D
+    docTopicCounter.activeIterator.filter(_._2 > 0).foreach { t =>
       val topic = t._1
       val count = if (currentTopic == topic && t._2 != 1) t._2 - 1 else t._2
       // val last = count * termSum * (termTopicCounter(topic) + beta) /
@@ -582,9 +582,9 @@ object LDAModel extends Loader[DistributedLDAModel] {
     val classNameV1_0 = SaveLoadV1_0.classNameV1_0
     if (loadedClassName == classNameV1_0 && version == versionV1_0) {
       implicit val formats = DefaultFormats
-      val alpha = (metadata \ "alpha").extract[Float]
-      val beta = (metadata \ "beta").extract[Float]
-      val alphaAS = (metadata \ "alphaAS").extract[Float]
+      val alpha = (metadata \ "alpha").extract[Double]
+      val beta = (metadata \ "beta").extract[Double]
+      val alphaAS = (metadata \ "alphaAS").extract[Double]
       val numTopics = (metadata \ "numTopics").extract[Int]
       val numTerms = (metadata \ "numTerms").extract[Int]
       val isTransposed = (metadata \ "isTransposed").extract[Boolean]
@@ -644,7 +644,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
     ttc.foreach { tc =>
       gtc :+= tc
     }
-    new LocalLDAModel(gtc, ttc, alpha.toFloat, beta.toFloat, alphaAS.toFloat)
+    new LocalLDAModel(gtc, ttc, alpha.toDouble, beta.toDouble, alphaAS.toDouble)
   }
 
   private[ml] object SaveLoadV1_0 {
@@ -675,13 +675,13 @@ object LDAModel extends Loader[DistributedLDAModel] {
 
     def loadDataFromSolidFile(sc: SparkContext,
       path: String): DistributedLDAModel = {
-      type MT = Tuple6[Int, Int, Float, Float, Float, Boolean]
+      type MT = Tuple6[Int, Int, Double, Double, Double, Boolean]
       val (metas, rdd) = LoaderUtils.HDFSFile2RDD[(VertexId, VD), MT](sc, path, header => {
         implicit val formats = DefaultFormats
         val metadata = parse(header)
-        val alpha = (metadata \ "alpha").extract[Float]
-        val beta = (metadata \ "beta").extract[Float]
-        val alphaAS = (metadata \ "alphaAS").extract[Float]
+        val alpha = (metadata \ "alpha").extract[Double]
+        val beta = (metadata \ "beta").extract[Double]
+        val alphaAS = (metadata \ "alphaAS").extract[Double]
         val numTopics = (metadata \ "numTopics").extract[Int]
         val numTerms = (metadata \ "numTerms").extract[Int]
         val isTransposed = (metadata \ "isTransposed").extract[Boolean]
@@ -728,9 +728,9 @@ object LDAModel extends Loader[DistributedLDAModel] {
       ttc: RDD[(VertexId, VD)],
       numTopics: Int,
       numTerms: Int,
-      alpha: Float,
-      beta: Float,
-      alphaAS: Float,
+      alpha: Double,
+      beta: Double,
+      alphaAS: Double,
       isTransposed: Boolean): Unit = {
       val metadata = compact(render
         (("class" -> classNameV1_0) ~ ("version" -> formatVersionV1_0) ~
