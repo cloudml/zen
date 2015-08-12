@@ -77,13 +77,11 @@ abstract class LDA(
 
   def getCorpus: Graph[VD, ED] = corpus
 
-  @inline private def isDocId(id: Long): Boolean = id < 0L
-
   def termVertices: VertexRDD[VD] = corpus.vertices.filter(t => !isDocId(t._1))
 
   def docVertices: VertexRDD[VD] = corpus.vertices.filter(t => isDocId(t._1))
 
-  private def ScConf = corpus.edges.context.getConf
+  private def scConf = corpus.edges.context.getConf
 
   private def collectTopicCounter(): BDV[Count] = {
     val gtc = termVertices.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
@@ -94,8 +92,8 @@ abstract class LDA(
 
   def runGibbsSampling(totalIter: Int): Unit = {
     val sc = corpus.edges.context
-    val pplx = ScConf.getBoolean(cs_calcPerplexity, false)
-    val saveIntv = ScConf.getInt(cs_saveInterval, 0)
+    val pplx = scConf.getBoolean(cs_calcPerplexity, false)
+    val saveIntv = scConf.getInt(cs_saveInterval, 0)
     if (pplx) {
       println(s"Before Gibbs sampling: perplexity=${perplexity()}")
     }
@@ -109,7 +107,7 @@ abstract class LDA(
       }
       println(s"End Gibbs sampling (Iteration $iter/$totalIter) takes: $elapsedSeconds secs")
       if (saveIntv > 0 && iter % saveIntv == 0) {
-        val outputPath = ScConf.get(cs_outputpath)
+        val outputPath = scConf.get(cs_outputpath)
         saveModel().save(sc, s"$outputPath-iter$iter", isTransposed=true)
         println(s"Saved model after iter-$iter")
       }
@@ -118,7 +116,7 @@ abstract class LDA(
 
   private def gibbsSampling(sampIter: Int): Unit = {
     val sc = corpus.edges.context
-    val chkptIntv = ScConf.getInt(cs_chkptInterval, 0)
+    val chkptIntv = scConf.getInt(cs_chkptInterval, 0)
     val prevCorpus = corpus
     val sampledCorpus = sampleTokens(corpus, totalTopicCounter, sampIter + seed,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
@@ -396,6 +394,8 @@ object LDA {
     -(docId + 1L)
   }
 
+  @inline private def isDocId(id: Long): Boolean = id < 0L
+
   private[ml] def sampleSV(
     gen: Random,
     table: AliasTable,
@@ -484,11 +484,9 @@ class FastLDA(
       // so, use below simple cache to avoid calculating table each time
       val lastTable = new AliasTable(numTopics)
       var lastVid: VertexId = -1L
-      var lastWSum = 0D
-      val dv = tDense(totalTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
-      val dData = new Array[Double](numTopics)
-      val t = AliasTable.generateAlias(dv._2, dv._1)
-      val tSum = dv._1
+      val tdt = tDense(totalTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
+      val globalTable = AliasTable.generateAlias(tdt._2, tdt._1)
+      val docCdf = new Array[Double](numTopics)
       iter.map(triplet => {
         val termId = triplet.srcId
         // val docId = triplet.dstId
@@ -497,16 +495,16 @@ class FastLDA(
         val topics = triplet.attr
         for (i <- topics.indices) {
           val currentTopic = topics(i)
-          dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, dData,
+          dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, docCdf,
             currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
           if (lastVid != termId) {
-            lastWSum = wordTable(lastTable, totalTopicCounter, termTopicCounter,
-              termId, numTokens, numTerms, alpha, alphaAS, beta)
             lastVid = termId
+            val wst = wSparse(totalTopicCounter, termTopicCounter, numTokens,
+              numTerms, alpha, alphaAS, beta)
+            AliasTable.generateAlias(wst._2, wst._1, lastTable)
           }
-          val newTopic = tokenSampling(gen, t, tSum, lastTable, termTopicCounter, lastWSum,
-            docTopicCounter, dData, currentTopic)
-
+          val newTopic = tokenSampling(gen, globalTable, lastTable, docCdf, termTopicCounter,
+            docTopicCounter, currentTopic)
           if (newTopic != currentTopic) {
             topics(i) = newTopic
           }
@@ -518,20 +516,20 @@ class FastLDA(
 
   private def tokenSampling(gen: Random,
     t: AliasTable,
-    tSum: Double,
     w: AliasTable,
-    termTopicCounter: VD,
-    wSum: Double,
-    docTopicCounter: VD,
     dData: Array[Double],
+    termTopicCounter: VD,
+    docTopicCounter: VD,
     currentTopic: Int): Int = {
-    val index = docTopicCounter.index
-    val used = docTopicCounter.used
+    val tSum = t.norm
+    val wSum = w.norm
     val dSum = dData(docTopicCounter.used - 1)
     val distSum = tSum + wSum + dSum
     val genSum = gen.nextDouble() * distSum
     if (genSum < dSum) {
       val dGenSum = gen.nextDouble() * dSum
+      val index = docTopicCounter.index
+      val used = docTopicCounter.used
       val pos = binarySearchInterval(dData, dGenSum, 0, used, greater=true)
       index(pos)
     } else if (genSum < (dSum + wSum)) {
@@ -630,21 +628,6 @@ class FastLDA(
       sum += last
       d(i) = sum
     }
-  }
-
-  private def wordTable(table: AliasTable,
-    totalTopicCounter: BDV[Count],
-    termTopicCounter: VD,
-    termId: VertexId,
-    numTokens: Long,
-    numTerms: Int,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): Double = {
-    val sv = wSparse(totalTopicCounter, termTopicCounter,
-      numTokens, numTerms, alpha, alphaAS, beta)
-    AliasTable.generateAlias(sv._2, sv._1, table)
-    sv._1
   }
 }
 
