@@ -109,6 +109,7 @@ abstract class LDA(
       if (saveIntv > 0 && iter % saveIntv == 0) {
         val outputPath = ScConf.get(cs_outputpath)
         saveModel().save(sc, s"$outputPath-iter$iter", isTransposed=true)
+        println(s"Saved model after iter-$iter")
       }
     }
   }
