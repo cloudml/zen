@@ -23,7 +23,6 @@ import java.util.Random
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, norm => brzNorm, sum => brzSum}
 import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.clustering.LDADefines._
-import com.github.cloudml.zen.ml.clustering.LDAModel.{Count, DocId, ED, VD}
 import com.github.cloudml.zen.ml.util.{AliasTable, LoaderUtils}
 import com.google.common.base.Charsets
 import com.google.common.io.Files
@@ -208,7 +207,7 @@ class DistributedLDAModel private[ml](
    * @param burnIn previous burnIn iters results will discard
    */
   def inference(
-    docs: RDD[(VertexId, BSV[Int])],
+    docs: RDD[BOW],
     totalIter: Int = 25,
     burnIn: Int = 22): RDD[(VertexId, BSV[Float])] = {
     require(totalIter > burnIn, "totalIter is less than burnInIter")
@@ -254,7 +253,7 @@ class DistributedLDAModel private[ml](
     new LocalLDAModel(gtc, ttc1, alpha, beta, alphaAS)
   }
 
-  private[ml] def initializeInferDataset(docs: RDD[(LDA.DocId, BSV[Int])],
+  private[ml] def initializeInferDataset(docs: RDD[BOW],
     numTopics: Int,
     storageLevel: StorageLevel): Graph[VD, ED] = {
     val previousCorpus: Graph[VD, ED] = initializeCorpus(docs, numTopics, storageLevel)
@@ -273,7 +272,7 @@ class DistributedLDAModel private[ml](
   }
 
   private[ml] def initializeCorpus(
-    docs: RDD[(LDA.DocId, BSV[Int])],
+    docs: RDD[BOW],
     numTopics: Int,
     storageLevel: StorageLevel): Graph[VD, ED] = {
     val edges = docs.mapPartitionsWithIndex((pid, iter) => {
@@ -294,7 +293,7 @@ class DistributedLDAModel private[ml](
 
   private def initializeEdges(
     gen: Random,
-    doc: BSV[Int],
+    doc: BSV[Count],
     docId: DocId,
     numTopics: Int): Iterator[Edge[ED]] = {
     assert(docId >= 0)
@@ -477,12 +476,6 @@ class DistributedLDAModel private[ml](
 }
 
 object LDAModel extends Loader[DistributedLDAModel] {
-  private[ml] type DocId = VertexId
-  private[ml] type WordId = VertexId
-  private[ml] type Count = Int
-  private[ml] type ED = Array[Int]
-  private[ml] type VD = BSV[Count]
-
   private[ml] def tokenSampling(
     gen: Random,
     t: AliasTable,

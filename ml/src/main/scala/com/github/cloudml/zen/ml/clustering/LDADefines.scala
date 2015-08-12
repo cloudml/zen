@@ -18,13 +18,19 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
-import breeze.linalg.SparseVector
+import breeze.linalg.{SparseVector => BSV}
+import org.apache.spark.graphx._
 
 object LDADefines {
-  type BOW = (Long, SparseVector[Int])
+  type DocId = VertexId
+  type WordId = VertexId
+  type Count = Int
+  type ED = Array[Int]
+  type VD = BSV[Count]
+  type BOW = (Long, BSV[Count])
 
   val cs_sampleRate = "zen.lda.sampleRate"
-  val cs_LDAAlgorithm = "zen.lda.cs_LDAAlgorithm"
+  val cs_LDAAlgorithm = "zen.lda.LDAAlgorithm"
   val cs_storageLevel = "zen.lda.storageLevel"
   val cs_partStrategy = "zen.lda.partStrategy"
   val cs_chkptInterval = "zen.lda.chkptInterval"

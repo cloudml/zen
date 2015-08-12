@@ -77,6 +77,8 @@ abstract class LDA(
 
   def getCorpus: Graph[VD, ED] = corpus
 
+  @inline private def isDocId(id: Long): Boolean = id < 0L
+
   def termVertices: VertexRDD[VD] = corpus.vertices.filter(t => !isDocId(t._1))
 
   def docVertices: VertexRDD[VD] = corpus.vertices.filter(t => isDocId(t._1))
@@ -163,13 +165,15 @@ abstract class LDA(
       ttcSum
     } else {
       val rand = new XORShiftRandom()
-      ttcSum.mapValues(_.mapValues(s => {
+      val aver = ttcSum.mapValues(_.mapValues(s => {
         val mid = s.toDouble / (runIter + 1)
         val l = math.floor(mid)
         if (rand.nextDouble() > mid - l) l else l + 1
       }.toInt))
+      aver.persist(storageLevel).count()
+      ttcSum.unpersist(blocking=false)
+      aver
     }
-    ttc.persist(storageLevel)
     val gtc = ttc.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
     new DistributedLDAModel(gtc, ttc, numTopics, numTerms, alpha, beta, alphaAS)
   }
@@ -248,12 +252,6 @@ abstract class LDA(
 }
 
 object LDA {
-  private[ml] type DocId = VertexId
-  private[ml] type WordId = VertexId
-  private[ml] type Count = Int
-  private[ml] type ED = Array[Int]
-  private[ml] type VD = BSV[Count]
-
   /**
    * LDA training
    * @param docs       RDD of documents, which are term (word) count vectors paired with IDs.
@@ -398,10 +396,6 @@ object LDA {
     -(docId + 1L)
   }
 
-  @inline private def isDocId(id: Long): Boolean = {
-    id < 0L
-  }
-
   private[ml] def sampleSV(
     gen: Random,
     table: AliasTable,
@@ -445,14 +439,14 @@ object LDA {
 
 private[ml] class LDAKryoRegistrator extends KryoRegistrator {
   def registerClasses(kryo: com.esotericsoftware.kryo.Kryo) {
-    kryo.register(classOf[BSV[LDA.Count]])
+    kryo.register(classOf[BSV[Count]])
     kryo.register(classOf[BSV[Float]])
 
-    kryo.register(classOf[BDV[LDA.Count]])
+    kryo.register(classOf[BDV[Count]])
     kryo.register(classOf[BDV[Float]])
 
-    kryo.register(classOf[LDA.ED])
-    kryo.register(classOf[LDA.VD])
+    kryo.register(classOf[ED])
+    kryo.register(classOf[VD])
     kryo.register(classOf[BOW])
 
     kryo.register(classOf[Random])
