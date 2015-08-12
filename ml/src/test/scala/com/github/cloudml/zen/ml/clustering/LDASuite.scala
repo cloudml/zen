@@ -103,7 +103,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
     assert(pps.head - pps.last > 0)
 
-    val ldaModel = lda.saveModel(3).toLocalLDAModel
+    val ldaModel = lda.saveModel(2).toLocalLDAModel
     data.collect().foreach { case (_, sv) =>
       val a = ldaModel.inference(sv)
       val b = ldaModel.inference(sv)

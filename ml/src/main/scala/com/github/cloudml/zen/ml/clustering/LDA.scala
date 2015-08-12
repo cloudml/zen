@@ -108,7 +108,7 @@ abstract class LDA(
       println(s"End Gibbs sampling (Iteration $iter/$totalIter) takes: $elapsedSeconds secs")
       if (saveIntv > 0 && iter % saveIntv == 0) {
         val outputPath = ScConf.get(cs_outputpath)
-        saveModel(0).save(sc, s"$outputPath-iter$iter", isTransposed=true)
+        saveModel().save(sc, s"$outputPath-iter$iter", isTransposed=true)
       }
     }
   }
@@ -143,27 +143,31 @@ abstract class LDA(
 
   /**
    * Save the term-topic related model
-   * @param runIter saved these iters' averaged model
+   * @param runIter saved more these iters' averaged model
    */
-  def saveModel(runIter: Int = 1): DistributedLDAModel = {
-    var termTopicCounter: RDD[(VertexId, VD)] = termVertices.persist(storageLevel)
-    termTopicCounter.count()
+  def saveModel(runIter: Int = 0): DistributedLDAModel = {
+    var ttcSum: RDD[(VertexId, VD)] = termVertices
+    ttcSum.persist(storageLevel).count()
     for (iter <- 1 to runIter) {
       println(s"Save TopicModel (Iteration $iter/$runIter)")
-      gibbsSampling(iter)
-      termTopicCounter.join(termVertices).map {
-        case (term, (a,b)) => (term, a += b)
+      gibbsSampling(-iter)
+      val newTtcSum = ttcSum.join(termVertices).map {
+        case (term, (a, b)) => (term, a += b)
       }
+      newTtcSum.persist(storageLevel).count()
+      ttcSum.unpersist(blocking=false)
+      ttcSum = newTtcSum
     }
-    val rand = new XORShiftRandom()
-    val ttc = termTopicCounter.mapValues(c => {
-      val nc = new BSV[Count](c.index.slice(0, c.used), c.data.slice(0, c.used).map(v => {
-        val mid = v.toDouble / runIter
+    val ttc = if (runIter == 0) {
+      ttcSum
+    } else {
+      val rand = new XORShiftRandom()
+      ttcSum.mapValues(_.mapValues(s => {
+        val mid = s.toDouble / (runIter + 1)
         val l = math.floor(mid)
         if (rand.nextDouble() > mid - l) l else l + 1
-      }.toInt), c.length)
-      nc
-    })
+      }.toInt))
+    }
     ttc.persist(storageLevel)
     val gtc = ttc.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
     new DistributedLDAModel(gtc, ttc, numTopics, numTerms, alpha, beta, alphaAS)
@@ -284,7 +288,7 @@ object LDA {
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     lda.runGibbsSampling(totalIter)
-    lda.saveModel(1)
+    lda.saveModel()
   }
 
   def incrementalTrain(
@@ -311,7 +315,7 @@ object LDA {
     }
     broadcastModel.unpersist(blocking=false)
     lda.runGibbsSampling(totalIter)
-    lda.saveModel(1)
+    lda.saveModel()
   }
 
   private[ml] def initializeCorpus(

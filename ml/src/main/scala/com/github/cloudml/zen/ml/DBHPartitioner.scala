@@ -43,13 +43,13 @@ private[ml] class DBHPartitioner(val partitions: Int, val threshold: Int = 0) ex
     val dstId = et.dstId
     val srcDeg = et.srcAttr
     val dstDeg = et.dstAttr
-    val minId = min(srcId, dstId)
-    val maxId = max(srcId, dstId)
     val maxDeg = max(srcDeg, dstDeg)
+    val minDegId = if (maxDeg == srcDeg) dstId else srcId
+    val maxDegId = if (maxDeg == srcDeg) srcId else dstId
     if (maxDeg < threshold) {
-      maxId
+      minDegId
     } else {
-      minId
+      minDegId
     }
   }
 
