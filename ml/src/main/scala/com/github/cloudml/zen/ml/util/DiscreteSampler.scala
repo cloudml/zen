@@ -25,6 +25,6 @@ trait DiscreteSampler {
   def used: Int
   def norm: Double
   def sample(gen: Random): Int
-  def update(i: Int, delta: Double): Unit
+  def update(state: Int, delta: Double): Unit
   def resetDist(dist: BV[Double], sum: Double): DiscreteSampler
 }

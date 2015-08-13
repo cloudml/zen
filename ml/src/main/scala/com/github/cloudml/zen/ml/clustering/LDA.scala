@@ -511,8 +511,19 @@ class FastLDA(
               numTerms, alpha, alphaAS, beta)
             lastSampler.resetDist(wst._2, wst._1)
           }
+          def newAlpha(t: Int) = alpha * numTopics * (totalTopicCounter(t) + alphaAS) /
+            (numTokens + alphaAS * numTopics)
+          def deltaDenom(t: Int) = {
+            val denom = totalTopicCounter(t) + numTerms * beta
+            denom * (denom - 1)
+          }
+          def wNumer(t: Int) = termTopicCounter(t) - totalTopicCounter(t) - beta * numTerms
+          globalSampler.update(currentTopic, newAlpha(currentTopic) * beta / deltaDenom(currentTopic))
+          lastSampler.update(currentTopic, newAlpha(currentTopic) * wNumer(currentTopic) / deltaDenom(currentTopic))
           val newTopic = tokenSampling(gen, globalSampler, lastSampler, docCdf, termTopicCounter,
             docTopicCounter, currentTopic)
+          globalSampler.update(newTopic, newAlpha(newTopic) * beta / deltaDenom(newTopic))
+          lastSampler.update(newTopic, newAlpha(newTopic) * wNumer(newTopic) / deltaDenom(newTopic))
           if (newTopic != currentTopic) {
             topics(i) = newTopic
           }
@@ -543,7 +554,7 @@ class FastLDA(
     } else if (genSum < (dSum + wSum)) {
       w match {
         case wt: AliasTable => sampleSV(gen, wt, termTopicCounter, currentTopic)
-        case FTree => w.sample(gen)
+        case wf: FTree => wf.sample(gen)
       }
     } else {
       t.sample(gen)

@@ -39,9 +39,9 @@ private[zen] class AliasTable(initUsed: Int)
 
   def used: Int = _used
 
-  def length: Int = size
+  def length: Int = _l.length
 
-  def size: Int = l.length
+  def size: Int = length
 
   def norm: Double = _norm
 
@@ -55,7 +55,7 @@ private[zen] class AliasTable(initUsed: Int)
     }
   }
 
-  def update(i: Int, delta: Double): Unit = {}
+  def update(state: Int, delta: Double): Unit = {}
 
   def resetDist(dist: BV[Double], sum: Double): this.type = {
     val used = dist.activeSize
@@ -115,17 +115,18 @@ private[zen] class AliasTable(initUsed: Int)
 private[zen] object AliasTable {
   type Pair = (Int, Double)
 
-  @transient private lazy val tableOrdering = new scala.math.Ordering[Pair] {
-    override def compare(x: Pair, y: Pair): Int = {
-      Ordering[Double].compare(x._2, y._2)
-    }
-  }
-  @transient private lazy val tableReverseOrdering = tableOrdering.reverse
-
   def generateAlias(sv: BV[Double]): AliasTable = {
+    val norm = brzSum(sv)
+    generateAlias(sv, norm)
+  }
+
+  def generateAlias(sv: BV[Double], sum: Double): AliasTable = {
     val used = sv.activeSize
-    val sum = brzSum(sv)
     val table = new AliasTable(used)
+    generateAlias(sv, sum, table)
+  }
+
+  def generateAlias(sv: BV[Double], sum: Double, table: AliasTable): AliasTable = {
     table.resetDist(sv, sum)
   }
 }

@@ -18,39 +18,61 @@
 package com.github.cloudml.zen.ml.util
 
 import java.util.Random
-import breeze.linalg.{Vector => BV, SparseVector => BSV}
+import com.github.cloudml.zen.ml.util.FTree._
+import breeze.linalg.{Vector => BV, SparseVector => BSV, DenseVector => BDV}
 
-private[zen] class FTree(dataSize: Int, isSparse: Boolean)
+private[zen] class FTree(dataSize: Int, val isSparse: Boolean)
   extends DiscreteSampler with Serializable {
 
-  def length: Int = regularLen(dataSize)
+  private var _regLen: Int = regularLen(dataSize)
+  private var _tree: Array[Double] = new Array[Double](_regLen << 1)
+  private var _space: Array[Int] = if (isSparse) null else new Array[Int](_regLen)
+  private var _used: Int = dataSize
 
-  private var _tree: Array[Double] = new Array[Double](length << 1)
-  private var _space: Array[Int] = if (isSparse) null else new Array[Int](dataSize)
+  def length: Int = _tree.length
 
-  def used: Int = dataSize
+  def size: Int = length
+
+  def used: Int = _used
 
   def norm: Double = _tree(1)
 
-  private def reset(var dataSize, var isSparse): this.type = {
-    _tree = tree
-    _space = space
-    _spc2idx = _space.zipWithIndex.toMap
-    this
+  @inline private def leafOffset = _regLen
+
+  @inline private def getLeaf(i: Int): Double = _tree(i + leafOffset)
+
+  @inline private def setLeaf(i: Int, p: Double): Unit = {
+    _tree(i + leafOffset) = p
   }
 
-  def update(state: Int, delta: Float): Unit = {
-    _space.findAll(state).
-    val regLen = _tree.length >> 1
-    val i = _spc2idx(state)
-    _tree(regLen + i) =
+  /**
+   * map pos in FTree to distribution state
+   */
+  private def toState(pos: Int): Int = {
+    val i = pos - leafOffset
+    if (isSparse) {
+      i
+    } else {
+      _space(i)
+    }
+  }
+
+  /**
+   * map distribution state to pos in FTree
+   */
+  private def toTreePos(state: Int): Int = {
+    val i = if (isSparse) {
+      state
+    } else {
+      binarySearch(_space, state, 0, _used)
+    }
+    i + leafOffset
   }
 
   def sample(gen: Random): Int = {
-    var u = gen.nextFloat() * _tree(1)
-    val regLen = _tree.length >> 1
+    var u = gen.nextDouble() * _tree(1)
     var cur = 1
-    while (cur < regLen) {
+    while (cur < leafOffset) {
       val lc = cur << 1
       if (u < _tree(lc)) {
         cur = lc
@@ -59,23 +81,107 @@ private[zen] class FTree(dataSize: Int, isSparse: Boolean)
         cur = lc + 1
       }
     }
-    _space(cur - regLen)
+    toState(cur)
+  }
+
+  def update(state: Int, delta: Double): Unit = {
+    var pos = toTreePos(state)
+    if (pos < leafOffset) {
+      pos = addState()
+    }
+    val p = _tree(pos)
+    val np = p + delta
+    if (np <= 0D) {
+      delState(pos)
+    } else {
+      _tree(pos) = np
+      updateAncestors(pos, delta)
+    }
+  }
+
+  private def updateAncestors(cur: Int, delta: Double): Unit = {
+    var pos = cur >> 1
+    while (pos >= 1) {
+      _tree(pos) += delta
+      pos >>= 1
+    }
+  }
+
+  private def addState(): Int = {
+    if (_used == _regLen) {
+      val prevRegLen = _regLen
+      val prevTree = _tree
+      val prevSpace = _space
+      val prevUsed = _used
+      reset(_used + 1)
+      System.arraycopy(prevTree, prevRegLen, _tree, _regLen, prevUsed)
+      buildFTree()
+      if (isSparse) {
+        System.arraycopy(prevSpace, 0, _space, 0, prevUsed)
+      }
+    } else {
+      _used += 1
+    }
+    _used - 1 + leafOffset
+  }
+
+  private def delState(pos: Int): Unit = {
+    val p = _tree(pos)
+    _tree(pos) = 0D
+    updateAncestors(pos, -p)
+  }
+
+  def resetDist(dist: BV[Double], sum: Double): this.type = {
+    val used = dist.activeSize
+    reset(used)
+    dist match {
+      case v: BDV[Double] =>
+        assert(!isSparse)
+        for ((i, prob) <- v.activeIterator) {
+          setLeaf(i, prob)
+        }
+      case v: BSV[Double] =>
+        assert(isSparse)
+        for (((state, prob), i) <- v.activeIterator.zipWithIndex) {
+          setLeaf(i, prob)
+          _space(i) = state
+        }
+    }
+    buildFTree()
+    this
+  }
+
+  private def buildFTree(): this.type = {
+    for (i <- leafOffset-1 to 1 by -1) {
+      _tree(i) = _tree(i << 1) + _tree(i << 1 + 1)
+    }
+    this
+  }
+
+  private def reset(newDataSize: Int): this.type = {
+    val regLen = regularLen(newDataSize)
+    if (regLen > (_tree.length >> 1)) {
+      _tree = new Array[Double](regLen << 1)
+      _space = if (isSparse) null else new Array[Int](regLen)
+    }
+    _regLen = regLen
+    _used = newDataSize
+    for (i <- 0 until _regLen) {
+      setLeaf(i, 0D)
+    }
+    _tree(1) = 0D
+    this
   }
 }
 
 private[zen] object FTree {
-  def buildFTree(sv: BV[Float]): FTree = {
-    val regLen = regularLen(sv.activeSize)
-    val tree = Array.fill[Float](2 * regLen)(0.0f)
-    val space = BSV.zeros[Int](sv.activeSize)
-    for (((state, prob), i) <- sv.activeIterator.zipWithIndex) {
-      tree(regLen + i) = prob
-      space(regLen + i) = state
+  def generateFTree(sv: BV[Double]): FTree = {
+    val used = sv.activeSize
+    val ftree = sv match {
+      case v: BDV[Double] => new FTree(used, isSparse=false)
+      case v: BSV[Double] => new FTree(used, isSparse=true)
     }
-    for (i <- regLen - 1 to 1 by -1) {
-      tree(i) = tree(i << 1) + tree(i << 1 + 1)
-    }
-    (new FTree).setData(tree, space)
+    ftree.resetDist(sv, 0D)
   }
 
   private def regularLen(len: Int): Int = {
@@ -90,5 +196,18 @@ private[zen] object FTree {
       }
       if (lh == len) lh else lh << 1
     }
+  }
+
+  def binarySearch[T](arr: Array[T], key: T, start: Int, end: Int)(implicit num: Numeric[T]): Int = {
+    def seg(s: Int, e: Int): Int = {
+      if (s > e) return -1
+      val mid = (s + e) >> 1
+      mid match {
+        case _ if num.equiv(arr(mid), key) => mid
+        case _ if num.lt(arr(mid), key) => seg(mid + 1, e)
+        case _ if num.gt(arr(mid), key) => seg(s, mid - 1)
+      }
+    }
+    seg(start, end - 1)
   }
 }
