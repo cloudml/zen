@@ -62,6 +62,7 @@ object LDADriver {
     conf.set(cs_storageLevel, slvlStr)
     conf.set(cs_sampleRate, options.getOrElse("samplerate", "1.0"))
     conf.set(cs_LDAAlgorithm, options.getOrElse("ldaalgorithm", "fastlda"))
+    conf.set(cs_accelMethod, options.getOrElse("accelmethod", "alias"))
     conf.set(cs_partStrategy, options.getOrElse("partstrategy", "dbh"))
     conf.set(cs_chkptInterval, options.getOrElse("chkptinterval", "10"))
     conf.set(cs_calcPerplexity, options.getOrElse("calcperplexity", "false"))
@@ -195,6 +196,7 @@ object LDADriver {
       "        -totalIter=<Int> -numPartitions=<Int>\n" +
       "  Options: -sampleRate=<Double(*1.0)>\n" +
       "           -LDAAlgorithm=<*FastLDA|LightLDA>\n" +
+      "           -accelMethod=<*Alias|FTree|Hybrid>\n" +
       "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK_SER)>\n" +
       "           -partStrategy=<*DBH|Edge2D>\n" +
       "           -chkptInterval=<Int(*10)> (0 or negative disables checkpoint)\n" +

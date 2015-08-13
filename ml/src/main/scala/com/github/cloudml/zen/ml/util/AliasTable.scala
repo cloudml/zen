@@ -19,9 +19,11 @@ package com.github.cloudml.zen.ml.util
 
 import java.util.Random
 import math.abs
+import com.github.cloudml.zen.ml.util.AliasTable._
 import breeze.linalg.{Vector => BV, sum => brzSum}
 
-private[zen] class AliasTable(initUsed: Int) extends Serializable {
+private[zen] class AliasTable(initUsed: Int)
+  extends DiscreteSampler with Serializable {
 
   private var _l: Array[Int] = new Array[Int](initUsed)
   private var _h: Array[Int] = new Array[Int](initUsed)
@@ -43,7 +45,7 @@ private[zen] class AliasTable(initUsed: Int) extends Serializable {
 
   def norm: Double = _norm
 
-  def sampleAlias(gen: Random): Int = {
+  def sample(gen: Random): Int = {
     val bin = gen.nextInt(_used)
     val prob = _p(bin)
     if (gen.nextDouble() * _norm < prob) {
@@ -51,6 +53,46 @@ private[zen] class AliasTable(initUsed: Int) extends Serializable {
     } else {
       _h(bin)
     }
+  }
+
+  def update(i: Int, delta: Double): Unit = {}
+
+  def resetDist(dist: BV[Double], sum: Double): this.type = {
+    val used = dist.activeSize
+    reset(used)
+    val (loList, hiList) = dist.activeIterator.map(t => (t._1, t._2 * used)).toList.partition(_._2 < sum)
+    var ls = 0
+    var le = 0
+    var end = used
+    @inline def isClose(a: Double, b: Double): Boolean = abs(a - b) <= (1e-8 + abs(a) * 1e-6)
+    def putAlias(list: List[Pair], rest: List[Pair]): List[Pair] = list match {
+      case Nil => rest
+      case (t, pt) :: rlist if pt < sum =>
+        _l(le) = t
+        _p(le) = pt
+        le += 1
+        putAlias(rlist, rest)
+      case (t, pt) :: rlist if ls < le =>
+        _h(ls) = t
+        val pl = _p(ls)
+        ls += 1
+        val pd = pt - (sum - pl)
+        putAlias(List((t, pd)) ++ rlist, rest)
+      case (t, pt) :: rlist=>
+        putAlias(rlist, rest ++ List((t, pt)))
+    }
+    def putRest(rest: List[Pair]): Unit = rest match {
+      case Nil => Unit
+      case (t, pt) :: rrest =>
+        assert(isClose(pt, sum))
+        end -= 1
+        _l(end) = t
+        _h(end) = t
+        putRest(rrest)
+    }
+    putRest(putAlias(hiList, putAlias(loList, List())))
+    assert(ls == le && end == ls || ls == le - 1 && (end == ls || end == le))
+    setNorm(sum)
   }
 
   private[AliasTable] def reset(newSize: Int): this.type = {
@@ -83,66 +125,7 @@ private[zen] object AliasTable {
   def generateAlias(sv: BV[Double]): AliasTable = {
     val used = sv.activeSize
     val sum = brzSum(sv)
-    val probs = sv.activeIterator.slice(0, used)
-    generateAlias(probs, sum, used)
-  }
-
-  def generateAlias(probs: Iterator[Pair], sum: Double, used: Int): AliasTable = {
     val table = new AliasTable(used)
-    generateAlias(probs, sum, used, table)
-  }
-
-  def generateAlias(
-    probs: Iterator[Pair],
-    sum: Double,
-    used: Int,
-    table: AliasTable): AliasTable = {
-    table.reset(used)
-    val (loList, hiList) = probs.map(t => (t._1, t._2 * used)).toList.partition(_._2 < sum)
-    var ls = 0
-    var le = 0
-    var end = used
-    @inline def isClose(a: Double, b: Double): Boolean = abs(a - b) <= (1e-8 + abs(a) * 1e-6)
-    def putAlias(list: List[Pair], rest: List[Pair]): List[Pair] = list match {
-      case Nil => rest
-      case (t, pt) :: rlist if pt < sum =>
-        table.l(le) = t
-        table.p(le) = pt
-        le += 1
-        putAlias(rlist, rest)
-      case (t, pt) :: rlist if ls < le =>
-        table.h(ls) = t
-        val pl = table.p(ls)
-        ls += 1
-        val pd = pt - (sum - pl)
-        putAlias(List((t, pd)) ++ rlist, rest)
-      case (t, pt) :: rlist=>
-        putAlias(rlist, rest ++ List((t, pt)))
-    }
-    def putRest(rest: List[Pair]): Unit = rest match {
-      case Nil => Unit
-      case (t, pt) :: rrest =>
-        assert(isClose(pt, sum))
-        end -= 1
-        table.l(end) = t
-        table.h(end) = t
-        putRest(rrest)
-    }
-    putRest(putAlias(hiList, putAlias(loList, List())))
-    assert(ls == le && end == ls || ls == le - 1 && (end == ls || end == le))
-    table.setNorm(sum)
-    table
-  }
-
-  def generateAlias(sv: BV[Double], sum: Double): AliasTable = {
-    val used = sv.activeSize
-    val probs = sv.activeIterator.slice(0, used)
-    generateAlias(probs, sum, used)
-  }
-
-  def generateAlias(sv: BV[Double], sum: Double, table: AliasTable): AliasTable = {
-    val used = sv.activeSize
-    val probs = sv.activeIterator.slice(0, used)
-    generateAlias(probs, sum, used, table)
+    table.resetDist(sv, sum)
   }
 }

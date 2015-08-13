@@ -494,9 +494,9 @@ object LDAModel extends Loader[DistributedLDAModel] {
       val pos = binarySearchInterval(data, dGenSum, 0, used, greater = true)
       index(pos)
     } else if (genSum < (dSum + wSum)) {
-      w.sampleAlias(gen)
+      w.sample(gen)
     } else {
-      t.sampleAlias(gen)
+      t.sample(gen)
     }
   }
 

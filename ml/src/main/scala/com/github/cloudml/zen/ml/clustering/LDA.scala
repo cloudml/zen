@@ -24,7 +24,7 @@ import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, Ve
 import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.clustering.LDA._
 import com.github.cloudml.zen.ml.clustering.LDADefines._
-import com.github.cloudml.zen.ml.util.{XORShiftRandom, AliasTable}
+import com.github.cloudml.zen.ml.util.{FTree, DiscreteSampler, XORShiftRandom, AliasTable}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.graphx._
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
@@ -403,7 +403,7 @@ object LDA {
     currentTopic: Int,
     currentTopicCounter: Int = 0,
     numSampling: Int = 0): Int = {
-    val docTopic = table.sampleAlias(gen)
+    val docTopic = table.sample(gen)
     if (docTopic == currentTopic && numSampling < 16) {
       val svCounter = if (currentTopicCounter == 0) sv(currentTopic) else currentTopicCounter
       // TODO: not sure it is correct or not?
@@ -476,16 +476,24 @@ class FastLDA(
     alpha: Double,
     alphaAS: Double,
     beta: Double): Graph[VD, ED] = {
+    val sampl = corpus.edges.context.getConf.get(cs_accelMethod, "alias")
     val numPartitions = corpus.edges.partitions.length
     corpus.mapTriplets((pid, iter) => {
       val gen = new XORShiftRandom(numPartitions * pseudoIter + pid)
-      // table is a per term data structure
+      // table/ftree is a per term data structure
       // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
       // so, use below simple cache to avoid calculating table each time
-      val lastTable = new AliasTable(numTopics)
+      val lastSampler: DiscreteSampler = sampl match {
+        case "alias" => new AliasTable(numTopics)
+        case "ftree" | "hybrid" => new FTree(numTopics, isSparse=true)
+      }
       var lastVid: VertexId = -1L
+      val globalSampler: DiscreteSampler = sampl match {
+        case "ftree" => new FTree(numTopics, isSparse=false)
+        case "alias" | "hybrid" => new AliasTable(numTopics)
+      }
       val tdt = tDense(totalTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
-      val globalTable = AliasTable.generateAlias(tdt._2, tdt._1)
+      globalSampler.resetDist(tdt._2, tdt._1)
       val docCdf = new Array[Double](numTopics)
       iter.map(triplet => {
         val termId = triplet.srcId
@@ -501,9 +509,9 @@ class FastLDA(
             lastVid = termId
             val wst = wSparse(totalTopicCounter, termTopicCounter, numTokens,
               numTerms, alpha, alphaAS, beta)
-            AliasTable.generateAlias(wst._2, wst._1, lastTable)
+            lastSampler.resetDist(wst._2, wst._1)
           }
-          val newTopic = tokenSampling(gen, globalTable, lastTable, docCdf, termTopicCounter,
+          val newTopic = tokenSampling(gen, globalSampler, lastSampler, docCdf, termTopicCounter,
             docTopicCounter, currentTopic)
           if (newTopic != currentTopic) {
             topics(i) = newTopic
@@ -515,8 +523,8 @@ class FastLDA(
   }
 
   private def tokenSampling(gen: Random,
-    t: AliasTable,
-    w: AliasTable,
+    t: DiscreteSampler,
+    w: DiscreteSampler,
     dData: Array[Double],
     termTopicCounter: VD,
     docTopicCounter: VD,
@@ -533,9 +541,12 @@ class FastLDA(
       val pos = binarySearchInterval(dData, dGenSum, 0, used, greater=true)
       index(pos)
     } else if (genSum < (dSum + wSum)) {
-      sampleSV(gen, w, termTopicCounter, currentTopic)
+      w match {
+        case wt: AliasTable => sampleSV(gen, wt, termTopicCounter, currentTopic)
+        case FTree => w.sample(gen)
+      }
     } else {
-      t.sampleAlias(gen)
+      t.sample(gen)
     }
   }
 
@@ -711,7 +722,7 @@ class LightLDA(
             var proposalTopic = -1
             val q = if (docProposal) {
               if (gen.nextDouble() < dDSum / (dSum - 1 + dDSum)) {
-                proposalTopic = dD.sampleAlias(gen)
+                proposalTopic = dD.sample(gen)
               }
               else {
                 proposalTopic = docTopicCounter.synchronized {
@@ -721,7 +732,7 @@ class LightLDA(
               dPFun
             } else {
               val table = if (gen.nextDouble() < wSum / (wSum + wDSum)) w else wD
-              proposalTopic = table.sampleAlias(gen)
+              proposalTopic = table.sample(gen)
               wPFun
             }
 
