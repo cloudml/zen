@@ -84,14 +84,14 @@ private[zen] class AliasTable(initUsed: Int)
     def putRest(rest: List[Pair]): Unit = rest match {
       case Nil => Unit
       case (t, pt) :: rrest =>
-        assert(isClose(pt, sum))
+        // assert(isClose(pt, sum))
         end -= 1
         _l(end) = t
         _h(end) = t
         putRest(rrest)
     }
     putRest(putAlias(hiList, putAlias(loList, List())))
-    assert(ls == le && end == ls || ls == le - 1 && (end == ls || end == le))
+    // assert(abs(le - ls) <= 1 && abs(end - le) <= 1 && abs(end - ls) <= 1)
     setNorm(sum)
   }
 
