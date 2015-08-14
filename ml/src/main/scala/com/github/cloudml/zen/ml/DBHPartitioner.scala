@@ -80,8 +80,6 @@ object DBHPartitioner {
     val newEdges = degGraph.triplets.mapPartitions { iter =>
       iter.map(e => (dbh.getKey(e), Edge(e.srcId, e.dstId, e.attr)))
     }.partitionBy(dbh).map(_._2)
-    newEdges.persist(storageLevel).count()
-    edges.unpersist(blocking=false)
     GraphImpl(vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
   }
 }

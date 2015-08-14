@@ -27,6 +27,7 @@ import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.util.{FTree, DiscreteSampler, XORShiftRandom, AliasTable}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.graphx._
+import org.apache.spark.graphx.impl.GraphImpl
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
 import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
 import org.apache.spark.rdd.RDD
@@ -120,16 +121,21 @@ abstract class LDA(
     val prevCorpus = corpus
     val sampledCorpus = sampleTokens(corpus, totalTopicCounter, sampIter + seed,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
-    sampledCorpus.edges.persist(storageLevel).setName(s"edges-$sampIter").count()
-    prevCorpus.edges.unpersist(blocking=false)
+    sampledCorpus.persist(storageLevel)
+    sampledCorpus.edges.setName(s"sampledEdges-$sampIter")
+    sampledCorpus.vertices.setName(s"sampledVertices-$sampIter")
+
     corpus = updateCounter(sampledCorpus, numTopics)
-    corpus.vertices.persist(storageLevel).setName(s"vertices-$sampIter")
     if (chkptIntv > 0 && sampIter % chkptIntv == 1 && sc.getCheckpointDir.isDefined) {
       corpus.checkpoint()
-      corpus.edges.first()
     }
+    corpus.persist(storageLevel)
+    corpus.edges.setName(s"edges-$sampIter").first()
+    corpus.vertices.setName(s"vertices-$sampIter")
     totalTopicCounter = collectTopicCounter()
-    prevCorpus.vertices.unpersist(blocking=false)
+
+    prevCorpus.unpersist(blocking=false)
+    sampledCorpus.unpersist(blocking=false)
   }
 
   protected def sampleTokens(corpus: Graph[VD, ED],
@@ -332,11 +338,13 @@ object LDA {
         }
       }
     })
-    var initCorpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
-    val numEdges = initCorpus.edges.persist(storageLevel).setName("initEdges").count()
+    val initCorpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
+    initCorpus.persist(storageLevel)
+    initCorpus.vertices.setName("initVertices").first()
+    val numEdges = initCorpus.edges.setName("initEdges").count()
     println(s"edges in the corpus: $numEdges")
     docs.unpersist(blocking=false)
-    initCorpus = partStrategy match {
+    val partCorpus = partStrategy match {
       case "dbh" =>
         println("using Degree-based Hashing partition strategy.")
         DBHPartitioner.partitionByDBH[VD, ED](initCorpus, storageLevel)
@@ -346,8 +354,13 @@ object LDA {
       case _ =>
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
-    val corpus = updateCounter(initCorpus, numTopics)
-    corpus.vertices.persist(storageLevel).setName("initVertices")
+    partCorpus.persist(storageLevel)
+    val corpus = updateCounter(partCorpus, numTopics)
+    corpus.persist(storageLevel)
+    corpus.vertices.setName("vertices-0").first()
+    corpus.edges.setName("edges-0").first()
+    initCorpus.unpersist(blocking=false)
+    partCorpus.unpersist(blocking=false)
     corpus
   }
 
@@ -478,7 +491,7 @@ class FastLDA(
     beta: Double): Graph[VD, ED] = {
     val sampl = corpus.edges.context.getConf.get(cs_accelMethod, "alias")
     val numPartitions = corpus.edges.partitions.length
-    corpus.mapTriplets((pid, iter) => {
+    val sampledCorpus = corpus.mapTriplets((pid, iter) => {
       val gen = new XORShiftRandom(numPartitions * pseudoIter + pid)
       // table/ftree is a per term data structure
       // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
@@ -531,6 +544,7 @@ class FastLDA(
         topics
       })
     }, TripletFields.All)
+    GraphImpl(sampledCorpus.vertices.mapValues(_ => null), sampledCorpus.edges)
   }
 
   private def tokenSampling(gen: Random,
@@ -675,7 +689,7 @@ class LightLDA(
     alphaAS: Double,
     beta: Double): Graph[VD, ED] = {
     val numPartitions = corpus.edges.partitions.length
-    corpus.mapTriplets((pid, iter) => {
+    val sampledCorpus = corpus.mapTriplets((pid, iter) => {
       val gen = new XORShiftRandom(numPartitions * pseudoIter + pid)
       val docTableCache = new AppendOnlyMap[VertexId, SoftReference[(Double, AliasTable)]]()
 
@@ -758,6 +772,7 @@ class LightLDA(
         topics
       })
     }, TripletFields.All)
+    GraphImpl(sampledCorpus.vertices.mapValues(_ => null), sampledCorpus.edges)
   }
 
   /**
