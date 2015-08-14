@@ -102,15 +102,15 @@ abstract class LDA(
       println(s"Start Gibbs sampling (Iteration $iter/$totalIter)")
       val startedAt = System.nanoTime()
       gibbsSampling(iter)
-      val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
       if (pplx) {
         println(s"Gibbs sampling (Iteration $iter/$totalIter): perplexity=${perplexity()}")
       }
+      val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
       println(s"End Gibbs sampling (Iteration $iter/$totalIter) takes: $elapsedSeconds secs")
       if (saveIntv > 0 && iter % saveIntv == 0) {
         val outputPath = scConf.get(cs_outputpath)
         saveModel().save(sc, s"$outputPath-iter$iter", isTransposed=true)
-        println(s"Saved model after iter-$iter")
+        println(s"Model saved after Iteration $iter")
       }
     }
   }
@@ -154,14 +154,14 @@ abstract class LDA(
    */
   def saveModel(runIter: Int = 0): DistributedLDAModel = {
     var ttcSum: RDD[(VertexId, VD)] = termVertices
-    ttcSum.persist(storageLevel).count()
+    ttcSum.persist(storageLevel).first()
     for (iter <- 1 to runIter) {
       println(s"Save TopicModel (Iteration $iter/$runIter)")
       gibbsSampling(-iter)
       val newTtcSum = ttcSum.join(termVertices).map {
         case (term, (a, b)) => (term, a += b)
       }
-      newTtcSum.persist(storageLevel).count()
+      newTtcSum.persist(storageLevel).first()
       ttcSum.unpersist(blocking=false)
       ttcSum = newTtcSum
     }
@@ -174,7 +174,7 @@ abstract class LDA(
         val l = math.floor(mid)
         if (rand.nextDouble() > mid - l) l else l + 1
       }.toInt))
-      aver.persist(storageLevel).count()
+      aver.persist(storageLevel).first()
       ttcSum.unpersist(blocking=false)
       aver
     }
