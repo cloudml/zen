@@ -34,7 +34,6 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.serializer.KryoRegistrator
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.collection.AppendOnlyMap
-import org.apache.spark.Logging
 
 
 abstract class LDA(
@@ -46,7 +45,7 @@ abstract class LDA(
   private var alpha: Double,
   private var beta: Double,
   private var alphaAS: Double,
-  private var storageLevel: StorageLevel) extends Serializable with Logging {
+  private var storageLevel: StorageLevel) extends Serializable {
 
   @transient private var seed = new XORShiftRandom().nextInt()
   @transient private var totalTopicCounter = collectTopicCounter()
@@ -105,13 +104,13 @@ abstract class LDA(
       if (pplx) {
         println(s"Gibbs sampling (Iteration $iter/$totalIter): perplexity=${perplexity()}")
       }
-      val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      println(s"End Gibbs sampling (Iteration $iter/$totalIter) takes: $elapsedSeconds secs")
       if (saveIntv > 0 && iter % saveIntv == 0) {
         val outputPath = scConf.get(cs_outputpath)
         saveModel().save(sc, s"$outputPath-iter$iter", isTransposed=true)
         println(s"Model saved after Iteration $iter")
       }
+      val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
+      println(s"End Gibbs sampling (Iteration $iter/$totalIter) takes: $elapsedSeconds secs")
     }
   }
 
@@ -130,7 +129,7 @@ abstract class LDA(
       corpus.checkpoint()
     }
     corpus.persist(storageLevel)
-    corpus.edges.setName(s"edges-$sampIter").first()
+    corpus.edges.setName(s"edges-$sampIter").count()
     corpus.vertices.setName(s"vertices-$sampIter")
     totalTopicCounter = collectTopicCounter()
 
@@ -154,14 +153,14 @@ abstract class LDA(
    */
   def saveModel(runIter: Int = 0): DistributedLDAModel = {
     var ttcSum: RDD[(VertexId, VD)] = termVertices
-    ttcSum.persist(storageLevel).first()
+    ttcSum.persist(storageLevel).count()
     for (iter <- 1 to runIter) {
       println(s"Save TopicModel (Iteration $iter/$runIter)")
       gibbsSampling(-iter)
       val newTtcSum = ttcSum.join(termVertices).map {
-        case (term, (a, b)) => (term, a += b)
+        case (term, (a, b)) => (term, a :+= b)
       }
-      newTtcSum.persist(storageLevel).first()
+      newTtcSum.persist(storageLevel).count()
       ttcSum.unpersist(blocking=false)
       ttcSum = newTtcSum
     }
@@ -174,7 +173,7 @@ abstract class LDA(
         val l = math.floor(mid)
         if (rand.nextDouble() > mid - l) l else l + 1
       }.toInt))
-      aver.persist(storageLevel).first()
+      aver.persist(storageLevel).count()
       ttcSum.unpersist(blocking=false)
       aver
     }
@@ -229,14 +228,15 @@ abstract class LDA(
     // \frac{{\alpha }_{k}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
     val tDenseSum = totalTopicCounter.valuesIterator.map(c => alpha * beta / (c + beta_bar)).sum
 
-    val termProb = corpus.mapVertices { (vid, counter) =>
+    val termProb = corpus.mapVertices((vid, counter) => {
       val probDist = if (isDocId(vid)) {
         counter.mapActivePairs((t, c) => c * beta / (totalTopicCounter(t) + beta_bar))
       } else {
         counter.mapActivePairs((t, c) => c * alpha / (totalTopicCounter(t) + beta_bar))
       }
-      (counter, brzSum(probDist), brzSum(counter))
-    }.mapTriplets { triplet =>
+      val cSum = if (isDocId(vid)) brzSum(counter) else 0
+      (counter, brzSum(probDist), cSum)
+    }).mapTriplets(triplet => {
       val (termTopicCounter, wSparseSum, _) = triplet.srcAttr
       val (docTopicCounter, dSparseSum, docSize) = triplet.dstAttr
       val dwCooccur = triplet.attr.length
@@ -248,11 +248,10 @@ abstract class LDA(
       val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alpha_bar)
 
       dwCooccur * Math.log(prob)
-    }.edges.map(_.attr).sum()
+    }).edges.map(_.attr).sum()
 
     math.exp(-1 * termProb / numTokens)
   }
-
 }
 
 object LDA {
@@ -340,10 +339,8 @@ object LDA {
     })
     val initCorpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
     initCorpus.persist(storageLevel)
-    initCorpus.vertices.setName("initVertices").first()
-    val numEdges = initCorpus.edges.setName("initEdges").count()
-    println(s"edges in the corpus: $numEdges")
-    docs.unpersist(blocking=false)
+    initCorpus.vertices.setName("initVertices")
+    initCorpus.edges.setName("initEdges")
     val partCorpus = partStrategy match {
       case "dbh" =>
         println("using Degree-based Hashing partition strategy.")
@@ -357,8 +354,10 @@ object LDA {
     partCorpus.persist(storageLevel)
     val corpus = updateCounter(partCorpus, numTopics)
     corpus.persist(storageLevel)
-    corpus.vertices.setName("vertices-0").first()
-    corpus.edges.setName("edges-0").first()
+    corpus.vertices.setName("vertices-0").count()
+    val numEdges = corpus.edges.setName("edges-0").count()
+    println(s"edges in the corpus: $numEdges")
+    docs.unpersist(blocking=false)
     initCorpus.unpersist(blocking=false)
     partCorpus.unpersist(blocking=false)
     corpus
@@ -433,19 +432,13 @@ object LDA {
 
   private def updateCounter(corpus: Graph[VD, ED],
     numTopics: Int): Graph[VD, ED] = {
-    val newCounter = corpus.edges.mapPartitions(iter =>
-      iter.flatMap(edge => {
-        val vid = edge.srcId
-        val did = edge.dstId
-        val topics = edge.attr
-        Iterator((vid, topics), (did, topics))
-      })
-    ).aggregateByKey(BSV.zeros[Count](numTopics), corpus.vertices.partitioner.get)((agg, cur) => {
-      for (t <- cur) {
-        agg(t) += 1
-      }
+    val newCounter = corpus.edges.mapPartitions(_.flatMap(edge => {
+      val topics = edge.attr
+      Iterator((edge.srcId, topics), (edge.dstId, topics))
+    })).aggregateByKey(BSV.zeros[Count](numTopics), corpus.vertices.partitioner.get)((agg, cur) => {
+      cur.foreach(agg(_) += 1)
       agg
-    }, _ += _)
+    }, _ :+= _)
     corpus.joinVertices(newCounter)((_, _, counter) => counter)
   }
 }

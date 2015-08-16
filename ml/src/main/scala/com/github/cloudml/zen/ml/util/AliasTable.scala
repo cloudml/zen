@@ -22,20 +22,21 @@ import math.abs
 import com.github.cloudml.zen.ml.util.AliasTable._
 import breeze.linalg.{Vector => BV, sum => brzSum}
 
-private[zen] class AliasTable(initUsed: Int)
-  extends DiscreteSampler with Serializable {
+private[zen] class AliasTable[T](initUsed: Int)
+  (implicit num: Numeric[T])
+  extends DiscreteSampler[T] with Serializable {
 
   private var _l: Array[Int] = new Array[Int](initUsed)
   private var _h: Array[Int] = new Array[Int](initUsed)
-  private var _p: Array[Double] = new Array[Double](initUsed)
+  private var _p: Array[T] = new Array[T](initUsed)
   private var _used = initUsed
-  private var _norm = 0D
+  private var _norm = num.zero
 
   def l: Array[Int] = _l
 
   def h: Array[Int] = _h
 
-  def p: Array[Double] = _p
+  def p: Array[T] = _p
 
   def used: Int = _used
 
@@ -43,7 +44,7 @@ private[zen] class AliasTable(initUsed: Int)
 
   def size: Int = length
 
-  def norm: Double = _norm
+  def norm: T = _norm
 
   def sample(gen: Random): Int = {
     val bin = gen.nextInt(_used)

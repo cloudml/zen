@@ -20,11 +20,11 @@ package com.github.cloudml.zen.ml.util
 import java.util.Random
 import breeze.linalg.{Vector => BV}
 
-trait DiscreteSampler {
+trait DiscreteSampler[T] {
   def length: Int
   def used: Int
-  def norm: Double
+  def norm: T
   def sample(gen: Random): Int
-  def update(state: Int, delta: Double): Unit
-  def resetDist(dist: BV[Double], sum: Double): DiscreteSampler
+  def update(state: Int, delta: T): Unit
+  def resetDist(dist: BV[T], sum: T): DiscreteSampler
 }

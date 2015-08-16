@@ -17,7 +17,8 @@
 
 package com.github.cloudml.zen.ml
 
-import breeze.linalg._
+import breeze.linalg.{Vector => BV, DenseVector => BDV, SparseVector => BSV, CSCMatrix}
+import com.github.cloudml.zen.ml.util.AliasTable
 import scala.reflect.ClassTag
 import org.apache.spark.HashPartitioner
 import org.apache.spark.graphx._
@@ -30,24 +31,31 @@ object VMBLPPartitioner {
    * https://code.facebook.com/posts/274771932683700/large-scale-graph-partitioning-with-apache-giraph/
    * This is the vertex-cut version (MBLP is an edge-cut algorithm for Apache Giraph)
    */
-  def partitionByVMBLP[VD: ClassTag, ED: ClassTag](
-      inGraph: Graph[VD, ED],
-      numIter: Int,
-      storageLevel: StorageLevel): Graph[VD, ED] = {
+  private[zen] def partitionByVMBLP[VD: ClassTag, ED: ClassTag](
+    input: Graph[VD, ED],
+    numIter: Int,
+    storageLevel: StorageLevel): Graph[VD, ED] = {
+    val numPartitions = input.edges.partitions.length
+    var pidGraph = input.mapEdges((pid, iter) => iter.map(t => pid))
+    pidGraph.persist(storageLevel)
+    for (iter <- 1 to numIter) {
+      val transCounter = pidGraph.edges.mapPartitions(_.flatMap(edge => {
+        val pid = edge.attr
+        Iterator((edge.srcId, pid), (edge.dstId, pid))
+      })).aggregateByKey(BSV.zeros[Int](numPartitions), pidGraph.vertices.partitioner.get)((agg, pid) => {
+        agg(pid) += 1
+        agg
+      }, _ :+= _)
+      pidGraph.joinVertices(transCounter)((_, _, counter) => AliasTable.generateAlias(counter))
 
-    val numPartitions = inGraph.edges.partitions.length
-    var tbrGraph = inGraph
-    tbrGraph.persist(storageLevel)
-
-    for (i <- 0 to numIter) {
-      val pidRdd = tbrGraph.vertices.mapPartitionsWithIndex((pid, iter) => iter.map(t => (t._1, pid)), true)
+      val pidRdd = input.vertices.mapPartitionsWithIndex((pid, iter) => iter.map(t => (t._1, pid)), true)
       val pidVertices = VertexRDD(pidRdd)  // Get Vertices which v.attr = <partitionId of v>
 
-      val pidGraph = GraphImpl(pidVertices, tbrGraph.edges)
-      val neiVecVertices = pidGraph.aggregateMessages[Vector[Int]](ectx => {
-        val bsvSrc = SparseVector.zeros[Int](numPartitions)
+      val pidGraph2 = GraphImpl(pidVertices, pidGraph.edges)
+      val neiVecVertices = pidGraph2.aggregateMessages[BV[Int]](ectx => {
+        val bsvSrc = BSV.zeros[Int](numPartitions)
         bsvSrc(ectx.dstAttr) = 1
-        val bsvDst = SparseVector.zeros[Int](numPartitions)
+        val bsvDst = BSV.zeros[Int](numPartitions)
         bsvDst(ectx.srcAttr) = 1
         ectx.sendToSrc(bsvSrc)
         ectx.sendToDst(bsvDst)
@@ -94,7 +102,7 @@ object VMBLPPartitioner {
     tbrGraph
   }
 
-  val discreteSample: Vector[Int] => Int = (dist) => {
+  def discreteSample(dist: BV[Int]): Int => {
     val s = sum(dist)
     val u = math.random * s
     dist.activeIterator.scanLeft((-1, 0)){case ((li, ps), (i, p)) => (i, ps + p)}
