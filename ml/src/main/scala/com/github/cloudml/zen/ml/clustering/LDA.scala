@@ -415,7 +415,7 @@ object LDA {
     currentTopic: Int,
     currentTopicCounter: Int = 0,
     numSampling: Int = 0): Int = {
-    val docTopic = table.sample(gen)
+    val docTopic = table.sampleRandom(gen)
     if (docTopic == currentTopic && numSampling < 16) {
       val svCounter = if (currentTopicCounter == 0) sv(currentTopic) else currentTopicCounter
       // TODO: not sure it is correct or not?
@@ -489,13 +489,13 @@ class FastLDA(
       // table/ftree is a per term data structure
       // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
       // so, use below simple cache to avoid calculating table each time
-      val lastSampler: DiscreteSampler = sampl match {
-        case "alias" => new AliasTable(numTopics)
+      val lastSampler: DiscreteSampler[Double] = sampl match {
+        case "alias" => new AliasTable[Double](numTopics)
         case "ftree" | "hybrid" => new FTree(numTopics, isSparse=true)
       }
       var lastVid: VertexId = -1L
-      val globalSampler: DiscreteSampler = sampl match {
-        case "ftree" => new FTree(numTopics, isSparse=false)
+      val globalSampler: DiscreteSampler[Double] = sampl match {
+        case "ftree" => new FTree[Double](numTopics, isSparse=false)
         case "alias" | "hybrid" => new AliasTable(numTopics)
       }
       val tdt = tDense(totalTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
@@ -541,8 +541,8 @@ class FastLDA(
   }
 
   private def tokenSampling(gen: Random,
-    t: DiscreteSampler,
-    w: DiscreteSampler,
+    t: DiscreteSampler[Double],
+    w: DiscreteSampler[Double],
     dData: Array[Double],
     termTopicCounter: VD,
     docTopicCounter: VD,
@@ -561,10 +561,10 @@ class FastLDA(
     } else if (genSum < (dSum + wSum)) {
       w match {
         case wt: AliasTable => sampleSV(gen, wt, termTopicCounter, currentTopic)
-        case wf: FTree => wf.sample(gen)
+        case wf: FTree => wf.sampleRandom(gen)
       }
     } else {
-      t.sample(gen)
+      t.sampleRandom(gen)
     }
   }
 
@@ -698,9 +698,9 @@ class LightLDA(
       val dPFun = docProb(totalTopicCounter, alpha, alphaAS, numTokens) _
       val wPFun = wordProb(totalTopicCounter, numTerms, beta) _
 
-      var dD: AliasTable = null
+      var dD: AliasTable[Double] = null
       var dDSum = 0D
-      var wD: AliasTable = null
+      var wD: AliasTable[Double] = null
       var wDSum = 0D
 
       iter.map(triplet => {
@@ -740,7 +740,7 @@ class LightLDA(
             var proposalTopic = -1
             val q = if (docProposal) {
               if (gen.nextDouble() < dDSum / (dSum - 1 + dDSum)) {
-                proposalTopic = dD.sample(gen)
+                proposalTopic = dD.sampleRandom(gen)
               }
               else {
                 proposalTopic = docTopicCounter.synchronized {
@@ -750,7 +750,7 @@ class LightLDA(
               dPFun
             } else {
               val table = if (gen.nextDouble() < wSum / (wSum + wDSum)) w else wD
-              proposalTopic = table.sample(gen)
+              proposalTopic = table.sampleRandom(gen)
               wPFun
             }
 
@@ -926,10 +926,10 @@ class LightLDA(
   }
 
   private def docTable(
-    updateFunc: SoftReference[(Double, AliasTable)] => Boolean,
-    cacheMap: AppendOnlyMap[VertexId, SoftReference[(Double, AliasTable)]],
+    updateFunc: SoftReference[(Double, AliasTable[Double])] => Boolean,
+    cacheMap: AppendOnlyMap[VertexId, SoftReference[(Double, AliasTable[Double])]],
     docTopicCounter: VD,
-    docId: VertexId): (Double, AliasTable) = {
+    docId: VertexId): (Double, AliasTable[Double]) = {
     val cacheD = cacheMap(docId)
     if (!updateFunc(cacheD)) {
       cacheD.get
@@ -943,7 +943,7 @@ class LightLDA(
     }
   }
 
-  private def wordTable(table: AliasTable,
+  private def wordTable(table: AliasTable[Double],
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
     termId: VertexId,

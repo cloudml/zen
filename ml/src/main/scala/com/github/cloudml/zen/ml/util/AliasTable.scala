@@ -18,13 +18,14 @@
 package com.github.cloudml.zen.ml.util
 
 import java.util.Random
-import math.abs
-import com.github.cloudml.zen.ml.util.AliasTable._
-import breeze.linalg.{Vector => BV, sum => brzSum}
+import scala.reflect.ClassTag
+import breeze.linalg.{Vector => BV}
 
-private[zen] class AliasTable[T](initUsed: Int)
+
+private[zen] class AliasTable[T: ClassTag](initUsed: Int)
   (implicit num: Numeric[T])
   extends DiscreteSampler[T] with Serializable {
+  type Pair = (Int, T)
 
   private var _l: Array[Int] = new Array[Int](initUsed)
   private var _h: Array[Int] = new Array[Int](initUsed)
@@ -46,29 +47,42 @@ private[zen] class AliasTable[T](initUsed: Int)
 
   def norm: T = _norm
 
-  def sample(gen: Random): Int = {
+  def sampleRandom(gen: Random): Int = {
     val bin = gen.nextInt(_used)
     val prob = _p(bin)
-    if (gen.nextDouble() * _norm < prob) {
+    if (gen.nextDouble() * num.toDouble(_norm) < num.toDouble(prob)) {
       _l(bin)
     } else {
       _h(bin)
     }
   }
 
-  def update(state: Int, delta: Double): Unit = {}
+  def sampleFrom(base: T, gen: Random): Int = {
+    assert(num.lt(base, _norm))
+    val bin = gen.nextInt(_used)
+    val prob = _p(bin)
+    if (num.lt(base, prob)) {
+      _l(bin)
+    } else {
+      _h(bin)
+    }
+  }
 
-  def resetDist(dist: BV[Double], sum: Double): this.type = {
+  def update(state: Int, delta: T): Unit = {}
+
+  def resetDist(dist: BV[T], sum: T): this.type = {
     val used = dist.activeSize
     reset(used)
-    val (loList, hiList) = dist.activeIterator.map(t => (t._1, t._2 * used)).toList.partition(_._2 < sum)
+    val (loList, hiList) = dist.activeIterator
+      .map(t => (t._1, num.times(t._2, num.fromInt(used)))).toList
+      .partition(t => num.lt(t._2, sum))
     var ls = 0
     var le = 0
     var end = used
-    @inline def isClose(a: Double, b: Double): Boolean = abs(a - b) <= (1e-8 + abs(a) * 1e-6)
+    // @inline def isClose(a: Double, b: Double): Boolean = abs(a - b) <= (1e-8 + abs(a) * 1e-6)
     def putAlias(list: List[Pair], rest: List[Pair]): List[Pair] = list match {
       case Nil => rest
-      case (t, pt) :: rlist if pt < sum =>
+      case (t, pt) :: rlist if num.lt(pt, sum) =>
         _l(le) = t
         _p(le) = pt
         le += 1
@@ -77,7 +91,7 @@ private[zen] class AliasTable[T](initUsed: Int)
         _h(ls) = t
         val pl = _p(ls)
         ls += 1
-        val pd = pt - (sum - pl)
+        val pd = num.minus(pt, num.minus(sum, pl))
         putAlias(List((t, pd)) ++ rlist, rest)
       case (t, pt) :: rlist=>
         putAlias(rlist, rest ++ List((t, pt)))
@@ -96,38 +110,36 @@ private[zen] class AliasTable[T](initUsed: Int)
     setNorm(sum)
   }
 
-  private[AliasTable] def reset(newSize: Int): this.type = {
+  private def reset(newSize: Int): this.type = {
     if (_l.length < newSize) {
       _l = new Array[Int](newSize)
       _h = new Array[Int](newSize)
-      _p = new Array[Double](newSize)
+      _p = new Array[T](newSize)
     }
     _used = newSize
-    _norm = 0D
+    _norm = num.zero
     this
   }
 
-  private[AliasTable] def setNorm(norm: Double): this.type = {
+  private def setNorm(norm: T): this.type = {
     _norm = norm
     this
   }
 }
 
 private[zen] object AliasTable {
-  type Pair = (Int, Double)
 
-  def generateAlias(sv: BV[Double]): AliasTable = {
-    val norm = brzSum(sv)
-    generateAlias(sv, norm)
+  def generateAlias[T: ClassTag: Numeric](sv: BV[T]): AliasTable[T] = {
+    generateAlias(sv, sv.valuesIterator.sum)
   }
 
-  def generateAlias(sv: BV[Double], sum: Double): AliasTable = {
+  def generateAlias[T: ClassTag: Numeric](sv: BV[T], sum: T): AliasTable[T] = {
     val used = sv.activeSize
-    val table = new AliasTable(used)
+    val table = new AliasTable[T](used)
     generateAlias(sv, sum, table)
   }
 
-  def generateAlias(sv: BV[Double], sum: Double, table: AliasTable): AliasTable = {
+  def generateAlias[T: ClassTag: Numeric](sv: BV[T], sum: T, table: AliasTable[T]): AliasTable[T] = {
     table.resetDist(sv, sum)
   }
 }

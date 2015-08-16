@@ -24,7 +24,8 @@ trait DiscreteSampler[T] {
   def length: Int
   def used: Int
   def norm: T
-  def sample(gen: Random): Int
+  def sampleRandom(gen: Random): Int
+  def sampleFrom(base: T, gen: Random): Int
   def update(state: Int, delta: T): Unit
-  def resetDist(dist: BV[T], sum: T): DiscreteSampler
+  def resetDist(dist: BV[T], sum: T): DiscreteSampler[T]
 }
