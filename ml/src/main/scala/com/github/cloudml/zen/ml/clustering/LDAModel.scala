@@ -53,7 +53,7 @@ class LocalLDAModel private[ml](
   @transient private lazy val termSum = numTokens + alphaAS * numTopics
 
   @transient private lazy val wordTableCache = new AppendOnlyMap[Int,
-    SoftReference[(Double, AliasTable)]](ttc.length / 2)
+    SoftReference[(Double, AliasTable[Double])]](ttc.length / 2)
   @transient private lazy val (t, tSum) = {
     val dv = LDAModel.tDense(gtc, numTokens, numTerms, alpha, alphaAS, beta)
     (AliasTable.generateAlias(dv._2, dv._1), dv._1)
@@ -146,7 +146,7 @@ class LocalLDAModel private[ml](
   }
 
   private[ml] def wordTable(
-    cacheMap: AppendOnlyMap[Int, SoftReference[(Double, AliasTable)]],
+    cacheMap: AppendOnlyMap[Int, SoftReference[(Double, AliasTable[Double])]],
     totalTopicCounter: BDV[Count],
     termTopicCounter: BSV[Count],
     termId: Int,
@@ -154,7 +154,7 @@ class LocalLDAModel private[ml](
     numTerms: Int,
     alpha: Double,
     alphaAS: Double,
-    beta: Double): (Double, AliasTable) = {
+    beta: Double): (Double, AliasTable[Double]) = {
     if (termTopicCounter.used == 0) return (0f, null)
     var w = cacheMap(termId)
     if (w == null || w.get() == null) {
@@ -363,7 +363,7 @@ class DistributedLDAModel private[ml](
         // table is a per term data structure
         // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
         // so, use below simple cache to avoid calculating table each time
-        val lastWTable = new AliasTable(numTopics)
+        val lastWTable = new AliasTable[Double](numTopics)
         var lastVid: VertexId = -1
         var lastWSum = 0D
         val dv = LDAModel.tDense(totalTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
@@ -411,7 +411,7 @@ class DistributedLDAModel private[ml](
   }
 
   private def wordTable(
-    table: AliasTable,
+    table: AliasTable[Double],
     totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
     termId: VertexId,
@@ -478,9 +478,9 @@ class DistributedLDAModel private[ml](
 object LDAModel extends Loader[DistributedLDAModel] {
   private[ml] def tokenSampling(
     gen: Random,
-    t: AliasTable,
+    t: AliasTable[Double],
     tSum: Double,
-    w: AliasTable,
+    w: AliasTable[Double],
     wSum: Double,
     d: BSV[Double]): Int = {
     val index = d.index

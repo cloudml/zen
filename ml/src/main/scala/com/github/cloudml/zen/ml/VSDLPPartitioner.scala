@@ -26,16 +26,16 @@ import org.apache.spark.graphx.impl.GraphImpl
 import org.apache.spark.storage.StorageLevel
 
 
-private[ml] class VMBLPPartitioner(numParts: Int) extends Partitioner {
+private[ml] class VSDLPPartitioner(numParts: Int) extends Partitioner {
 
   override def numPartitions: Int = numParts
 
   def getPartition(key: Any): PartitionID = {
-    key.asInstanceOf[Int]
+    key.asInstanceOf[PartitionID]
   }
 
   override def equals(other: Any): Boolean = other match {
-    case h: VMBLPPartitioner =>
+    case h: VSDLPPartitioner =>
       h.numPartitions == numPartitions
     case _ =>
       false
@@ -44,27 +44,26 @@ private[ml] class VMBLPPartitioner(numParts: Int) extends Partitioner {
   override def hashCode: Int = numPartitions
 }
 
-object VMBLPPartitioner {
+object VSDLPPartitioner {
   type PVD = AliasTable[Int]
 
   /**
    * Stochastic Balanced Label Propogation, see:
    * https://code.facebook.com/posts/274771932683700/large-scale-graph-partitioning-with-apache-giraph/
-   * This is the vertex-cut version (SBLP is an edge-cut algorithm for Apache Giraph)
+   * This is the vertex-cut version (SBLP is an edge-cut algorithm for Apache Giraph), with dynamic transferring
    */
-  private[zen] def partitionByVMBLP[VD: ClassTag, ED: ClassTag](
+  private[zen] def partitionByVSDLP[VD: ClassTag, ED: ClassTag](
     input: Graph[VD, ED],
     numIter: Int,
     storageLevel: StorageLevel): Graph[VD, ED] = {
     val numPartitions = input.edges.partitions.length
-    val vmblp = new VMBLPPartitioner(numPartitions)
+    val vsdlp = new VSDLPPartitioner(numPartitions)
     val gen = new XORShiftRandom()
 
-    var pidGraph = input.mapEdges((pid, iter) => iter.map(t => pid))
-      .mapVertices[AliasTable[Int]]((_, _) => null)
+    var pidGraph = input.mapEdges((pid, iter) => iter.map(t => pid)).mapVertices[PVD]((_, _) => null)
     pidGraph.persist(storageLevel)
-
     for (iter <- 1 to numIter) {
+      val prevPidGraph = pidGraph
       val transCounter = pidGraph.edges.mapPartitions(_.flatMap(edge => {
         val pid = edge.attr
         Iterator((edge.srcId, pid), (edge.dstId, pid))
@@ -72,9 +71,9 @@ object VMBLPPartitioner {
         agg(pid) += 1
         agg
       }, _ :+= _)
-      pidGraph.joinVertices(transCounter)((_, _, counter) => AliasTable.generateAlias(counter))
 
-      val transGraph = pidGraph.mapTriplets(triplet => {
+      val transGraph = pidGraph.joinVertices(transCounter)((_, _, counter) => AliasTable.generateAlias(counter))
+        .mapTriplets(triplet => {
         val table1 = triplet.srcAttr
         val table2 = triplet.dstAttr
         val rand = gen.nextInt(table1.norm + table2.norm)
@@ -84,31 +83,40 @@ object VMBLPPartitioner {
           table2.sampleFrom(rand - table1.norm, gen)
         }
         (triplet.attr, toPid)
-      })
-      val newGraph = GraphImpl(transGraph.vertices.mapValues[AliasTable[Int]](t => null), transGraph.edges)
-      val transMat = newGraph.edges.aggregate(DenseMatrix.zeros[Long](numPartitions, numPartitions))((agg, edge) => {
+      }).mapVertices[PVD]((_, _) => null)
+      transGraph.persist(storageLevel)
+
+      val transMat = transGraph.edges.aggregate(DenseMatrix.zeros[Long](numPartitions, numPartitions))((agg, edge) => {
           agg(edge.attr) += 1
           agg
         }, _ :+= _)
       val rateMat = DenseMatrix.zeros[Float](numPartitions, numPartitions)
       for (i <- 0 until numPartitions) {
-        for (j <- i+1 until numPartitions) {
+        for (j <- i + 1 until numPartitions) {
           val numOut = transMat(i, j)
           val numIn = transMat(j, i)
           val thershold = math.min(numOut, numIn)
           val numDelta = transMat(i, i) + numOut - (transMat(j, j) + numIn)
           rateMat(i, j) = ((numDelta / 2 + thershold) / numOut.toDouble).toFloat
-          rateMat(j, i) = ((-numDelta / 2) + thershold / numIn.toDouble).toFloat
+          rateMat(j, i) = ((-numDelta / 2 + thershold) / numIn.toDouble).toFloat
         }
       }
-      pidGraph = newGraph.mapEdges(edge => {
+      pidGraph = transGraph.mapEdges(edge => {
         val (pid, toPid) = edge.attr
         if (gen.nextFloat() < rateMat(pid, toPid)) toPid else pid
       })
+      pidGraph.persist(storageLevel)
+      pidGraph.edges.count()
+      pidGraph.vertices.count()
+      prevPidGraph.unpersist(blocking=false)
+      transGraph.unpersist(blocking=false)
     }
 
-    val a = input.edges.innerJoin(pidGraph.edges)((_, _, pid, edge) => (pid, edge))
-      .mapPartitions(iter => iter.map(e => (e, Edge(e.srcId, e.dstId, e.attr)))).partitionBy(vmblp).map(_._2)
-    GraphImpl(input.vertices, a, null.asInstanceOf[VD], storageLevel, storageLevel)
+    val newEdges = input.edges.innerJoin(pidGraph.edges)((_, _, ed, toPid) => (toPid, ed))
+      .mapPartitions(iter => iter.map(e => (e.attr._1, Edge(e.srcId, e.dstId, e.attr._2))))
+      .partitionBy(vsdlp).map(_._2)
+    val newGraph = GraphImpl(input.vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
+    pidGraph.unpersist(blocking=false)
+    newGraph
   }
 }

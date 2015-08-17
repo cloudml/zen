@@ -21,7 +21,7 @@ import java.lang.ref.SoftReference
 import java.util.Random
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, Vector => BV}
-import com.github.cloudml.zen.ml.DBHPartitioner
+import com.github.cloudml.zen.ml.{VSDLPPartitioner, DBHPartitioner}
 import com.github.cloudml.zen.ml.clustering.LDA._
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.util.{FTree, DiscreteSampler, XORShiftRandom, AliasTable}
@@ -342,12 +342,15 @@ object LDA {
     initCorpus.vertices.setName("initVertices")
     initCorpus.edges.setName("initEdges")
     val partCorpus = partStrategy match {
-      case "dbh" =>
-        println("using Degree-based Hashing partition strategy.")
-        DBHPartitioner.partitionByDBH[VD, ED](initCorpus, storageLevel)
       case "edge2d" =>
         println("using Edge2D partition strategy.")
         initCorpus.partitionBy(PartitionStrategy.EdgePartition2D)
+      case "dbh" =>
+        println("using Degree-based Hashing partition strategy.")
+        DBHPartitioner.partitionByDBH[VD, ED](initCorpus, storageLevel)
+      case "vsdlp" =>
+        println("using Vertex-cut Stochastic Dymanic Label Propagation partition strategy.")
+        VSDLPPartitioner.partitionByVSDLP[VD, ED](initCorpus, 3, storageLevel)
       case _ =>
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
@@ -410,7 +413,7 @@ object LDA {
 
   private[ml] def sampleSV(
     gen: Random,
-    table: AliasTable,
+    table: AliasTable[Double],
     sv: VD,
     currentTopic: Int,
     currentTopicCounter: Int = 0,
@@ -560,8 +563,8 @@ class FastLDA(
       index(pos)
     } else if (genSum < (dSum + wSum)) {
       w match {
-        case wt: AliasTable => sampleSV(gen, wt, termTopicCounter, currentTopic)
-        case wf: FTree => wf.sampleRandom(gen)
+        case wt: AliasTable[Double] => sampleSV(gen, wt, termTopicCounter, currentTopic)
+        case wf: FTree[Double] => wf.sampleRandom(gen)
       }
     } else {
       t.sampleRandom(gen)
@@ -684,12 +687,12 @@ class LightLDA(
     val numPartitions = corpus.edges.partitions.length
     val sampledCorpus = corpus.mapTriplets((pid, iter) => {
       val gen = new XORShiftRandom(numPartitions * pseudoIter + pid)
-      val docTableCache = new AppendOnlyMap[VertexId, SoftReference[(Double, AliasTable)]]()
+      val docTableCache = new AppendOnlyMap[VertexId, SoftReference[(Double, AliasTable[Double])]]()
 
       // table is a per term data structure
       // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
       // so, use below simple cache to avoid calculating table each time
-      val lastTable = new AliasTable(numTopics.toInt)
+      val lastTable = new AliasTable[Double](numTopics.toInt)
       var lastVid: VertexId = -1L
       var lastWSum = 0D
 

@@ -174,7 +174,7 @@ private[zen] class FTree[T: ClassTag](
   }
 
   private def buildFTree(): this.type = {
-    for (i <- leafOffset-1 to 1 by -1) {
+    for (i <- leafOffset - 1 to 1 by -1) {
       _tree(i) = num.plus(_tree(i << 1), _tree(i << 1 + 1))
     }
     this
