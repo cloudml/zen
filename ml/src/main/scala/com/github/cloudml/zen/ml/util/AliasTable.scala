@@ -19,10 +19,10 @@ package com.github.cloudml.zen.ml.util
 
 import java.util.Random
 import scala.reflect.ClassTag
-import breeze.linalg.{Vector => BV}
+import breeze.linalg.{Vector=>BV}
 
 
-private[zen] class AliasTable[T: ClassTag](initUsed: Int)
+private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: Int)
   (implicit num: Numeric[T])
   extends DiscreteSampler[T] with Serializable {
   type Pair = (Int, T)
@@ -128,18 +128,18 @@ private[zen] class AliasTable[T: ClassTag](initUsed: Int)
 }
 
 private[zen] object AliasTable {
-
-  def generateAlias[T: ClassTag: Numeric](sv: BV[T]): AliasTable[T] = {
+  def generateAlias[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](sv: BV[T]): AliasTable[T] = {
     generateAlias(sv, sv.valuesIterator.sum)
   }
 
-  def generateAlias[T: ClassTag: Numeric](sv: BV[T], sum: T): AliasTable[T] = {
+  def generateAlias[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](sv: BV[T], sum: T): AliasTable[T] = {
     val used = sv.activeSize
     val table = new AliasTable[T](used)
     generateAlias(sv, sum, table)
   }
 
-  def generateAlias[T: ClassTag: Numeric](sv: BV[T], sum: T, table: AliasTable[T]): AliasTable[T] = {
+  def generateAlias[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](
+    sv: BV[T], sum: T, table: AliasTable[T]): AliasTable[T] = {
     table.resetDist(sv, sum)
   }
 }

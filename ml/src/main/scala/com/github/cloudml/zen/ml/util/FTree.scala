@@ -20,10 +20,10 @@ package com.github.cloudml.zen.ml.util
 import java.util.Random
 import scala.reflect.ClassTag
 import com.github.cloudml.zen.ml.util.FTree._
-import breeze.linalg.{Vector => BV, SparseVector => BSV, DenseVector => BDV}
+import breeze.linalg.{Vector=>BV, SparseVector=>BSV, DenseVector=>BDV}
 
 
-private[zen] class FTree[T: ClassTag](
+private[zen] class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](
   dataSize: Int,
   val isSparse: Boolean)(implicit num: Numeric[T])
   extends DiscreteSampler[T] with Serializable {
@@ -197,7 +197,7 @@ private[zen] class FTree[T: ClassTag](
 }
 
 private[zen] object FTree {
-  def generateFTree[T: ClassTag: Numeric](sv: BV[T]): FTree[T] = {
+  def generateFTree[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](sv: BV[T]): FTree[T] = {
     val used = sv.activeSize
     val ftree = sv match {
       case v: BDV[T] => new FTree[T](used, isSparse=false)
