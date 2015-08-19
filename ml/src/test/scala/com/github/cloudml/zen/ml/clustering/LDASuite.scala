@@ -39,7 +39,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val data = sc.parallelize(corpus, 2)
     data.cache()
     val pps = new Array[Double](incrementalLearning)
-    val lda = FastLDA(data, numTopics, alpha, beta, alphaAS, storageLevel)
+    val lda = LDA(data, numTopics, alpha, beta, alphaAS, new FastLDA, storageLevel)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
@@ -55,13 +55,13 @@ class LDASuite extends FunSuite with SharedSparkContext {
     assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
     assert(pps.head - pps.last > 0)
 
-    val ldaModel = lda.saveModel()
+    val ldaModel = lda.toLDAModel()
     val tempDir = Files.createTempDir()
     tempDir.deleteOnExit()
     val path = tempDir.toURI.toString + File.separator + "lda"
     ldaModel.save(sc, path, isTransposed = true)
     val sameModel = LDAModel.load(sc, path)
-    assert(sameModel.toLocalLDAModel.ttc === ldaModel.toLocalLDAModel.ttc)
+    assert(sameModel.toLocalLDAModel.termTopicCounters === ldaModel.toLocalLDAModel.termTopicCounters)
     assert(sameModel.alpha === ldaModel.alpha)
     assert(sameModel.beta === ldaModel.beta)
     assert(sameModel.alphaAS === ldaModel.alphaAS)
@@ -73,7 +73,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     localLdaModel.save(path2)
     val loadLdaModel = LDAModel.loadLocalLDAModel(path2)
 
-    assert(localLdaModel.ttc === loadLdaModel.ttc)
+    assert(localLdaModel.termTopicCounters === loadLdaModel.termTopicCounters)
     assert(localLdaModel.alpha === loadLdaModel.alpha)
     assert(localLdaModel.beta === loadLdaModel.beta)
     assert(localLdaModel.alphaAS === loadLdaModel.alphaAS)
@@ -87,7 +87,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val data = sc.parallelize(corpus, 2)
     data.cache()
     val pps = new Array[Double](incrementalLearning)
-    val lda = LightLDA(data, numTopics, alpha, beta, alphaAS, storageLevel)
+    val lda = LDA(data, numTopics, alpha, beta, alphaAS, new LightLDA, storageLevel)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
@@ -103,7 +103,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
     assert(pps.head - pps.last > 0)
 
-    val ldaModel = lda.saveModel(2).toLocalLDAModel
+    val ldaModel = lda.toLDAModel(2).toLocalLDAModel
     data.collect().foreach { case (_, sv) =>
       val a = ldaModel.inference(sv)
       val b = ldaModel.inference(sv)

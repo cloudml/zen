@@ -29,6 +29,8 @@ object LDADefines {
   type VD = BSV[Count]
   type BOW = (Long, BSV[Count])
 
+  val sv_formatVersionV1_0 = "1.0"
+  val sv_classNameV1_0 = "com.github.cloudml.zen.ml.clustering.DistributedLDAModel"
   val cs_sampleRate = "zen.lda.sampleRate"
   val cs_LDAAlgorithm = "zen.lda.LDAAlgorithm"
   val cs_accelMethod = "zen.lda.accelMethod"
@@ -41,8 +43,17 @@ object LDADefines {
   val cs_outputpath = "zen.lda.outputPath"
   val cs_saveAsSolid = "zen.lda.saveAsSolid"
 
-  def uniformSampler(rand: Random, dimension: Int): Int = {
-    rand.nextInt(dimension)
+  def uniformDistSampler(gen: Random,
+    tokens: Array[Int],
+    topics: Array[Int],
+    numTopics: Int): BSV[Count] = {
+    val docTopicCounter = BSV.zeros[Count](numTopics)
+    for (i <- tokens.indices) {
+      val topic = gen.nextInt(numTopics)
+      topics(i) = topic
+      docTopicCounter(topic) += 1
+    }
+    docTopicCounter
   }
 
   def binarySearchInterval[T](index: Array[T],

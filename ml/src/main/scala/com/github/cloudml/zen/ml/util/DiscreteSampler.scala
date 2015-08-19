@@ -18,7 +18,7 @@
 package com.github.cloudml.zen.ml.util
 
 import java.util.Random
-import breeze.linalg.{Vector=>BV}
+import breeze.linalg.{Vector => BV}
 
 trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
   def length: Int
