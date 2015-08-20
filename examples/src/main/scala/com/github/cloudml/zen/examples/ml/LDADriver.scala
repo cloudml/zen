@@ -69,10 +69,15 @@ object LDADriver {
     conf.set(cs_saveInterval, options.getOrElse("saveinterval", "0"))
     conf.set(cs_saveAsSolid, options.getOrElse("saveassolid", "false"))
 
-    // make use of KryoSerializer
-    conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
-    GraphXUtils.registerKryoClasses(conf)
-    registerKryoClasses(conf)
+    val useKyro = options.getOrElse("usekryo", "false").toBoolean
+    if (useKyro) {
+      conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+      GraphXUtils.registerKryoClasses(conf)
+      registerKryoClasses(conf)
+    }
+    else {
+      conf.set("spark.serializer", "org.apache.spark.serializer.JavaSerializer")
+    }
 
     val hadoopConf = SparkHadoopUtil.get.newConfiguration(conf)
     if (sys.env.contains("HADOOP_CONF_DIR") || sys.env.contains("YARN_CONF_DIR")) {
@@ -196,7 +201,8 @@ object LDADriver {
       "           -chkptInterval=<Int(*10)> (0 or negative disables checkpoint)\n" +
       "           -calcPerplexity=<true|*false>\n" +
       "           -saveInterval=<Int(*0)> (0 or negative disables save at intervals)\n" +
-      "           -saveAsSolid=<true|*false>"
+      "           -saveAsSolid=<true|*false>\n" +
+      "           -useKryo=<true|*false>"
     if (args.length < 8) {
       println(usage)
       System.exit(1)
