@@ -21,12 +21,12 @@ import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDA
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.util.SparkHacker
-import org.apache.hadoop.fs.{InvalidPathException, FileSystem, Path}
+import org.apache.hadoop.fs.Path
 import org.apache.spark.deploy.SparkHadoopUtil
+import org.apache.spark.graphx.GraphXUtils
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{SparkContext, SparkConf}
-// import org.apache.spark.graphx.GraphXUtils
 
 
 object LDADriver {
@@ -69,16 +69,10 @@ object LDADriver {
     conf.set(cs_saveInterval, options.getOrElse("saveinterval", "0"))
     conf.set(cs_saveAsSolid, options.getOrElse("saveassolid", "false"))
 
-//    val useKryoSerializer = options.getOrElse("usekryoserializer", "false").toBoolean
-//    if (useKryoSerializer) {
-//      conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
-//      conf.set("spark.kryo.registrator", "com.github.cloudml.zen.ml.clustering.LDAKryoRegistrator")
-//      GraphXUtils.registerKryoClasses(conf)
-//    } else {
-//      conf.set("spark.serializer", "org.apache.spark.serializer.JavaSerializer")
-//    }
-    // TODO: Make KryoSerializer work
-    conf.set("spark.serializer", "org.apache.spark.serializer.JavaSerializer")
+    // make use of KryoSerializer
+    conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+    GraphXUtils.registerKryoClasses(conf)
+    registerKryoClasses(conf)
 
     val hadoopConf = SparkHadoopUtil.get.newConfiguration(conf)
     if (sys.env.contains("HADOOP_CONF_DIR") || sys.env.contains("YARN_CONF_DIR")) {
@@ -203,7 +197,6 @@ object LDADriver {
       "           -calcPerplexity=<true|*false>\n" +
       "           -saveInterval=<Int(*0)> (0 or negative disables save at intervals)\n" +
       "           -saveAsSolid=<true|*false>"
-      // "-useKryoSerializer=<true|*false>"
     if (args.length < 8) {
       println(usage)
       System.exit(1)

@@ -28,7 +28,6 @@ import org.apache.spark.graphx._
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
 import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
 import org.apache.spark.rdd.RDD
-import org.apache.spark.serializer.KryoRegistrator
 import org.apache.spark.storage.StorageLevel
 
 
@@ -162,7 +161,6 @@ class LDA(@transient private var corpus: Graph[VD, ED],
     val counters = if (runIter == 0) {
       countersSum
     } else {
-      val rand = new XORShiftRandom()
       val aver = countersSum.mapValues(_ /= (runIter + 1).toDouble)
       aver.persist(storageLevel).count()
       countersSum.unpersist(blocking=false)
@@ -431,23 +429,5 @@ object LDA {
       agg
     }, _ :+= _)
     corpus.joinVertices(newCounter)((_, _, counter) => counter)
-  }
-}
-
-private[ml] class LDAKryoRegistrator extends KryoRegistrator {
-  def registerClasses(kryo: com.esotericsoftware.kryo.Kryo) {
-    kryo.register(classOf[BSV[Count]])
-    kryo.register(classOf[BSV[Double]])
-
-    kryo.register(classOf[BDV[Count]])
-    kryo.register(classOf[BDV[Double]])
-
-    kryo.register(classOf[ED])
-    kryo.register(classOf[VD])
-    kryo.register(classOf[BOW])
-
-    kryo.register(classOf[Random])
-    kryo.register(classOf[LDA])
-    kryo.register(classOf[LocalLDAModel])
   }
 }

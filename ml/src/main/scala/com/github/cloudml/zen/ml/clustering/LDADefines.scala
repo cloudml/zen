@@ -18,7 +18,10 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
-import breeze.linalg.{SparseVector => BSV}
+import breeze.linalg.{SparseVector => BSV, DenseVector => BDV}
+import com.github.cloudml.zen.ml.{VSDLPPartitioner, DBHPartitioner}
+import com.github.cloudml.zen.ml.util.{FTree, AliasTable, XORShiftRandom}
+import org.apache.spark.SparkConf
 import org.apache.spark.graphx._
 
 object LDADefines {
@@ -100,5 +103,16 @@ object LDADefines {
       if (mid < end - 1) assert(num.gteq(index(mid + 1), key))
     }
     mid
+  }
+
+  def registerKryoClasses(conf: SparkConf): Unit = {
+    conf.registerKryoClasses(Array(classOf[VD], classOf[ED],
+      classOf[BSV[Double]], classOf[BDV[Count]], classOf[BDV[Double]],
+      classOf[BOW], classOf[Random], classOf[XORShiftRandom],
+      classOf[LDA], classOf[LocalLDAModel], classOf[DistributedLDAModel],
+      classOf[LDAAlgorithm], classOf[FastLDA], classOf[LightLDA],
+      classOf[DBHPartitioner], classOf[VSDLPPartitioner],
+      classOf[AliasTable[Double]], classOf[AliasTable[Int]], classOf[FTree[Double]]
+    ))
   }
 }

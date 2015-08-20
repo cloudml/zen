@@ -31,7 +31,7 @@ private[ml] class VSDLPPartitioner(numParts: Int) extends Partitioner {
   override def numPartitions: Int = numParts
 
   def getPartition(key: Any): PartitionID = {
-    key.asInstanceOf[PartitionID]
+    key.asInstanceOf[PartitionID] % numPartitions
   }
 
   override def equals(other: Any): Boolean = other match {
@@ -106,17 +106,11 @@ object VSDLPPartitioner {
         if (gen.nextFloat() < rateMat(pid, toPid)) toPid else pid
       })
       pidGraph.persist(storageLevel)
-      pidGraph.edges.count()
-      pidGraph.vertices.count()
-      prevPidGraph.unpersist(blocking=false)
-      transGraph.unpersist(blocking=false)
     }
 
     val newEdges = input.edges.innerJoin(pidGraph.edges)((_, _, ed, toPid) => (toPid, ed))
       .mapPartitions(iter => iter.map(e => (e.attr._1, Edge(e.srcId, e.dstId, e.attr._2))))
       .partitionBy(vsdlp).map(_._2)
-    val newGraph = GraphImpl(input.vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
-    pidGraph.unpersist(blocking=false)
-    newGraph
+    GraphImpl(input.vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
   }
 }
