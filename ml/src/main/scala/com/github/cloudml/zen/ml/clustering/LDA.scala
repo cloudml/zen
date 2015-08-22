@@ -19,12 +19,13 @@ package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, min}
 import com.github.cloudml.zen.ml.{VSDLPPartitioner, DBHPartitioner}
 import com.github.cloudml.zen.ml.clustering.LDA._
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
 import org.apache.spark.graphx._
+import org.apache.spark.graphx.impl.GraphImpl
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
 import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
 import org.apache.spark.rdd.RDD
@@ -372,7 +373,35 @@ object LDA {
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     partCorpus.persist(storageLevel)
-    val corpus = updateCounter(partCorpus, numTopics)
+    val reCorpus = if (conf.get(cs_initStrategy, "random") == "sparse") {
+      val gen = new XORShiftRandom()
+      val mint = min(1000, numTopics / 100)
+      val degGraph = GraphImpl(partCorpus.degrees, partCorpus.edges)
+      val reSampledGraph = degGraph.mapVertices((_, deg) => {
+        if (deg <= mint) {
+          null.asInstanceOf[Array[Int]]
+        } else {
+          val wc = new Array[Int](mint)
+          for (i <- wc.indices) {
+            wc(i) = gen.nextInt(numTopics)
+          }
+          wc
+        }
+      }).mapTriplets(triplet => {
+        val wc = triplet.srcAttr
+        val topics = triplet.attr
+        if (wc == null) {
+          topics
+        } else {
+          val tlen = wc.length
+          topics.map(_ => wc(gen.nextInt(tlen)))
+        }
+      })
+      GraphImpl(partCorpus.vertices, reSampledGraph.edges)
+    } else {
+      partCorpus
+    }
+    val corpus = updateCounter(reCorpus, numTopics)
     corpus.persist(storageLevel)
     corpus.vertices.setName("vertices-0").count()
     val numEdges = corpus.edges.setName("edges-0").count()

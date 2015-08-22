@@ -64,6 +64,7 @@ object LDADriver {
     conf.set(cs_LDAAlgorithm, options.getOrElse("ldaalgorithm", "fastlda"))
     conf.set(cs_accelMethod, options.getOrElse("accelmethod", "alias"))
     conf.set(cs_partStrategy, options.getOrElse("partstrategy", "dbh"))
+    conf.set(cs_initStrategy, options.getOrElse("initstrategy", "random"))
     conf.set(cs_chkptInterval, options.getOrElse("chkptinterval", "10"))
     conf.set(cs_calcPerplexity, options.getOrElse("calcperplexity", "false"))
     conf.set(cs_saveInterval, options.getOrElse("saveinterval", "0"))
@@ -198,6 +199,7 @@ object LDADriver {
       "           -accelMethod=<*Alias|FTree|Hybrid>\n" +
       "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK_SER)>\n" +
       "           -partStrategy=<Edge2D|*DBH|VSDLP>\n" +
+      "           -initStrategy=<*Random|Sparse|Split>\n" +
       "           -chkptInterval=<Int(*10)> (0 or negative disables checkpoint)\n" +
       "           -calcPerplexity=<true|*false>\n" +
       "           -saveInterval=<Int(*0)> (0 or negative disables save at intervals)\n" +
