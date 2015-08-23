@@ -86,7 +86,7 @@ class HashVector[@specialized(Double, Int, Float, Long) T: ClassTag](
     bhv
   }
 
-  def repr = this
+  def repr: this.type = this
 
   def copy: HashVector[T] = new HashVector[T](ha.copy)
 }
