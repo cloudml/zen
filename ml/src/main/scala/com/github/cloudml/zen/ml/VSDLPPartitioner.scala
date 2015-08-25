@@ -35,8 +35,8 @@ private[ml] class VSDLPPartitioner(numParts: Int) extends Partitioner {
   }
 
   override def equals(other: Any): Boolean = other match {
-    case h: VSDLPPartitioner =>
-      h.numPartitions == numPartitions
+    case vsdlp: VSDLPPartitioner =>
+      vsdlp.numPartitions == numPartitions
     case _ =>
       false
   }
@@ -109,7 +109,7 @@ object VSDLPPartitioner {
     }
 
     val newEdges = input.edges.innerJoin(pidGraph.edges)((_, _, ed, toPid) => (toPid, ed))
-      .mapPartitions(iter => iter.map(e => (e.attr._1, Edge(e.srcId, e.dstId, e.attr._2))))
+      .mapPartitions(_.map(e => (e.attr._1, Edge(e.srcId, e.dstId, e.attr._2))))
       .partitionBy(vsdlp).map(_._2)
     GraphImpl(input.vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
   }

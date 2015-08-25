@@ -17,7 +17,9 @@
 
 package com.github.cloudml.zen.ml
 
+import scala.reflect.ClassTag
 import breeze.linalg.{SparseVector => BSV}
+import com.github.cloudml.zen.ml.util.{XORShiftRandom, AliasTable}
 import org.apache.spark.Partitioner
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.GraphImpl
@@ -35,12 +37,12 @@ private[ml] class BBRPartitioner(val partitions: Int) extends Partitioner {
   }
 
   def getPartition(key: Any): PartitionID = {
-    (key.asInstanceOf[Long] % numPartitions).toInt
+    key.asInstanceOf[Int] % numPartitions
   }
 
   override def equals(other: Any): Boolean = other match {
-    case tr: BBRPartitioner =>
-      tr.numPartitions == numPartitions
+    case bbr: BBRPartitioner =>
+      bbr.numPartitions == numPartitions
     case _ =>
       false
   }
@@ -49,33 +51,64 @@ private[ml] class BBRPartitioner(val partitions: Int) extends Partitioner {
 }
 
 object BBRPartitioner {
-  private[zen] def partitionByBBR[VD, ED](input: Graph[VD, ED],
-    numEdges: Long,
+  private[zen] def partitionByBBR[VD: ClassTag, ED: ClassTag](
+    input: Graph[VD, ED],
     storageLevel: StorageLevel): Graph[VD, ED] = {
     val edges = input.edges
     val vertices = input.vertices
     val numPartitions = edges.partitions.length
-    val bbrp = new BBRPartitioner(numPartitions)
+    val bbr = new BBRPartitioner(numPartitions)
     val degGraph = GraphImpl(input.degrees, edges)
-    val occurs = degGraph.triplets.mapPartitions(_.map(edge => (bbrp.getKey(edge), 1L)))
-      .reduceByKey(_ + _).collect()
-    val newEdges = input.triplets.mapPartitions { iter =>
-      iter.map(e => (bbrp.getKey(e), Edge(e.srcId, e.dstId, e.attr)))
-    }.partitionBy(bbrp).map(_._2)
+    val assnGraph = degGraph.mapTriplets((pid, iter) =>
+      iter.map(et => (bbr.getKey(et), Edge(et.srcId, et.dstId, et.attr))), TripletFields.All)
+    assnGraph.persist(storageLevel)
+
+    val assnVerts = assnGraph.aggregateMessages[Long](ect => {
+      if (ect.attr._1 == ect.srcId) {
+        ect.sendToSrc(1L)
+      } else {
+        ect.sendToDst(1L)
+      }
+    }, _ + _, TripletFields.All)
+    val (kids, koccurs) = assnVerts.filter(_._2 > 0L).collect().unzip
+    val partRdd = input.edges.context.parallelize(kids.zip(rearrage(koccurs, numPartitions)))
+    val rearrGraph = assnGraph.mapVertices((_, _) => null.asInstanceOf[AliasTable[Long]])
+      .joinVertices(partRdd)((_, _, arr) => AliasTable.generateAlias(arr))
+
+    val newEdges = rearrGraph.triplets.mapPartitions(iter => {
+      val gen = new XORShiftRandom()
+      iter.map(et => {
+        val (kid, edge) = et.attr
+        val table = if (kid == et.srcId) et.srcAttr else et.dstAttr
+        (table.sampleRandom(gen), edge)
+      })
+    }, preservesPartitioning=true).partitionBy(bbr).map(_._2)
     GraphImpl(vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
   }
 
-  private def rearrage(occurs: Array[(VertexId, Long)], numEdges: Long, numPartitions: Int):Unit = {
-    val numKeys = occurs.length
+  private def rearrage(koccurs: IndexedSeq[Long], numPartitions: Int): IndexedSeq[BSV[Long]] = {
+    val numKeys = koccurs.length
+    val numEdges = koccurs.sum
     val npp = numEdges / numPartitions
     val rpn = numEdges - npp * numPartitions
-    val keyPartCount = new Array[(VertexId, BSV[Long])](numKeys)
-    var pid = 0
-    for (i <- 0 until numKeys) {
-      val (vid, occur) = occurs(i)
-      val
-      val nrpp = npp + (if (pid < rpn) 1L else 0L)
-      keyPartCount(i) = (vid, )
+    @inline def nrpp(pi: Int) = npp + (if (pi < rpn) 1L else 0L)
+    @inline def kbn(ki: Int) = if (ki < numKeys) koccurs(ki) else 0L
+    val keyPartCount = koccurs.map(t => BSV.zeros[Long](numPartitions))
+    def put(ki: Int, krest: Long, pi: Int, prest: Long): Unit = {
+      if (ki < numKeys) {
+        if (krest == prest) {
+          keyPartCount(ki)(pi) = krest
+          put(ki + 1, kbn(ki + 1), pi + 1, nrpp(pi + 1))
+        } else if (krest < prest) {
+          keyPartCount(ki)(pi) = krest
+          put(ki + 1, kbn(ki + 1), pi, prest - krest)
+        } else {
+          keyPartCount(ki)(pi) = prest
+          put(ki, krest - prest, pi + 1, nrpp(pi + 1))
+        }
+      }
     }
+    put(0, kbn(0), 0, nrpp(0))
+    keyPartCount
   }
 }

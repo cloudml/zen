@@ -197,7 +197,7 @@ object LDADriver {
       "           -LDAAlgorithm=<*FastLDA|LightLDA>\n" +
       "           -accelMethod=<*Alias|FTree|Hybrid>\n" +
       "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK_SER)>\n" +
-      "           -partStrategy=<Edge2D|*DBH|VSDLP>\n" +
+      "           -partStrategy=<Edge2D|*DBH|VSDLP|BBR>\n" +
       "           -chkptInterval=<Int(*10)> (0 or negative disables checkpoint)\n" +
       "           -calcPerplexity=<true|*false>\n" +
       "           -saveInterval=<Int(*0)> (0 or negative disables save at intervals)\n" +

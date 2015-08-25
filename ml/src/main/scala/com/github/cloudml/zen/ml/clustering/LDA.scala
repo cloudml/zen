@@ -20,7 +20,7 @@ package com.github.cloudml.zen.ml.clustering
 import java.util.Random
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum}
-import com.github.cloudml.zen.ml.{VSDLPPartitioner, DBHPartitioner}
+import com.github.cloudml.zen.ml.{BBRPartitioner, VSDLPPartitioner, DBHPartitioner}
 import com.github.cloudml.zen.ml.clustering.LDA._
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
@@ -368,6 +368,9 @@ object LDA {
       case "vsdlp" =>
         println("using Vertex-cut Stochastic Dynamic Label Propagation partition strategy.")
         VSDLPPartitioner.partitionByVSDLP[VD, ED](initCorpus, 3, storageLevel)
+      case "bbr" =>
+        println("using Bounded & Balanced Rearranger partition strategy.")
+        BBRPartitioner.partitionByBBR[VD, ED](initCorpus, storageLevel)
       case _ =>
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
