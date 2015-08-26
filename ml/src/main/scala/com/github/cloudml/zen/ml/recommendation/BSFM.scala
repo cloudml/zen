@@ -17,7 +17,7 @@
 
 package com.github.cloudml.zen.ml.recommendation
 
-import com.github.cloudml.zen.ml.DBHPartitioner
+import com.github.cloudml.zen.ml.partitioner.DBHPartitioner
 import com.github.cloudml.zen.ml.recommendation.BSFM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.Utils

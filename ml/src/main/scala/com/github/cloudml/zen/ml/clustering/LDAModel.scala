@@ -21,9 +21,9 @@ import java.io._
 import java.lang.ref.SoftReference
 import java.util.Random
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, norm => brzNorm, sum => brzSum}
-import com.github.cloudml.zen.ml.clustering.LDADefines._
+import LDADefines._
 import com.github.cloudml.zen.ml.util.{XORShiftRandom, AliasTable, LoaderUtils}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, norm => brzNorm, sum => brzSum}
 import com.google.common.base.Charsets
 import com.google.common.io.Files
 import org.apache.hadoop.io.{NullWritable, Text}

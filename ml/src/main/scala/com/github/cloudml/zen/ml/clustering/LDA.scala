@@ -19,10 +19,10 @@ package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
 
+import LDA._
+import LDADefines._
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum}
-import com.github.cloudml.zen.ml.{BBRPartitioner, VSDLPPartitioner, DBHPartitioner}
-import com.github.cloudml.zen.ml.clustering.LDA._
-import com.github.cloudml.zen.ml.clustering.LDADefines._
+import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
 import org.apache.spark.graphx._
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
@@ -367,7 +367,7 @@ object LDA {
         DBHPartitioner.partitionByDBH[VD, ED](initCorpus, storageLevel)
       case "vsdlp" =>
         println("using Vertex-cut Stochastic Dynamic Label Propagation partition strategy.")
-        VSDLPPartitioner.partitionByVSDLP[VD, ED](initCorpus, 3, storageLevel)
+        VSDLPPartitioner.partitionByVSDLP[VD, ED](initCorpus, 4, storageLevel)
       case "bbr" =>
         println("using Bounded & Balanced Rearranger partition strategy.")
         BBRPartitioner.partitionByBBR[VD, ED](initCorpus, storageLevel)
@@ -412,6 +412,17 @@ object LDA {
   @inline private[ml] def isTermId(id: Long): Boolean = id >= 0L
 
   private def updateCounter(corpus: Graph[VD, ED],
+    numTopics: Int): Graph[VD, ED] = {
+    val newCounter = corpus.aggregateMessages[VD](ect => {
+      val vec = BSV.zeros[Count](numTopics)
+      ect.attr.foreach(t => vec(t) += 1)
+      ect.sendToDst(vec)
+      ect.sendToSrc(vec)
+    }, _ :+= _, TripletFields.EdgeOnly)
+    corpus.joinVertices(newCounter)((_, _, counter) => counter)
+  }
+
+  private def updateCounter2(corpus: Graph[VD, ED],
     numTopics: Int): Graph[VD, ED] = {
     val newCounter = corpus.edges.mapPartitions(_.flatMap(edge => {
       val topics = edge.attr

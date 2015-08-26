@@ -17,10 +17,10 @@
 
 package com.github.cloudml.zen.examples.ml
 
-import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDA
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.util.SparkHacker
+import breeze.linalg.{SparseVector => BSV}
 import org.apache.hadoop.fs.Path
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.graphx.GraphXUtils

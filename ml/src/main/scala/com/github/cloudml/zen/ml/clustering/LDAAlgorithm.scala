@@ -20,8 +20,8 @@ package com.github.cloudml.zen.ml.clustering
 import java.lang.ref.SoftReference
 import java.util.Random
 
+import LDADefines._
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
-import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.util.{FTree, AliasTable, DiscreteSampler, XORShiftRandom}
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.GraphImpl

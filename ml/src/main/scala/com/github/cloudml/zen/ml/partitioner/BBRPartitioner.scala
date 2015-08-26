@@ -15,29 +15,28 @@
  * limitations under the License.
  */
 
-package com.github.cloudml.zen.ml
+package com.github.cloudml.zen.ml.partitioner
 
 import scala.reflect.ClassTag
+
+import com.github.cloudml.zen.ml.util.{AliasTable, XORShiftRandom}
 import breeze.linalg.{SparseVector => BSV}
-import com.github.cloudml.zen.ml.util.{XORShiftRandom, AliasTable}
 import org.apache.spark.Partitioner
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.GraphImpl
 import org.apache.spark.storage.StorageLevel
 
-/**
- * Bounded & Balanced Rearranger Partitioner
- */
+
 private[ml] class BBRPartitioner(val partitions: Int) extends Partitioner {
 
   override def numPartitions: Int = partitions
 
-  def getKey(et: EdgeTriplet[Int, _]): Long = {
+  def getKey(et: EdgeTriplet[VertexId, _]): VertexId = {
     if (et.srcAttr >= et.dstAttr) et.srcId else et.dstId
   }
 
   def getPartition(key: Any): PartitionID = {
-    key.asInstanceOf[Int] % numPartitions
+    key.asInstanceOf[PartitionID] % numPartitions
   }
 
   override def equals(other: Any): Boolean = other match {
@@ -50,40 +49,53 @@ private[ml] class BBRPartitioner(val partitions: Int) extends Partitioner {
   override def hashCode: Int = numPartitions
 }
 
+/**
+ * Bounded & Balanced Rearranger Partitioner
+ */
 object BBRPartitioner {
   private[zen] def partitionByBBR[VD: ClassTag, ED: ClassTag](
     input: Graph[VD, ED],
     storageLevel: StorageLevel): Graph[VD, ED] = {
-    val edges = input.edges
-    val vertices = input.vertices
-    val numPartitions = edges.partitions.length
+    val numPartitions = input.edges.partitions.length
     val bbr = new BBRPartitioner(numPartitions)
-    val degGraph = GraphImpl(input.degrees, edges)
-    val assnGraph = degGraph.mapTriplets((pid, iter) =>
-      iter.map(et => (bbr.getKey(et), Edge(et.srcId, et.dstId, et.attr))), TripletFields.All)
-    assnGraph.persist(storageLevel)
+    val degGraph = GraphImpl(input.degrees.mapValues(_.toLong), input.edges)
+    degGraph.persist(storageLevel)
 
-    val assnVerts = assnGraph.aggregateMessages[Long](ect => {
-      if (ect.attr._1 == ect.srcId) {
+    val docOccurs = assignVerts(assignGraph(degGraph, bbr)).filter(_._1 < 0L)
+    val adjGraph = degGraph.joinVertices(docOccurs)((_, _, docOcc) => docOcc)
+    val assnGraph = assignGraph(adjGraph, bbr)
+    assnGraph.persist(storageLevel)
+    val (kids, koccurs) = assignVerts(assnGraph).filter(_._2 > 0L).collect().unzip
+    val partRdd = input.edges.context.parallelize(kids.zip(rearrage(koccurs, numPartitions)))
+    val rearrGraph = assnGraph.mapVertices((_, _) => null.asInstanceOf[AliasTable[Long]])
+      .joinVertices(partRdd)((_, _, arr) => AliasTable.generateAlias(arr))
+
+    val pidGraph = rearrGraph.mapTriplets((pid, iter) => {
+      val gen = new XORShiftRandom()
+      iter.map(et => {
+        val table = if (et.attr == et.srcId) et.srcAttr else et.dstAttr
+        table.sampleRandom(gen)
+      })
+    }, TripletFields.All)
+    val newEdges = pidGraph.edges.innerJoin(degGraph.edges)((_, _, pid, data) => (pid, data))
+      .mapPartitions(_.map(e =>
+      (e.attr._1, Edge(e.srcId, e.dstId, e.attr._2))), preservesPartitioning=true)
+      .partitionBy(bbr).map(_._2)
+    GraphImpl(input.vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
+  }
+
+  private def assignGraph[ED](cntGraph: Graph[Long, _], bbr: BBRPartitioner): Graph[Long, VertexId] = {
+    cntGraph.mapTriplets((pid, iter) => iter.map(bbr.getKey), TripletFields.All)
+  }
+
+  private def assignVerts(assnGraph: Graph[_, VertexId]): VertexRDD[Long] = {
+    assnGraph.aggregateMessages[Long](ect => {
+      if (ect.attr == ect.srcId) {
         ect.sendToSrc(1L)
       } else {
         ect.sendToDst(1L)
       }
     }, _ + _, TripletFields.All)
-    val (kids, koccurs) = assnVerts.filter(_._2 > 0L).collect().unzip
-    val partRdd = input.edges.context.parallelize(kids.zip(rearrage(koccurs, numPartitions)))
-    val rearrGraph = assnGraph.mapVertices((_, _) => null.asInstanceOf[AliasTable[Long]])
-      .joinVertices(partRdd)((_, _, arr) => AliasTable.generateAlias(arr))
-
-    val newEdges = rearrGraph.triplets.mapPartitions(iter => {
-      val gen = new XORShiftRandom()
-      iter.map(et => {
-        val (kid, edge) = et.attr
-        val table = if (kid == et.srcId) et.srcAttr else et.dstAttr
-        (table.sampleRandom(gen), edge)
-      })
-    }, preservesPartitioning=true).partitionBy(bbr).map(_._2)
-    GraphImpl(vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
   }
 
   private def rearrage(koccurs: IndexedSeq[Long], numPartitions: Int): IndexedSeq[BSV[Long]] = {
@@ -91,8 +103,8 @@ object BBRPartitioner {
     val numEdges = koccurs.sum
     val npp = numEdges / numPartitions
     val rpn = numEdges - npp * numPartitions
-    @inline def nrpp(pi: Int) = npp + (if (pi < rpn) 1L else 0L)
-    @inline def kbn(ki: Int) = if (ki < numKeys) koccurs(ki) else 0L
+    @inline def nrpp(pi: Int): Long = npp + (if (pi < rpn) 1L else 0L)
+    @inline def kbn(ki: Int): Long = if (ki < numKeys) koccurs(ki) else 0L
     val keyPartCount = koccurs.map(t => BSV.zeros[Long](numPartitions))
     def put(ki: Int, krest: Long, pi: Int, prest: Long): Unit = {
       if (ki < numKeys) {

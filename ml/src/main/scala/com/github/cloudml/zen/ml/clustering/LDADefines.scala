@@ -18,11 +18,13 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
-import breeze.linalg.{SparseVector => BSV, DenseVector => BDV}
-import com.github.cloudml.zen.ml.{VSDLPPartitioner, DBHPartitioner}
+
+import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.{FTree, AliasTable, XORShiftRandom}
+import breeze.linalg.{SparseVector => BSV, DenseVector => BDV}
 import org.apache.spark.SparkConf
 import org.apache.spark.graphx._
+
 
 object LDADefines {
   type DocId = VertexId
@@ -111,7 +113,7 @@ object LDADefines {
       classOf[BOW], classOf[Random], classOf[XORShiftRandom],
       classOf[LDA], classOf[LocalLDAModel], classOf[DistributedLDAModel],
       classOf[LDAAlgorithm], classOf[FastLDA], classOf[LightLDA],
-      classOf[DBHPartitioner], classOf[VSDLPPartitioner],
+      classOf[DBHPartitioner], classOf[VSDLPPartitioner], classOf[BBRPartitioner],
       classOf[AliasTable[Double]], classOf[AliasTable[Int]], classOf[FTree[Double]]
     ))
   }
