@@ -120,10 +120,10 @@ private[zen] class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](
     if (pos < leafOffset) {
       pos = addState()
     }
-    val p = _tree(pos)
-    if (num.lt(value, num.zero)) {
+    if (num.lteq(value, num.zero)) {
       delState(pos)
     } else {
+      val p = _tree(pos)
       val delta = num.minus(value, p)
       _tree(pos) = value
       updateAncestors(pos, delta)

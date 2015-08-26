@@ -59,13 +59,16 @@ object BBRPartitioner {
     val numPartitions = input.edges.partitions.length
     val bbr = new BBRPartitioner(numPartitions)
     val degGraph = GraphImpl(input.degrees.mapValues(_.toLong), input.edges)
-    degGraph.persist(storageLevel)
-
-    val docOccurs = assignVerts(assignGraph(degGraph, bbr)).filter(_._1 < 0L)
-    val adjGraph = degGraph.joinVertices(docOccurs)((_, _, docOcc) => docOcc)
-    val assnGraph = assignGraph(adjGraph, bbr)
+    val assnGraph = degGraph.mapTriplets((pid, iter) => iter.map(bbr.getKey), TripletFields.All)
     assnGraph.persist(storageLevel)
-    val (kids, koccurs) = assignVerts(assnGraph).filter(_._2 > 0L).collect().unzip
+
+    val (kids, koccurs) = assnGraph.aggregateMessages[Long](ect => {
+      if (ect.attr == ect.srcId) {
+        ect.sendToSrc(1L)
+      } else {
+        ect.sendToDst(1L)
+      }
+    }, _ + _, TripletFields.All).filter(_._2 > 0L).collect().unzip
     val partRdd = input.edges.context.parallelize(kids.zip(rearrage(koccurs, numPartitions)))
     val rearrGraph = assnGraph.mapVertices((_, _) => null.asInstanceOf[AliasTable[Long]])
       .joinVertices(partRdd)((_, _, arr) => AliasTable.generateAlias(arr))
@@ -77,25 +80,11 @@ object BBRPartitioner {
         table.sampleRandom(gen)
       })
     }, TripletFields.All)
-    val newEdges = pidGraph.edges.innerJoin(degGraph.edges)((_, _, pid, data) => (pid, data))
+    val newEdges = pidGraph.edges.innerJoin(input.edges)((_, _, pid, data) => (pid, data))
       .mapPartitions(_.map(e =>
       (e.attr._1, Edge(e.srcId, e.dstId, e.attr._2))), preservesPartitioning=true)
       .partitionBy(bbr).map(_._2)
     GraphImpl(input.vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
-  }
-
-  private def assignGraph[ED](cntGraph: Graph[Long, _], bbr: BBRPartitioner): Graph[Long, VertexId] = {
-    cntGraph.mapTriplets((pid, iter) => iter.map(bbr.getKey), TripletFields.All)
-  }
-
-  private def assignVerts(assnGraph: Graph[_, VertexId]): VertexRDD[Long] = {
-    assnGraph.aggregateMessages[Long](ect => {
-      if (ect.attr == ect.srcId) {
-        ect.sendToSrc(1L)
-      } else {
-        ect.sendToDst(1L)
-      }
-    }, _ + _, TripletFields.All)
   }
 
   private def rearrage(koccurs: IndexedSeq[Long], numPartitions: Int): IndexedSeq[BSV[Long]] = {
