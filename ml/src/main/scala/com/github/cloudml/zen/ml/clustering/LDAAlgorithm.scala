@@ -75,6 +75,11 @@ class FastLDA extends LDAAlgorithm {
     val numPartitions = corpus.edges.partitions.length
     val sampledCorpus = corpus.mapTriplets((pid, iter) => {
       val gen = new XORShiftRandom(numPartitions * seed + pid)
+      val numTopics = totalTopicCounter.length
+      val alphaTRatio = alpha * numTopics / (numTokens - 1 + alphaAS * numTopics)
+      val betaSum = beta * numTerms
+      def itemRatio(topic: Int) = alphaTRatio * (totalTopicCounter(topic) + alphaAS) /
+        (totalTopicCounter(topic) + betaSum)
       // table/ftree is a per term data structure
       // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
       // so, use below simple cache to avoid calculating table each time
@@ -87,41 +92,37 @@ class FastLDA extends LDAAlgorithm {
         case "ftree" => new FTree[Double](numTopics, isSparse=false)
         case "alias" | "hybrid" => new AliasTable(numTopics)
       }
-      val tdt = tDense(totalTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
+      val tdt = tDense(itemRatio, beta, numTopics)
       globalSampler.resetDist(tdt._2, tdt._1)
       val docCdf = new Array[Double](numTopics)
       iter.map(triplet => {
         val termId = triplet.srcId
-        // val docId = triplet.dstId
         val termTopicCounter = triplet.srcAttr
         val docTopicCounter = triplet.dstAttr
+        if (lastVid != termId) {
+          lastVid = termId
+          val wst = wSparse(itemRatio, totalTopicCounter, termTopicCounter)
+          lastSampler.resetDist(wst._2, wst._1)
+        }
         val topics = triplet.attr
         for (i <- topics.indices) {
           val currentTopic = topics(i)
-          dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, docCdf,
-            currentTopic, numTokens, numTerms, alpha, alphaAS, beta)
-          if (lastVid != termId) {
-            lastVid = termId
-            val wst = wSparse(totalTopicCounter, termTopicCounter, numTokens,
-              numTerms, alpha, alphaAS, beta)
-            lastSampler.resetDist(wst._2, wst._1)
-          }
-          def newAlpha(t: Int) = alpha * numTopics * (totalTopicCounter(t) + alphaAS) /
-            (numTokens + alphaAS * numTopics)
-          def deltaDenom(t: Int) = {
-            val denom = totalTopicCounter(t) + numTerms * beta
-            denom * (denom - 1)
-          }
-          def wNumer(t: Int) = termTopicCounter(t) - totalTopicCounter(t) - beta * numTerms
-          globalSampler.update(currentTopic, newAlpha(currentTopic) * beta / deltaDenom(currentTopic))
-          lastSampler.update(currentTopic, newAlpha(currentTopic) * wNumer(currentTopic) / deltaDenom(currentTopic))
+          docTopicCounter(currentTopic) -= 1
+          termTopicCounter(currentTopic) -= 1
+          totalTopicCounter(currentTopic) -= 1
+          dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, docCdf, beta, betaSum)
+          globalSampler.update(currentTopic, itemRatio(currentTopic) * beta)
+          lastSampler.update(currentTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
+
           val newTopic = tokenSampling(gen, globalSampler, lastSampler, docCdf, termTopicCounter,
             docTopicCounter, currentTopic)
-          globalSampler.update(newTopic, newAlpha(newTopic) * beta / deltaDenom(newTopic))
-          lastSampler.update(newTopic, newAlpha(newTopic) * wNumer(newTopic) / deltaDenom(newTopic))
-          if (newTopic != currentTopic) {
-            topics(i) = newTopic
-          }
+
+          topics(i) = newTopic
+          docTopicCounter(newTopic) += 1
+          termTopicCounter(newTopic) += 1
+          totalTopicCounter(newTopic) += 1
+          globalSampler.update(newTopic, itemRatio(currentTopic) * beta)
+          lastSampler.deltaUpdate(newTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
         }
         topics
       })
@@ -138,22 +139,21 @@ class FastLDA extends LDAAlgorithm {
     currentTopic: Int): Int = {
     val tSum = t.norm
     val wSum = w.norm
-    val dSum = dData(docTopicCounter.used - 1)
+    val dSum = dData(docTopicCounter.activeSize - 1)
     val distSum = tSum + wSum + dSum
     val genSum = gen.nextDouble() * distSum
     if (genSum < dSum) {
-      val dGenSum = gen.nextDouble() * dSum
       val index = docTopicCounter.index
       val used = docTopicCounter.used
-      val pos = binarySearchInterval(dData, dGenSum, 0, used, greater=true)
+      val pos = binarySearchInterval(dData, genSum, 0, used, greater=true)
       index(pos)
-    } else if (genSum < (dSum + wSum)) {
+    } else if (genSum < dSum + wSum) {
       w match {
         case wt: AliasTable[Double] => sampleSV(gen, wt, termTopicCounter, currentTopic)
-        case wf: FTree[Double] => wf.sampleRandom(gen)
+        case wf: FTree[Double] => wf.sampleFrom(genSum - dSum, gen)
       }
     } else {
-      t.sampleRandom(gen)
+      t.sampleFrom(genSum - dSum - wSum, gen)
     }
   }
 
@@ -162,21 +162,13 @@ class FastLDA extends LDAAlgorithm {
    * t = \frac{{\beta }_{w} \bar{\alpha} ( {n}_{k}^{-di} + \acute{\alpha} ) } {({n}_{k}^{-di}+\bar{\beta})
    * ({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
    */
-  private[ml] def tDense(totalTopicCounter: BDV[Count],
-    numTokens: Long,
-    numTerms: Int,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): (Double, BDV[Double]) = {
-    val numTopics = totalTopicCounter.length
+  private[ml] def tDense(itemRatio: Int => Double,
+    beta: Double,
+    numTopics: Int): (Double, BDV[Double]) = {
     val t = BDV.zeros[Double](numTopics)
-    val alphaSum = alpha * numTopics
-    val termSum = numTokens - 1 + alphaAS * numTopics
-    val betaSum = numTerms * beta
     var sum = 0D
     for (topic <- 0 until numTopics) {
-      val last = beta * alphaSum * (totalTopicCounter(topic) + alphaAS) /
-        ((totalTopicCounter(topic) + betaSum) * termSum)
+      val last = beta * itemRatio(topic)
       t(topic) = last
       sum += last
     }
@@ -188,24 +180,14 @@ class FastLDA extends LDAAlgorithm {
    * w = \frac{ {n}_{kw}^{-di} \bar{\alpha} ( {n}_{k}^{-di} + \acute{\alpha} )}{({n}_{k}^{-di}+\bar{\beta})
    * ({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
    */
-  private[ml] def wSparse(totalTopicCounter: BDV[Count],
-    termTopicCounter: VD,
-    numTokens: Long,
-    numTerms: Int,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): (Double, BSV[Double]) = {
+  private[ml] def wSparse(itemRatio: Int => Double,
+    totalTopicCounter: BDV[Count],
+    termTopicCounter: VD): (Double, BSV[Double]) = {
     val numTopics = totalTopicCounter.length
-    val alphaSum = alpha * numTopics
-    val termSum = numTokens - 1D + alphaAS * numTopics
-    val betaSum = numTerms * beta
     val w = BSV.zeros[Double](numTopics)
     var sum = 0D
-    termTopicCounter.activeIterator.filter(_._2 > 0).foreach { t =>
-      val topic = t._1
-      val count = t._2
-      val last = count * alphaSum * (totalTopicCounter(topic) + alphaAS) /
-        ((totalTopicCounter(topic) + betaSum) * termSum)
+    for ((topic, count) <- termTopicCounter.activeIterator.filter(_._2 > 0)) {
+      val last = count * itemRatio(topic)
       w(topic) = last
       sum += last
     }
@@ -222,27 +204,11 @@ class FastLDA extends LDAAlgorithm {
     termTopicCounter: VD,
     docTopicCounter: VD,
     d: Array[Double],
-    currentTopic: Int,
-    numTokens: Long,
-    numTerms: Int,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): Unit = {
-    val index = docTopicCounter.index
-    val data = docTopicCounter.data
-    val used = docTopicCounter.used
-
-    // val termSum = numTokens - 1D + alphaAS * numTopics
-    val betaSum = numTerms * beta
+    beta: Double,
+    betaSum: Double): Unit = {
     var sum = 0D
-    for (i <- 0 until used) {
-      val topic = index(i)
-      val count = data(i)
-      val adjustment = if (currentTopic == topic) -1 else 0
-      val last = (count + adjustment) * (termTopicCounter(topic) + adjustment + beta) /
-        (totalTopicCounter(topic) + adjustment + betaSum)
-      // val lastD = (count + adjustment) * termSum * (termTopicCounter(topic) + adjustment + beta) /
-      //  ((totalTopicCounter(topic) + adjustment + betaSum) * termSum)
+    for (((topic, count), i) <- docTopicCounter.activeIterator.zipWithIndex) {
+      val last = count * (termTopicCounter(topic) + beta) / (totalTopicCounter(topic) + betaSum)
       sum += last
       d(i) = sum
     }
@@ -337,6 +303,12 @@ class LightLDA extends LDAAlgorithm {
             assert(newTopic >= 0 && newTopic < numTopics)
             if (newTopic != currentTopic) {
               topics(i) = newTopic
+              docTopicCounter(currentTopic) -= 1
+              docTopicCounter(newTopic) += 1
+              termTopicCounter(currentTopic) -= 1
+              termTopicCounter(newTopic) += 1
+              totalTopicCounter(currentTopic) -= 1
+              totalTopicCounter(newTopic) += 1
             }
           }
         }

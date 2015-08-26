@@ -48,27 +48,37 @@ private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag
   def norm: T = _norm
 
   def sampleRandom(gen: Random): Int = {
-    val bin = gen.nextInt(_used)
-    val prob = _p(bin)
-    if (gen.nextDouble() * num.toDouble(_norm) < num.toDouble(prob)) {
-      _l(bin)
+    if (_used == 1) {
+      _l(0)
     } else {
-      _h(bin)
+      val bin = gen.nextInt(_used)
+      val prob = _p(bin)
+      if (gen.nextDouble() * num.toDouble(_norm) < num.toDouble(prob)) {
+        _l(bin)
+      } else {
+        _h(bin)
+      }
     }
   }
 
   def sampleFrom(base: T, gen: Random): Int = {
     assert(num.lt(base, _norm))
-    val bin = gen.nextInt(_used)
-    val prob = _p(bin)
-    if (num.lt(base, prob)) {
-      _l(bin)
+    if (_used == 1) {
+      _l(0)
     } else {
-      _h(bin)
+      val bin = gen.nextInt(_used)
+      val prob = _p(bin)
+      if (num.lt(base, prob)) {
+        _l(bin)
+      } else {
+        _h(bin)
+      }
     }
   }
 
-  def update(state: Int, delta: T): Unit = {}
+  def update(state: Int, value: T): Unit = {}
+
+  def deltaUpdate(state: Int, delta: T): Unit = {}
 
   def resetDist(dist: BV[T], sum: T): this.type = {
     val used = dist.activeSize

@@ -114,7 +114,7 @@ object LDADefines {
       classOf[LDA], classOf[LocalLDAModel], classOf[DistributedLDAModel],
       classOf[LDAAlgorithm], classOf[FastLDA], classOf[LightLDA],
       classOf[DBHPartitioner], classOf[VSDLPPartitioner], classOf[BBRPartitioner],
-      classOf[AliasTable[Double]], classOf[AliasTable[Int]], classOf[FTree[Double]]
+      classOf[AliasTable[Double]], classOf[AliasTable[Object]], classOf[FTree[Double]], classOf[FTree[Object]]
     ))
   }
 }

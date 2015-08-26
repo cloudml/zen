@@ -77,16 +77,22 @@ object VSDLPPartitioner {
           val ftree1 = et.srcAttr
           val ftree2 = et.dstAttr
           val pid = et.attr
-          ftree1.update(pid, -1)
-          ftree2.update(pid, -1)
-          val u = gen.nextInt(ftree1.norm + ftree2.norm)
-          val toPid = if (u < ftree1.norm) {
-            ftree1.sampleFrom(u, gen)
+          ftree1.deltaUpdate(pid, -1)
+          ftree2.deltaUpdate(pid, -1)
+          val norm1 = ftree1.norm
+          val norm2 = ftree2.norm
+          val toPid = if (norm1 == 0 && norm2 == 0) {
+            gen.nextInt(numPartitions)
           } else {
-            ftree2.sampleFrom(u - ftree1.norm, gen)
+            val u = gen.nextInt(norm1 + norm2)
+            if (u < norm1) {
+              ftree1.sampleFrom(u, gen)
+            } else {
+              ftree2.sampleFrom(u - norm1, gen)
+            }
           }
-          ftree1.update(pid, 1)
-          ftree2.update(pid, 1)
+          ftree1.deltaUpdate(pid, 1)
+          ftree2.deltaUpdate(pid, 1)
           (pid, toPid)
         })
       }, TripletFields.All).mapVertices[PVD]((_, _) => null)
