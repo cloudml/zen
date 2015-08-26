@@ -413,17 +413,6 @@ object LDA {
 
   private def updateCounter(corpus: Graph[VD, ED],
     numTopics: Int): Graph[VD, ED] = {
-    val newCounter = corpus.aggregateMessages[VD](ect => {
-      val vec = BSV.zeros[Count](numTopics)
-      ect.attr.foreach(t => vec(t) += 1)
-      ect.sendToDst(vec)
-      ect.sendToSrc(vec)
-    }, _ :+= _, TripletFields.EdgeOnly)
-    corpus.joinVertices(newCounter)((_, _, counter) => counter)
-  }
-
-  private def updateCounter2(corpus: Graph[VD, ED],
-    numTopics: Int): Graph[VD, ED] = {
     val newCounter = corpus.edges.mapPartitions(_.flatMap(edge => {
       val topics = edge.attr
       Iterator((edge.srcId, topics), (edge.dstId, topics))
