@@ -31,7 +31,7 @@ private[ml] class BBRPartitioner(val partitions: Int) extends Partitioner {
 
   override def numPartitions: Int = partitions
 
-  def getKey(et: EdgeTriplet[VertexId, _]): VertexId = {
+  def getKey(et: EdgeTriplet[Int, _]): VertexId = {
     if (et.srcAttr >= et.dstAttr) et.srcId else et.dstId
   }
 
@@ -58,32 +58,31 @@ object BBRPartitioner {
     storageLevel: StorageLevel): Graph[VD, ED] = {
     val numPartitions = input.edges.partitions.length
     val bbr = new BBRPartitioner(numPartitions)
-    val degGraph = GraphImpl(input.degrees.mapValues(_.toLong), input.edges)
-    val assnGraph = degGraph.mapTriplets((pid, iter) => iter.map(bbr.getKey), TripletFields.All)
+    val degGraph = GraphImpl(input.degrees, input.edges)
+    val assnGraph = degGraph.mapTriplets((pid, iter) =>
+      iter.map(et => (bbr.getKey(et), Edge(et.srcId, et.dstId, et.attr))), TripletFields.All)
     assnGraph.persist(storageLevel)
 
-    val (kids, koccurs) = assnGraph.aggregateMessages[Long](ect => {
-      if (ect.attr == ect.srcId) {
+    val assnVerts = assnGraph.aggregateMessages[Long](ect => {
+      if (ect.attr._1 == ect.srcId) {
         ect.sendToSrc(1L)
       } else {
         ect.sendToDst(1L)
       }
-    }, _ + _, TripletFields.All).filter(_._2 > 0L).collect().unzip
+    }, _ + _, TripletFields.EdgeOnly)
+    val (kids, koccurs) = assnVerts.filter(_._2 > 0L).collect().unzip
     val partRdd = input.edges.context.parallelize(kids.zip(rearrage(koccurs, numPartitions)))
     val rearrGraph = assnGraph.mapVertices((_, _) => null.asInstanceOf[AliasTable[Long]])
       .joinVertices(partRdd)((_, _, arr) => AliasTable.generateAlias(arr))
 
-    val pidGraph = rearrGraph.mapTriplets((pid, iter) => {
+    val newEdges = rearrGraph.triplets.mapPartitions(iter => {
       val gen = new XORShiftRandom()
       iter.map(et => {
-        val table = if (et.attr == et.srcId) et.srcAttr else et.dstAttr
-        table.sampleRandom(gen)
+        val (kid, edge) = et.attr
+        val table = if (kid == et.srcId) et.srcAttr else et.dstAttr
+        (table.sampleRandom(gen), edge)
       })
-    }, TripletFields.All)
-    val newEdges = pidGraph.edges.innerJoin(input.edges)((_, _, pid, data) => (pid, data))
-      .mapPartitions(_.map(e =>
-      (e.attr._1, Edge(e.srcId, e.dstId, e.attr._2))), preservesPartitioning=true)
-      .partitionBy(bbr).map(_._2)
+    }, preservesPartitioning=true).partitionBy(bbr).map(_._2)
     GraphImpl(input.vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
   }
 

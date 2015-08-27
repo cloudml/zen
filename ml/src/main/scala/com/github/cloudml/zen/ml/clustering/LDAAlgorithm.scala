@@ -76,9 +76,9 @@ class FastLDA extends LDAAlgorithm {
     val sampledCorpus = corpus.mapTriplets((pid, iter) => {
       val gen = new XORShiftRandom(numPartitions * seed + pid)
       val numTopics = totalTopicCounter.length
-      val alphaTRatio = alpha * numTopics / (numTokens - 1 + alphaAS * numTopics)
+      val alphaRatio = alpha * numTopics / (numTokens - 1 + alphaAS * numTopics)
       val betaSum = beta * numTerms
-      def itemRatio(topic: Int) = alphaTRatio * (totalTopicCounter(topic) + alphaAS) /
+      def itemRatio(topic: Int) = alphaRatio * (totalTopicCounter(topic) + alphaAS) /
         (totalTopicCounter(topic) + betaSum)
       // table/ftree is a per term data structure
       // in GraphX, edges in a partition are clustered by source IDs (term id in this case)

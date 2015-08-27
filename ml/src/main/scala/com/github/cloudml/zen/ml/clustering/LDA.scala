@@ -215,36 +215,37 @@ class LDA(@transient private var corpus: Graph[VD, ED],
    * N is the number of tokens in corpus
    */
   def perplexity(): Double = {
-    val totalTopicCounter = this.totalTopicCounter
-    val alpha = this.alpha
-    val beta = this.beta
-    val alpha_bar = this.numTopics * alpha
-    val beta_bar = this.numTerms * beta
+    val tCounter = this.totalTopicCounter
     val numTokens = this.numTokens
+    val alphaAS = this.alphaAS
+    val alphaSum = this.numTopics * this.alpha
+    val alphaRatio = alphaSum / (numTokens + alphaAS * this.numTopics)
+    val beta = this.beta
+    val betaSum = this.numTerms * beta
 
     // \frac{{\alpha }_{k}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
-    val tDenseSum = totalTopicCounter.valuesIterator.map(c => alpha * beta / (c + beta_bar)).sum
+    val tDenseSum = tCounter.valuesIterator.map(c => beta * alphaRatio * (c + alphaAS) / (c + betaSum)).sum
 
     val termProb = corpus.mapVertices((vid, counter) => {
       val probDist = if (isDocId(vid)) {
-        counter.mapActivePairs((t, c) => c * beta / (totalTopicCounter(t) + beta_bar))
+        counter.mapActivePairs((t, c) => c * beta / (tCounter(t) + betaSum))
       } else {
-        counter.mapActivePairs((t, c) => c * alpha / (totalTopicCounter(t) + beta_bar))
+        counter.mapActivePairs((t, c) => c * alphaRatio * (tCounter(t) + alphaAS) / (tCounter(t) + betaSum))
       }
       val cSum = if (isDocId(vid)) brzSum(counter) else 0
       (counter, brzSum(probDist), cSum)
     }).mapTriplets(triplet => {
       val (termTopicCounter, wSparseSum, _) = triplet.srcAttr
       val (docTopicCounter, dSparseSum, docSize) = triplet.dstAttr
-      val dwCooccur = triplet.attr.length
+      val occurs = triplet.attr.length
 
       // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
       val dwSparseSum = docTopicCounter.activeIterator.map { case (t, c) =>
-        c * termTopicCounter(t) / (totalTopicCounter(t) + beta_bar)
+        c * termTopicCounter(t) / (tCounter(t) + betaSum)
       }.sum
-      val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alpha_bar)
+      val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alphaSum)
 
-      dwCooccur * Math.log(prob)
+      Math.log(prob) * occurs
     }).edges.map(_.attr).sum()
 
     math.exp(-1 * termProb / numTokens)
