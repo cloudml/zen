@@ -61,6 +61,7 @@ object LDADriver {
     conf.set(cs_outputpath, outputPath)
     conf.set(cs_storageLevel, slvlStr)
     conf.set(cs_sampleRate, options.getOrElse("samplerate", "1.0"))
+    conf.set(cs_numThreads, options.getOrElse("numthreads", "1"))
     conf.set(cs_LDAAlgorithm, options.getOrElse("ldaalgorithm", "fastlda"))
     conf.set(cs_accelMethod, options.getOrElse("accelmethod", "alias"))
     conf.set(cs_partStrategy, options.getOrElse("partstrategy", "dbh"))
@@ -194,6 +195,7 @@ object LDADriver {
       "  Args: -numTopics=<Int> -alpha=<Double> -beta=<Double> -alphaAS=<Double>\n" +
       "        -totalIter=<Int> -numPartitions=<Int>\n" +
       "  Options: -sampleRate=<Double(*1.0)>\n" +
+      "           -numThreads=<Int(*1)>\n" +
       "           -LDAAlgorithm=<*FastLDA|LightLDA>\n" +
       "           -accelMethod=<*Alias|FTree|Hybrid>\n" +
       "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK_SER)>\n" +

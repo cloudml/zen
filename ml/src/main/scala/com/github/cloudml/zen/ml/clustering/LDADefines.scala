@@ -47,6 +47,7 @@ object LDADefines {
   val cs_inputPath = "zen.lda.inputPath"
   val cs_outputpath = "zen.lda.outputPath"
   val cs_saveAsSolid = "zen.lda.saveAsSolid"
+  val cs_numThreads = "zen.lda.numThreads"
 
   def uniformDistSampler(gen: Random,
     tokens: Array[Int],

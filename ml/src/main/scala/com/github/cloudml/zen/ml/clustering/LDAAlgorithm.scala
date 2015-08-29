@@ -71,7 +71,9 @@ class FastLDA extends LDAAlgorithm {
     alpha: Double,
     alphaAS: Double,
     beta: Double): Graph[VD, ED] = {
-    val sampl = corpus.edges.context.getConf.get(cs_accelMethod, "alias")
+    val conf = corpus.edges.context.getConf
+    val nthread = conf.getInt(cs_numThreads, 1)
+    val sampl = conf.get(cs_accelMethod, "alias")
     val numPartitions = corpus.edges.partitions.length
     val sampledCorpus = corpus.mapTriplets((pid, iter) => {
       val gen = new XORShiftRandom(numPartitions * seed + pid)
