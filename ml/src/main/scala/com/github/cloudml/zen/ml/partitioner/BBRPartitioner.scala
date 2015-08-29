@@ -71,7 +71,7 @@ object BBRPartitioner {
       }
     }, _ + _, TripletFields.EdgeOnly)
     val (kids, koccurs) = assnVerts.filter(_._2 > 0L).collect().unzip
-    val partRdd = input.edges.context.parallelize(kids.zip(rearrage(koccurs, numPartitions)), numPartitions)
+    val partRdd = input.edges.context.parallelize(kids.zip(rearrage(koccurs, numPartitions)))
     val rearrGraph = assnGraph.mapVertices((_, _) => null.asInstanceOf[AliasTable[Long]])
       .joinVertices(partRdd)((_, _, arr) => AliasTable.generateAlias(arr))
 

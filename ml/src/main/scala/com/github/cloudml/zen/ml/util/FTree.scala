@@ -114,7 +114,7 @@ private[zen] class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](
     }
   }
 
-  def update(state: Int, value: T): Unit = {
+  def update(state: Int, value: T): Unit = synchronized {
     assert(num.lteq(value, num.zero))
     var pos = toTreePos(state)
     if (pos < leafOffset) {
@@ -130,7 +130,7 @@ private[zen] class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](
     }
   }
 
-  def deltaUpdate(state: Int, delta: T): Unit = {
+  def deltaUpdate(state: Int, delta: T): Unit = synchronized {
     var pos = toTreePos(state)
     if (pos < leafOffset) {
       pos = addState()
@@ -177,7 +177,7 @@ private[zen] class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](
     updateAncestors(pos, num.negate(p))
   }
 
-  def resetDist(dist: BV[T], sum: T): this.type = {
+  def resetDist(dist: BV[T], sum: T): this.type = synchronized {
     val used = dist.activeSize
     reset(used)
     dist match {

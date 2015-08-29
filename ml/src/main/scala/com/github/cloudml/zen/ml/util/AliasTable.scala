@@ -80,7 +80,7 @@ private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag
 
   def deltaUpdate(state: Int, delta: T): Unit = {}
 
-  def resetDist(dist: BV[T], sum: T): this.type = {
+  def resetDist(dist: BV[T], sum: T): this.type = synchronized {
     val used = dist.activeSize
     reset(used)
     val (loList, hiList) = dist.activeIterator
