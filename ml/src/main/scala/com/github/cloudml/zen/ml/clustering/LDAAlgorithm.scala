@@ -98,53 +98,56 @@ class FastLDA extends LDAAlgorithm {
       for (i <- threads.indices) {
         threads(i) = new Thread(new Runnable {
           override def run(): Unit = {
-            // table/ftree is a per term data structure
-            // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
-            // so, use below simple cache to avoid calculating table each time
-            val lastSampler: DiscreteSampler[Double] = sampl match {
-              case "alias" => new AliasTable[Double](numTopics)
-              case "ftree" | "hybrid" => new FTree(numTopics, isSparse=true)
-            }
-            var lastVid: VertexId = -1L
-            val globalSampler: DiscreteSampler[Double] = sampl match {
-              case "ftree" => new FTree[Double](numTopics, isSparse=false)
-              case "alias" | "hybrid" => new AliasTable(numTopics)
-            }
-            val tdt = tDense(itemRatio, beta, numTopics)
-            globalSampler.resetDist(tdt._2, tdt._1)
-            val docCdf = new Array[Double](numTopics)
-            resIters(i) = iters(i).map(triplet => {
-              val termId = triplet.srcId
-              val termTopicCounter = triplet.srcAttr
-              val docTopicCounter = triplet.dstAttr
-              if (lastVid != termId) {
-                lastVid = termId
-                val wst = wSparse(itemRatio, totalTopicCounter, termTopicCounter)
-                lastSampler.resetDist(wst._2, wst._1)
+            try {
+              // table/ftree is a per term data structure
+              // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
+              // so, use below simple cache to avoid calculating table each time
+              val lastSampler: DiscreteSampler[Double] = sampl match {
+                case "alias" => new AliasTable[Double](numTopics)
+                case "ftree" | "hybrid" => new FTree(numTopics, isSparse = true)
               }
-              val topics = triplet.attr
-              for (i <- topics.indices) {
-                val currentTopic = topics(i)
-                docTopicCounter(currentTopic) -= 1
-                termTopicCounter(currentTopic) -= 1
-                totalTopicCounter(currentTopic) -= 1
-                dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, docCdf, beta, betaSum)
-                globalSampler.update(currentTopic, itemRatio(currentTopic) * beta)
-                lastSampler.update(currentTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
-
-                val newTopic = tokenSampling(gen, globalSampler, lastSampler, docCdf, termTopicCounter,
-                  docTopicCounter, currentTopic)
-
-                topics(i) = newTopic
-                docTopicCounter(newTopic) += 1
-                termTopicCounter(newTopic) += 1
-                totalTopicCounter(newTopic) += 1
-                globalSampler.update(newTopic, itemRatio(currentTopic) * beta)
-                lastSampler.deltaUpdate(newTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
+              var lastVid: VertexId = -1L
+              val globalSampler: DiscreteSampler[Double] = sampl match {
+                case "ftree" => new FTree[Double](numTopics, isSparse = false)
+                case "alias" | "hybrid" => new AliasTable(numTopics)
               }
-              topics
-            })
-            doneSignal.countDown()
+              val tdt = tDense(itemRatio, beta, numTopics)
+              globalSampler.resetDist(tdt._2, tdt._1)
+              val docCdf = new Array[Double](numTopics)
+              resIters(i) = iters(i).map(triplet => {
+                val termId = triplet.srcId
+                val termTopicCounter = triplet.srcAttr
+                val docTopicCounter = triplet.dstAttr
+                if (lastVid != termId) {
+                  lastVid = termId
+                  val wst = wSparse(itemRatio, totalTopicCounter, termTopicCounter)
+                  lastSampler.resetDist(wst._2, wst._1)
+                }
+                val topics = triplet.attr
+                for (i <- topics.indices) {
+                  val currentTopic = topics(i)
+                  docTopicCounter(currentTopic) -= 1
+                  termTopicCounter(currentTopic) -= 1
+                  totalTopicCounter(currentTopic) -= 1
+                  dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, docCdf, beta, betaSum)
+                  globalSampler.update(currentTopic, itemRatio(currentTopic) * beta)
+                  lastSampler.update(currentTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
+
+                  val newTopic = tokenSampling(gen, globalSampler, lastSampler, docCdf, termTopicCounter,
+                    docTopicCounter, currentTopic)
+
+                  topics(i) = newTopic
+                  docTopicCounter(newTopic) += 1
+                  termTopicCounter(newTopic) += 1
+                  totalTopicCounter(newTopic) += 1
+                  globalSampler.update(newTopic, itemRatio(currentTopic) * beta)
+                  lastSampler.deltaUpdate(newTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
+                }
+                topics
+              })
+            } finally {
+              doneSignal.countDown()
+            }
           }
         })
       }
