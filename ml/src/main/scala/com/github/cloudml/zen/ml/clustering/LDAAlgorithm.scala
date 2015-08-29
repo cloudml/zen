@@ -19,6 +19,7 @@ package com.github.cloudml.zen.ml.clustering
 
 import java.lang.ref.SoftReference
 import java.util.Random
+import java.util.concurrent.CountDownLatch
 
 import LDADefines._
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
@@ -72,64 +73,88 @@ class FastLDA extends LDAAlgorithm {
     alphaAS: Double,
     beta: Double): Graph[VD, ED] = {
     val conf = corpus.edges.context.getConf
-    val nthread = conf.getInt(cs_numThreads, 1)
+    val numThreads = conf.getInt(cs_numThreads, 1)
     val sampl = conf.get(cs_accelMethod, "alias")
     val numPartitions = corpus.edges.partitions.length
-    val sampledCorpus = corpus.mapTriplets((pid, iter) => {
+    val graph = corpus.asInstanceOf[GraphImpl[VD, ED]]
+    val vertices = graph.vertices
+    val edges = graph.replicatedVertexView
+    edges.upgrade(vertices, includeSrc=true, includeDst=true)
+    val newEdges = edges.edges.mapEdgePartitions((pid, ep) => {
       val gen = new XORShiftRandom(numPartitions * seed + pid)
       val numTopics = totalTopicCounter.length
       val alphaRatio = alpha * numTopics / (numTokens - 1 + alphaAS * numTopics)
       val betaSum = beta * numTerms
       def itemRatio(topic: Int) = alphaRatio * (totalTopicCounter(topic) + alphaAS) /
         (totalTopicCounter(topic) + betaSum)
-      // table/ftree is a per term data structure
-      // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
-      // so, use below simple cache to avoid calculating table each time
-      val lastSampler: DiscreteSampler[Double] = sampl match {
-        case "alias" => new AliasTable[Double](numTopics)
-        case "ftree" | "hybrid" => new FTree(numTopics, isSparse=true)
-      }
-      var lastVid: VertexId = -1L
-      val globalSampler: DiscreteSampler[Double] = sampl match {
-        case "ftree" => new FTree[Double](numTopics, isSparse=false)
-        case "alias" | "hybrid" => new AliasTable(numTopics)
-      }
-      val tdt = tDense(itemRatio, beta, numTopics)
-      globalSampler.resetDist(tdt._2, tdt._1)
-      val docCdf = new Array[Double](numTopics)
-      iter.map(triplet => {
-        val termId = triplet.srcId
-        val termTopicCounter = triplet.srcAttr
-        val docTopicCounter = triplet.dstAttr
-        if (lastVid != termId) {
-          lastVid = termId
-          val wst = wSparse(itemRatio, totalTopicCounter, termTopicCounter)
-          lastSampler.resetDist(wst._2, wst._1)
-        }
-        val topics = triplet.attr
-        for (i <- topics.indices) {
-          val currentTopic = topics(i)
-          docTopicCounter(currentTopic) -= 1
-          termTopicCounter(currentTopic) -= 1
-          totalTopicCounter(currentTopic) -= 1
-          dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, docCdf, beta, betaSum)
-          globalSampler.update(currentTopic, itemRatio(currentTopic) * beta)
-          lastSampler.update(currentTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
+      val totalSize = ep.size
+      val sizePerThrd = math.ceil(totalSize / numThreads).toInt
+      val iters = ep.tripletIterator(includeSrc=true, includeDst=true).grouped(sizePerThrd).toList
+      assert(iters.length == numThreads)
+      val resIters = new Array[Seq[ED]](numThreads)
 
-          val newTopic = tokenSampling(gen, globalSampler, lastSampler, docCdf, termTopicCounter,
-            docTopicCounter, currentTopic)
+      val doneSignal = new CountDownLatch(numThreads)
+      val threads = new Array[Thread](numThreads)
+      for (i <- threads.indices) {
+        threads(i) = new Thread(new Runnable {
+          override def run(): Unit = {
+            // table/ftree is a per term data structure
+            // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
+            // so, use below simple cache to avoid calculating table each time
+            val lastSampler: DiscreteSampler[Double] = sampl match {
+              case "alias" => new AliasTable[Double](numTopics)
+              case "ftree" | "hybrid" => new FTree(numTopics, isSparse=true)
+            }
+            var lastVid: VertexId = -1L
+            val globalSampler: DiscreteSampler[Double] = sampl match {
+              case "ftree" => new FTree[Double](numTopics, isSparse=false)
+              case "alias" | "hybrid" => new AliasTable(numTopics)
+            }
+            val tdt = tDense(itemRatio, beta, numTopics)
+            globalSampler.resetDist(tdt._2, tdt._1)
+            val docCdf = new Array[Double](numTopics)
+            resIters(i) = iters(i).map(triplet => {
+              val termId = triplet.srcId
+              val termTopicCounter = triplet.srcAttr
+              val docTopicCounter = triplet.dstAttr
+              if (lastVid != termId) {
+                lastVid = termId
+                val wst = wSparse(itemRatio, totalTopicCounter, termTopicCounter)
+                lastSampler.resetDist(wst._2, wst._1)
+              }
+              val topics = triplet.attr
+              for (i <- topics.indices) {
+                val currentTopic = topics(i)
+                docTopicCounter(currentTopic) -= 1
+                termTopicCounter(currentTopic) -= 1
+                totalTopicCounter(currentTopic) -= 1
+                dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, docCdf, beta, betaSum)
+                globalSampler.update(currentTopic, itemRatio(currentTopic) * beta)
+                lastSampler.update(currentTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
 
-          topics(i) = newTopic
-          docTopicCounter(newTopic) += 1
-          termTopicCounter(newTopic) += 1
-          totalTopicCounter(newTopic) += 1
-          globalSampler.update(newTopic, itemRatio(currentTopic) * beta)
-          lastSampler.deltaUpdate(newTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
-        }
-        topics
-      })
-    }, TripletFields.All)
-    GraphImpl(sampledCorpus.vertices.mapValues(_ => null), sampledCorpus.edges)
+                val newTopic = tokenSampling(gen, globalSampler, lastSampler, docCdf, termTopicCounter,
+                  docTopicCounter, currentTopic)
+
+                topics(i) = newTopic
+                docTopicCounter(newTopic) += 1
+                termTopicCounter(newTopic) += 1
+                totalTopicCounter(newTopic) += 1
+                globalSampler.update(newTopic, itemRatio(currentTopic) * beta)
+                lastSampler.deltaUpdate(newTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
+              }
+              topics
+            })
+            doneSignal.countDown()
+          }
+        })
+      }
+      threads.foreach(_.start())
+      doneSignal.await()
+
+      val epIter = resIters.map(_.iterator).reduce(_ ++ _)
+      ep.map(epIter)
+    })
+    GraphImpl(vertices.mapValues(_ => null), newEdges)
   }
 
   private[ml] def tokenSampling(gen: Random,
