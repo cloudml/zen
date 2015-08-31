@@ -19,7 +19,7 @@ package com.github.cloudml.zen.ml.util
 
 import java.util.Random
 import scala.reflect.ClassTag
-import com.github.cloudml.zen.ml.util.FTree._
+import FTree._
 import breeze.linalg.{Vector=>BV, SparseVector=>BSV, DenseVector=>BDV}
 
 

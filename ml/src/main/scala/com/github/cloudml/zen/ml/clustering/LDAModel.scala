@@ -22,7 +22,7 @@ import java.lang.ref.SoftReference
 import java.util.Random
 
 import LDADefines._
-import com.github.cloudml.zen.ml.util.{XORShiftRandom, AliasTable, LoaderUtils}
+import com.github.cloudml.zen.ml.util._
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, norm => brzNorm, sum => brzSum}
 import com.google.common.base.Charsets
 import com.google.common.io.Files
@@ -86,7 +86,7 @@ class LocalLDAModel(@transient val termTopicCounters: Array[BSV[Count]],
     val tokens = vector2Array(doc)
     val topics = new Array[Int](tokens.length)
     var docTopicCounter = uniformDistSampler(gen, tokens, topics, numTopics)
-    val docCdf = new Array[Double](tokens.length)
+    val docCdf = new CumulativeDist[Double](numTopics)
     for (i <- 1 to totalIter) {
       docTopicCounter = sampleDoc(gen, docTopicCounter, tokens, topics, docCdf)
       if (i > burnIn) topicDist :+= docTopicCounter
@@ -112,12 +112,13 @@ class LocalLDAModel(@transient val termTopicCounters: Array[BSV[Count]],
     docTopicCounter: BSV[Count],
     tokens: Array[Int],
     topics: Array[Int],
-    docCdf: Array[Double]): BSV[Count] = {
+    docCdf: DiscreteSampler[Double]): BSV[Count] = {
     for (i <- topics.indices) {
       val termId = tokens(i)
       val termTopicCounter = termTopicCounters(termId)
       val currentTopic = topics(i)
-      algo.dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, docCdf, beta, betaSum)
+      val dst = algo.dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, beta, betaSum)
+      docCdf.resetDist(dst, 0D)
       val wSparseTable = wordTable(wordTableCache, totalTopicCounter, termTopicCounter, termId)
       val newTopic = algo.tokenSampling(gen, tDenseTable, wSparseTable, docCdf, termTopicCounter,
         docTopicCounter, currentTopic)
