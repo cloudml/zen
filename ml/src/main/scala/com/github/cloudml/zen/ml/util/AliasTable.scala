@@ -19,7 +19,7 @@ package com.github.cloudml.zen.ml.util
 
 import java.util.Random
 import scala.reflect.ClassTag
-import breeze.linalg.{Vector=>BV}
+import breeze.linalg.{Vector => BV, sum}
 
 
 private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: Int)
@@ -80,11 +80,16 @@ private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag
 
   def deltaUpdate(state: Int, delta: T): Unit = {}
 
-  def resetDist(dist: BV[T], sum: T): this.type = synchronized {
+  def resetDist(dist: BV[T], sum: T, space: Array[Int] = null): this.type = synchronized {
     val used = dist.activeSize
     reset(used)
-    val (loList, hiList) = dist.activeIterator
-      .map(t => (t._1, num.times(t._2, num.fromInt(used)))).toList
+    val src = if (space == null) {
+      dist.activeIterator
+    } else {
+      assert(space.length == dist.length)
+      space.iterator.zip(dist.activeValuesIterator)
+    }
+    val (loList, hiList) = src.map(t => (t._1, num.times(t._2, num.fromInt(used)))).toList
       .partition(t => num.lt(t._2, sum))
     var ls = 0
     var le = 0
@@ -118,6 +123,10 @@ private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag
     putRest(putAlias(hiList, putAlias(loList, List())))
     // assert(abs(le - ls) <= 1 && abs(end - le) <= 1 && abs(end - ls) <= 1)
     setNorm(sum)
+  }
+
+  def resetDist(dist: BV[T], space: Array[Int] = null): this.type = {
+    resetDist(dist, sum(dist), space)
   }
 
   private def reset(newSize: Int): this.type = {

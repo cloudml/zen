@@ -18,6 +18,7 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
+import java.util.concurrent.CountDownLatch
 
 import LDA._
 import LDADefines._
@@ -25,6 +26,7 @@ import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum}
 import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
 import org.apache.spark.graphx._
+import org.apache.spark.graphx.impl.GraphImpl
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
 import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
 import org.apache.spark.rdd.RDD
@@ -414,14 +416,48 @@ object LDA {
 
   private def updateCounter(corpus: Graph[VD, ED],
     numTopics: Int): Graph[VD, ED] = {
-    val newCounter = corpus.edges.mapPartitions(_.flatMap(edge => {
-      val topics = edge.attr
-      Iterator((edge.srcId, topics), (edge.dstId, topics))
-    })).aggregateByKey(BSV.zeros[Count](numTopics), corpus.vertices.partitioner.get)((agg, cur) => {
+    val conf = corpus.edges.context.getConf
+    val numThreads = conf.getInt(cs_numThreads, 1)
+    val graph = corpus.asInstanceOf[GraphImpl[VD, ED]]
+    val newCounter = graph.edges.partitionsRDD.mapPartitions(_.flatMap(t => {
+      val triplets = t._2.tripletIterator(includeSrc=false, includeDst=false).toArray
+      val totalSize = triplets.length
+      val pairs = new Array[(VertexId, Array[Int])](totalSize << 1)
+
+      val sizePerThrd = {
+        val npt = totalSize / numThreads
+        if (npt * numThreads == totalSize) npt else npt + 1
+      }
+      val doneSignal = new CountDownLatch(numThreads)
+      val threads = new Array[Thread](numThreads)
+      for (threadId <- threads.indices) {
+        threads(threadId) = new Thread(new Runnable {
+          val startPos = sizePerThrd * threadId
+          val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
+
+          override def run(): Unit = {
+            try {
+              for (i <- startPos until endPos) {
+                val edge = triplets(i)
+                val topics = edge.attr
+                pairs(i) = (edge.srcId, topics)
+                pairs(i + totalSize) = (edge.dstId, topics)
+              }
+            } finally {
+              doneSignal.countDown()
+            }
+          }
+        }, s"updateCounter thread $threadId")
+      }
+      threads.foreach(_.start())
+      doneSignal.await()
+
+      pairs
+    })).aggregateByKey(BSV.zeros[Count](numTopics), graph.vertices.partitioner.get)((agg, cur) => {
       cur.foreach(agg(_) += 1)
       agg
     }, _ :+= _)
-    corpus.joinVertices(newCounter)((_, _, counter) => counter)
+    graph.joinVertices(newCounter)((_, _, counter) => counter)
   }
 
   private def updateDocTopicCounter(corpus: Graph[VD, ED],

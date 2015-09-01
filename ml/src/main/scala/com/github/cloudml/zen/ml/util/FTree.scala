@@ -177,18 +177,28 @@ private[zen] class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](
     updateAncestors(pos, num.negate(p))
   }
 
-  def resetDist(dist: BV[T], sum: T): this.type = synchronized {
+  def resetDist(dist: BV[T], sum: T, space: Array[Int] = null): this.type = {
+    resetDist(dist, space)
+  }
+
+  def resetDist(dist: BV[T], space: Array[Int] = null): this.type = synchronized {
     val used = dist.activeSize
     reset(used)
     dist match {
-      case v: BDV[T] =>
+      case v: BDV[T] if space == null =>
         assert(!isSparse)
         for ((i, prob) <- v.activeIterator) {
           setLeaf(i, prob)
         }
-      case v: BSV[T] =>
+      case v: BV[T] =>
         assert(isSparse)
-        for (((state, prob), i) <- v.activeIterator.zipWithIndex) {
+        val src = if (space == null) {
+          v.activeIterator
+        } else {
+          assert(space.length == v.length)
+          space.iterator.zip(v.activeValuesIterator)
+        }
+        for (((state, prob), i) <- src.zipWithIndex) {
           setLeaf(i, prob)
           _space(i) = state
         }
@@ -227,7 +237,7 @@ private[zen] object FTree {
       case v: BDV[T] => new FTree[T](used, isSparse=false)
       case v: BSV[T] => new FTree[T](used, isSparse=true)
     }
-    ftree.resetDist(sv, sv(0))
+    ftree.resetDist(sv)
   }
 
   private def regularLen(len: Int): Int = {
