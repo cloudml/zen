@@ -80,16 +80,10 @@ private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag
 
   def deltaUpdate(state: Int, delta: T): Unit = {}
 
-  def resetDist(dist: BV[T], sum: T, space: Array[Int] = null): this.type = synchronized {
+  def resetDist(dist: BV[T], sum: T): this.type = synchronized {
     val used = dist.activeSize
     reset(used)
-    val src = if (space == null) {
-      dist.activeIterator
-    } else {
-      assert(space.length == dist.length)
-      space.iterator.zip(dist.activeValuesIterator)
-    }
-    val (loList, hiList) = src.map(t => (t._1, num.times(t._2, num.fromInt(used)))).toList
+    val (loList, hiList) = dist.activeIterator.map(t => (t._1, num.times(t._2, num.fromInt(used)))).toList
       .partition(t => num.lt(t._2, sum))
     var ls = 0
     var le = 0
@@ -125,9 +119,7 @@ private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag
     setNorm(sum)
   }
 
-  def resetDist(dist: BV[T], space: Array[Int] = null): this.type = {
-    resetDist(dist, sum(dist), space)
-  }
+  def resetDist(dist: BV[T]): this.type = resetDist(dist, dist.activeValuesIterator.sum)
 
   private def reset(newSize: Int): this.type = {
     if (_l.length < newSize) {
@@ -148,7 +140,7 @@ private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag
 
 private[zen] object AliasTable {
   def generateAlias[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](sv: BV[T]): AliasTable[T] = {
-    generateAlias(sv, sv.valuesIterator.sum)
+    generateAlias(sv, sv.activeValuesIterator.sum)
   }
 
   def generateAlias[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](sv: BV[T], sum: T): AliasTable[T] = {

@@ -68,21 +68,13 @@ private[zen] class CumulativeDist[@specialized(Double, Int, Float, Long) T: Clas
 
   def deltaUpdate(state: Int, delta: T): Unit = {}
 
-  def resetDist(dist: BV[T], sum: T, space: Array[Int] = null): this.type = {
-    resetDist(dist, space)
-  }
+  def resetDist(dist: BV[T], sum: T): this.type = resetDist(dist)
 
-  def resetDist(dist: BV[T], space: Array[Int] = null): this.type = synchronized {
+  def resetDist(dist: BV[T]): this.type = synchronized {
     val used = dist.activeSize
     reset(used)
-    val src = if (space == null) {
-      dist.activeIterator
-    } else {
-      assert(space.length == dist.length)
-      space.iterator.zip(dist.activeValuesIterator)
-    }
     var sum = num.zero
-    for (((state, prob), i) <- src.zipWithIndex) {
+    for (((state, prob), i) <- dist.activeIterator.zipWithIndex) {
       sum = num.plus(sum, prob)
       _cdf(i) = sum
       _space(i) = state

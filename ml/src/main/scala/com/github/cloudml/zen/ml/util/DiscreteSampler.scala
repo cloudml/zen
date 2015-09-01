@@ -28,6 +28,6 @@ trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
   def sampleFrom(base: T, gen: Random): Int
   def update(state: Int, value: T): Unit
   def deltaUpdate(state: Int, delta: T): Unit
-  def resetDist(dist: BV[T], sum: T, space: Array[Int] = null): DiscreteSampler[T]
-  def resetDist(dist: BV[T], space: Array[Int] = null): DiscreteSampler[T]
+  def resetDist(dist: BV[T], sum: T): DiscreteSampler[T]
+  def resetDist(dist: BV[T]): DiscreteSampler[T]
 }
