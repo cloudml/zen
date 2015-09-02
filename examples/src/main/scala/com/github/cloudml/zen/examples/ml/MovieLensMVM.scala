@@ -19,7 +19,7 @@ package com.github.cloudml.zen.examples.ml
 import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.recommendation.MVM
 import org.apache.log4j.{Level, Logger}
-import org.apache.spark.graphx.GraphXUtils
+import org.apache.spark.graphx2.GraphXUtils
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.storage.StorageLevel

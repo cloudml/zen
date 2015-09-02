@@ -53,14 +53,14 @@ import org.apache.spark.util.collection.BitSet
  */
 class EdgePartition[
     @specialized(Char, Int, Boolean, Byte, Long, Float, Double) ED: ClassTag, VD: ClassTag](
-    localSrcIds: Array[Int],
-    localDstIds: Array[Int],
-    data: Array[ED],
-    index: GraphXPrimitiveKeyOpenHashMap[VertexId, Int],
-    global2local: GraphXPrimitiveKeyOpenHashMap[VertexId, Int],
-    local2global: Array[VertexId],
-    vertexAttrs: Array[VD],
-    activeSet: Option[VertexSet])
+    val localSrcIds: Array[Int],
+    val localDstIds: Array[Int],
+    val data: Array[ED],
+    val index: GraphXPrimitiveKeyOpenHashMap[VertexId, Int],
+    val global2local: GraphXPrimitiveKeyOpenHashMap[VertexId, Int],
+    val local2global: Array[VertexId],
+    val vertexAttrs: Array[VD],
+    val activeSet: Option[VertexSet])
   extends Serializable {
 
   /** No-arg constructor for serialization. */
@@ -102,11 +102,11 @@ class EdgePartition[
       activeSet)
   }
 
-  @inline private def srcIds(pos: Int): VertexId = local2global(localSrcIds(pos))
+  @inline def srcIds(pos: Int): VertexId = local2global(localSrcIds(pos))
 
-  @inline private def dstIds(pos: Int): VertexId = local2global(localDstIds(pos))
+  @inline def dstIds(pos: Int): VertexId = local2global(localDstIds(pos))
 
-  @inline private def attrs(pos: Int): ED = data(pos)
+  @inline def attrs(pos: Int): ED = data(pos)
 
   /** Look up vid in activeSet, throwing an exception if it is None. */
   def isActive(vid: VertexId): Boolean = {

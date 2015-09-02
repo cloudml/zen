@@ -21,8 +21,8 @@ import com.github.cloudml.zen.ml.partitioner.DBHPartitioner
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.Utils
 import org.apache.spark.annotation.Experimental
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.impl.{EdgeRDDImpl, GraphImpl}
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.impl.{EdgeRDDImpl, GraphImpl}
 import org.apache.spark.mllib.classification.LogisticRegressionModel
 import org.apache.spark.mllib.linalg.{DenseVector => SDV}
 import org.apache.spark.mllib.regression.LabeledPoint
