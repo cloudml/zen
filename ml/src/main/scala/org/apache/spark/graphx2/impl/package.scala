@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx
+package org.apache.spark.graphx2
 
 import org.apache.spark.util.collection.OpenHashSet
 
 package object impl {
-  private[graphx] type VertexIdToIndexMap = OpenHashSet[VertexId]
+  type VertexIdToIndexMap = OpenHashSet[VertexId]
 }

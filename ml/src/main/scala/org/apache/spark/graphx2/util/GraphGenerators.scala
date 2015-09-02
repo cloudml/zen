@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx.util
+package org.apache.spark.graphx2.util
 
 import scala.annotation.tailrec
 import scala.math._
@@ -27,10 +27,10 @@ import org.apache.spark.serializer._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.Graph
-import org.apache.spark.graphx.Edge
-import org.apache.spark.graphx.impl.GraphImpl
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.Graph
+import org.apache.spark.graphx2.Edge
+import org.apache.spark.graphx2.impl.GraphImpl
 
 /** A collection of graph generating functions. */
 object GraphGenerators {

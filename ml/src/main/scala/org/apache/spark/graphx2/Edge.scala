@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx
+package org.apache.spark.graphx2
 
 import org.apache.spark.util.collection.SortDataFormat
 
@@ -57,7 +57,7 @@ case class Edge[@specialized(Char, Int, Boolean, Byte, Long, Float, Double) ED] 
 }
 
 object Edge {
-  private[graphx] def lexicographicOrdering[ED] = new Ordering[Edge[ED]] {
+  def lexicographicOrdering[ED] = new Ordering[Edge[ED]] {
     override def compare(a: Edge[ED], b: Edge[ED]): Int = {
       if (a.srcId == b.srcId) {
         if (a.dstId == b.dstId) 0
@@ -68,7 +68,7 @@ object Edge {
     }
   }
 
-  private[graphx] def edgeArraySortDataFormat[ED] = new SortDataFormat[Edge[ED], Array[Edge[ED]]] {
+  def edgeArraySortDataFormat[ED] = new SortDataFormat[Edge[ED], Array[Edge[ED]]] {
     override def getKey(data: Array[Edge[ED]], pos: Int): Edge[ED] = {
       data(pos)
     }

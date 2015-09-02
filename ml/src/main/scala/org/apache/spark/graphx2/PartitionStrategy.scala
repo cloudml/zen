@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx
+package org.apache.spark.graphx2
 
 /**
  * Represents the way edges are assigned to edge partitions based on their source and destination

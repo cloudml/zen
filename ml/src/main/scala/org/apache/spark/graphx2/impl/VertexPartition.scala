@@ -15,16 +15,16 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx.impl
+package org.apache.spark.graphx2.impl
 
 import scala.reflect.ClassTag
 
 import org.apache.spark.util.collection.BitSet
 
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.util.collection.GraphXPrimitiveKeyOpenHashMap
 
-private[graphx] object VertexPartition {
+object VertexPartition {
   /** Construct a `VertexPartition` from the given vertices. */
   def apply[VD: ClassTag](iter: Iterator[(VertexId, VD)])
     : VertexPartition[VD] = {
@@ -54,13 +54,13 @@ private[graphx] object VertexPartition {
 }
 
 /** A map from vertex id to vertex attribute. */
-private[graphx] class VertexPartition[VD: ClassTag](
+class VertexPartition[VD: ClassTag](
     val index: VertexIdToIndexMap,
     val values: Array[VD],
     val mask: BitSet)
   extends VertexPartitionBase[VD]
 
-private[graphx] class VertexPartitionOps[VD: ClassTag](self: VertexPartition[VD])
+class VertexPartitionOps[VD: ClassTag](self: VertexPartition[VD])
   extends VertexPartitionBaseOps[VD, VertexPartition](self) {
 
   def withIndex(index: VertexIdToIndexMap): VertexPartition[VD] = {

@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx
+package org.apache.spark.graphx2
 
 import scala.reflect.ClassTag
 import scala.util.Random
@@ -226,9 +226,9 @@ class GraphOps[VD: ClassTag, ED: ClassTag](graph: Graph[VD, ED]) extends Seriali
    *
    * @param preprocess a function to compute new vertex and edge data before filtering
    * @param epred edge pred to filter on after preprocess, see more details under
-   *  [[org.apache.spark.graphx.Graph#subgraph]]
+   *  [[org.apache.spark.graphx2.Graph#subgraph]]
    * @param vpred vertex pred to filter on after prerocess, see more details under
-   *  [[org.apache.spark.graphx.Graph#subgraph]]
+   *  [[org.apache.spark.graphx2.Graph#subgraph]]
    * @tparam VD2 vertex type the vpred operates on
    * @tparam ED2 edge type the epred operates on
    * @return a subgraph of the orginal graph, with its data unchanged

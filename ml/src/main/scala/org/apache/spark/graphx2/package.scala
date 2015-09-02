@@ -23,7 +23,7 @@ import org.apache.spark.util.collection.OpenHashSet
  * <span class="badge" style="float: right;">ALPHA COMPONENT</span>
  * GraphX is a graph processing framework built on top of Spark.
  */
-package object graphx {
+package object graphx2 {
   /**
    * A 64-bit vertex identifier that uniquely identifies a vertex within a graph. It does not need
    * to follow any ordering or any constraints other than uniqueness.
@@ -34,5 +34,5 @@ package object graphx {
   // TODO: Consider using Char.
   type PartitionID = Int
 
-  private[graphx] type VertexSet = OpenHashSet[VertexId]
+  type VertexSet = OpenHashSet[VertexId]
 }

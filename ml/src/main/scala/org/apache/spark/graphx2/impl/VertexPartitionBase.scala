@@ -15,17 +15,17 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx.impl
+package org.apache.spark.graphx2.impl
 
 import scala.language.higherKinds
 import scala.reflect.ClassTag
 
 import org.apache.spark.util.collection.BitSet
 
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.util.collection.GraphXPrimitiveKeyOpenHashMap
 
-private[graphx] object VertexPartitionBase {
+object VertexPartitionBase {
   /**
    * Construct the constituents of a VertexPartitionBase from the given vertices, merging duplicate
    * entries arbitrarily.
@@ -60,7 +60,7 @@ private[graphx] object VertexPartitionBase {
  * `VertexPartitionBaseOpsConstructor` typeclass (for example,
  * [[VertexPartition.VertexPartitionOpsConstructor]]).
  */
-private[graphx] abstract class VertexPartitionBase[@specialized(Long, Int, Double) VD: ClassTag]
+abstract class VertexPartitionBase[@specialized(Long, Int, Double) VD: ClassTag]
   extends Serializable {
 
   def index: VertexIdToIndexMap
@@ -87,6 +87,6 @@ private[graphx] abstract class VertexPartitionBase[@specialized(Long, Int, Doubl
  * A typeclass for subclasses of `VertexPartitionBase` representing the ability to wrap them in a
  * `VertexPartitionBaseOps`.
  */
-private[graphx] trait VertexPartitionBaseOpsConstructor[T[X] <: VertexPartitionBase[X]] {
+trait VertexPartitionBaseOpsConstructor[T[X] <: VertexPartitionBase[X]] {
   def toOps[VD: ClassTag](partition: T[VD]): VertexPartitionBaseOps[VD, T]
 }

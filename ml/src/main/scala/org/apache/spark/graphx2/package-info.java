@@ -19,4 +19,4 @@
  * ALPHA COMPONENT
  * GraphX is a graph processing framework built on top of Spark.
  */
-package org.apache.spark.graphx;
+package org.apache.spark.graphx2;

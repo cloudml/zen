@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx
+package org.apache.spark.graphx2
 
 /**
  * Represents an edge along with its neighboring vertices and allows sending messages along the

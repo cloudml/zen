@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx
+package org.apache.spark.graphx2
 
 import scala.reflect.ClassTag
 
@@ -24,16 +24,16 @@ import org.apache.spark.SparkContext._
 import org.apache.spark.rdd._
 import org.apache.spark.storage.StorageLevel
 
-import org.apache.spark.graphx.impl.RoutingTablePartition
-import org.apache.spark.graphx.impl.ShippableVertexPartition
-import org.apache.spark.graphx.impl.VertexAttributeBlock
-import org.apache.spark.graphx.impl.VertexRDDImpl
+import org.apache.spark.graphx2.impl.RoutingTablePartition
+import org.apache.spark.graphx2.impl.ShippableVertexPartition
+import org.apache.spark.graphx2.impl.VertexAttributeBlock
+import org.apache.spark.graphx2.impl.VertexRDDImpl
 
 /**
  * Extends `RDD[(VertexId, VD)]` by ensuring that there is only one entry for each vertex and by
  * pre-indexing the entries for fast, efficient joins. Two VertexRDDs with the same index can be
  * joined efficiently. All operations except [[reindex]] preserve the index. To construct a
- * `VertexRDD`, use the [[org.apache.spark.graphx.VertexRDD$ VertexRDD object]].
+ * `VertexRDD`, use the [[org.apache.spark.graphx2.VertexRDD$ VertexRDD object]].
  *
  * Additionally, stores routing information to enable joining the vertex attributes with an
  * [[EdgeRDD]].
@@ -60,7 +60,7 @@ abstract class VertexRDD[VD](
 
   implicit protected def vdTag: ClassTag[VD]
 
-  private[graphx] def partitionsRDD: RDD[ShippableVertexPartition[VD]]
+  def partitionsRDD: RDD[ShippableVertexPartition[VD]]
 
   override protected def getPartitions: Array[Partition] = partitionsRDD.partitions
 
@@ -81,7 +81,7 @@ abstract class VertexRDD[VD](
   /**
    * Applies a function to each `VertexPartition` of this RDD and returns a new VertexRDD.
    */
-  private[graphx] def mapVertexPartitions[VD2: ClassTag](
+  def mapVertexPartitions[VD2: ClassTag](
       f: ShippableVertexPartition[VD] => ShippableVertexPartition[VD2])
     : VertexRDD[VD2]
 
@@ -238,7 +238,7 @@ abstract class VertexRDD[VD](
   def withEdges(edges: EdgeRDD[_]): VertexRDD[VD]
 
   /** Replaces the vertex partitions while preserving all other properties of the VertexRDD. */
-  private[graphx] def withPartitionsRDD[VD2: ClassTag](
+  def withPartitionsRDD[VD2: ClassTag](
       partitionsRDD: RDD[ShippableVertexPartition[VD2]]): VertexRDD[VD2]
 
   /**
@@ -246,17 +246,17 @@ abstract class VertexRDD[VD](
    * VertexRDD. Operations on the returned VertexRDD will preserve this storage level.
    *
    * This does not actually trigger a cache; to do this, call
-   * [[org.apache.spark.graphx.VertexRDD#cache]] on the returned VertexRDD.
+   * [[org.apache.spark.graphx2.VertexRDD#cache]] on the returned VertexRDD.
    */
-  private[graphx] def withTargetStorageLevel(
+  def withTargetStorageLevel(
       targetStorageLevel: StorageLevel): VertexRDD[VD]
 
   /** Generates an RDD of vertex attributes suitable for shipping to the edge partitions. */
-  private[graphx] def shipVertexAttributes(
+  def shipVertexAttributes(
       shipSrc: Boolean, shipDst: Boolean): RDD[(PartitionID, VertexAttributeBlock[VD])]
 
   /** Generates an RDD of vertex IDs suitable for shipping to the edge partitions. */
-  private[graphx] def shipVertexIds(): RDD[(PartitionID, Array[VertexId])]
+  def shipVertexIds(): RDD[(PartitionID, Array[VertexId])]
 
 } // end of VertexRDD
 
@@ -352,7 +352,7 @@ object VertexRDD {
     new VertexRDDImpl(vertexPartitions)
   }
 
-  private[graphx] def createRoutingTables(
+  def createRoutingTables(
       edges: EdgeRDD[_], vertexPartitioner: Partitioner): RDD[RoutingTablePartition] = {
     // Determine which vertices each edge partition needs by creating a mapping from vid to pid.
     val vid2pid = edges.partitionsRDD.mapPartitions(_.flatMap(

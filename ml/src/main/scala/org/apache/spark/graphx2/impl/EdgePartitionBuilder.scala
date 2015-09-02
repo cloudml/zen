@@ -15,16 +15,15 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx.impl
+package org.apache.spark.graphx2.impl
 
 import scala.reflect.ClassTag
 
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.util.collection.GraphXPrimitiveKeyOpenHashMap
 import org.apache.spark.util.collection.{SortDataFormat, Sorter, PrimitiveVector}
 
 /** Constructs an EdgePartition from scratch. */
-private[graphx]
 class EdgePartitionBuilder[@specialized(Long, Int, Double) ED: ClassTag, VD: ClassTag](
     size: Int = 64) {
   private[this] val edges = new PrimitiveVector[Edge[ED]](size)
@@ -141,7 +140,7 @@ private[impl] object EdgeWithLocalIds {
       }
     }
 
-  private[graphx] def edgeArraySortDataFormat[ED] = {
+  def edgeArraySortDataFormat[ED] = {
     new SortDataFormat[EdgeWithLocalIds[ED], Array[EdgeWithLocalIds[ED]]] {
       override def getKey(data: Array[EdgeWithLocalIds[ED]], pos: Int): EdgeWithLocalIds[ED] = {
         data(pos)

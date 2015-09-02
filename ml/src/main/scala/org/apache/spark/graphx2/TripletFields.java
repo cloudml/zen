@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx;
+package org.apache.spark.graphx2;
 
 import java.io.Serializable;
 

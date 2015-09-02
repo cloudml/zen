@@ -16,6 +16,6 @@
  */
 
 /**
- * Collections of utilities used by graphx.
+ * Collections of utilities used by graphx2.
  */
-package org.apache.spark.graphx.util;
+package org.apache.spark.graphx2.util;

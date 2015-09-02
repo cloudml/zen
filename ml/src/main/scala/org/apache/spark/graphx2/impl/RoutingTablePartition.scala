@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx.impl
+package org.apache.spark.graphx2.impl
 
 import scala.reflect.ClassTag
 
@@ -24,12 +24,11 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.rdd.ShuffledRDD
 import org.apache.spark.util.collection.{BitSet, PrimitiveVector}
 
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.util.collection.GraphXPrimitiveKeyOpenHashMap
 
-import org.apache.spark.graphx.impl.RoutingTablePartition.RoutingTableMessage
+import org.apache.spark.graphx2.impl.RoutingTablePartition.RoutingTableMessage
 
-private[graphx]
 object RoutingTablePartition {
   /**
    * A message from an edge partition to a vertex specifying the position in which the edge
@@ -106,7 +105,6 @@ object RoutingTablePartition {
  * vertex partition. This provides routing information for shipping vertex attributes to edge
  * partitions.
  */
-private[graphx]
 class RoutingTablePartition(
     private val routingTable: Array[(Array[VertexId], BitSet, BitSet)]) extends Serializable {
   /** The maximum number of edge partitions this `RoutingTablePartition` is built to join with. */

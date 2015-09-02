@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx
+package org.apache.spark.graphx2
 
 import scala.language.existentials
 import scala.reflect.ClassTag
@@ -27,9 +27,9 @@ import org.apache.spark.TaskContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 
-import org.apache.spark.graphx.impl.EdgePartition
-import org.apache.spark.graphx.impl.EdgePartitionBuilder
-import org.apache.spark.graphx.impl.EdgeRDDImpl
+import org.apache.spark.graphx2.impl.EdgePartition
+import org.apache.spark.graphx2.impl.EdgePartitionBuilder
+import org.apache.spark.graphx2.impl.EdgeRDDImpl
 
 /**
  * `EdgeRDD[ED, VD]` extends `RDD[Edge[ED]]` by storing the edges in columnar format on each
@@ -42,7 +42,7 @@ abstract class EdgeRDD[ED](
     @transient deps: Seq[Dependency[_]]) extends RDD[Edge[ED]](sc, deps) {
 
   // scalastyle:off structural.type
-  private[graphx] def partitionsRDD: RDD[(PartitionID, EdgePartition[ED, VD])] forSome { type VD }
+  def partitionsRDD: RDD[(PartitionID, EdgePartition[ED, VD])] forSome { type VD }
   // scalastyle:on structural.type
 
   override protected def getPartitions: Array[Partition] = partitionsRDD.partitions
@@ -90,9 +90,9 @@ abstract class EdgeRDD[ED](
    * EdgeRDD. Operations on the returned EdgeRDD will preserve this storage level.
    *
    * This does not actually trigger a cache; to do this, call
-   * [[org.apache.spark.graphx.EdgeRDD#cache]] on the returned EdgeRDD.
+   * [[org.apache.spark.graphx2.EdgeRDD#cache]] on the returned EdgeRDD.
    */
-  private[graphx] def withTargetStorageLevel(targetStorageLevel: StorageLevel): EdgeRDD[ED]
+  def withTargetStorageLevel(targetStorageLevel: StorageLevel): EdgeRDD[ED]
 }
 
 object EdgeRDD {
@@ -119,7 +119,7 @@ object EdgeRDD {
    * @tparam ED the edge attribute type
    * @tparam VD the type of the vertex attributes that may be joined with the returned EdgeRDD
    */
-  private[graphx] def fromEdgePartitions[ED: ClassTag, VD: ClassTag](
+  def fromEdgePartitions[ED: ClassTag, VD: ClassTag](
       edgePartitions: RDD[(Int, EdgePartition[ED, VD])]): EdgeRDDImpl[ED, VD] = {
     new EdgeRDDImpl(edgePartitions)
   }

@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx
+package org.apache.spark.graphx2
 
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{Logging, SparkContext}
-import org.apache.spark.graphx.impl.{EdgePartitionBuilder, GraphImpl}
+import org.apache.spark.graphx2.impl.{EdgePartitionBuilder, GraphImpl}
 
 /**
  * Provides utilities for loading [[Graph]]s from files.

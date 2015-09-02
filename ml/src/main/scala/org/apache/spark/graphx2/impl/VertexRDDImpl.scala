@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx.impl
+package org.apache.spark.graphx2.impl
 
 import scala.reflect.ClassTag
 
@@ -24,9 +24,9 @@ import org.apache.spark.SparkContext._
 import org.apache.spark.rdd._
 import org.apache.spark.storage.StorageLevel
 
-import org.apache.spark.graphx._
+import org.apache.spark.graphx2._
 
-class VertexRDDImpl[VD] private[graphx] (
+class VertexRDDImpl[VD] (
     @transient val partitionsRDD: RDD[ShippableVertexPartition[VD]],
     val targetStorageLevel: StorageLevel = StorageLevel.MEMORY_ONLY)
   (implicit override protected val vdTag: ClassTag[VD])
@@ -90,7 +90,7 @@ class VertexRDDImpl[VD] private[graphx] (
     partitionsRDD.map(_.size).reduce(_ + _)
   }
 
-  override private[graphx] def mapVertexPartitions[VD2: ClassTag](
+  override def mapVertexPartitions[VD2: ClassTag](
       f: ShippableVertexPartition[VD] => ShippableVertexPartition[VD2])
     : VertexRDD[VD2] = {
     val newPartitionsRDD = partitionsRDD.mapPartitions(_.map(f), preservesPartitioning = true)
@@ -232,22 +232,22 @@ class VertexRDDImpl[VD] private[graphx] (
     this.withPartitionsRDD(vertexPartitions)
   }
 
-  override private[graphx] def withPartitionsRDD[VD2: ClassTag](
+  override def withPartitionsRDD[VD2: ClassTag](
       partitionsRDD: RDD[ShippableVertexPartition[VD2]]): VertexRDD[VD2] = {
     new VertexRDDImpl(partitionsRDD, this.targetStorageLevel)
   }
 
-  override private[graphx] def withTargetStorageLevel(
+  override def withTargetStorageLevel(
       targetStorageLevel: StorageLevel): VertexRDD[VD] = {
     new VertexRDDImpl(this.partitionsRDD, targetStorageLevel)
   }
 
-  override private[graphx] def shipVertexAttributes(
+  override def shipVertexAttributes(
       shipSrc: Boolean, shipDst: Boolean): RDD[(PartitionID, VertexAttributeBlock[VD])] = {
     partitionsRDD.mapPartitions(_.flatMap(_.shipVertexAttributes(shipSrc, shipDst)))
   }
 
-  override private[graphx] def shipVertexIds(): RDD[(PartitionID, Array[VertexId])] = {
+  override def shipVertexIds(): RDD[(PartitionID, Array[VertexId])] = {
     partitionsRDD.mapPartitions(_.flatMap(_.shipVertexIds()))
   }
 

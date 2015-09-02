@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx.util.collection
+package org.apache.spark.graphx2.util.collection
 
 import org.apache.spark.util.collection.OpenHashSet
 
@@ -28,7 +28,6 @@ import scala.reflect._
  *
  * Under the hood, it uses our OpenHashSet implementation.
  */
-private[graphx]
 class GraphXPrimitiveKeyOpenHashMap[@specialized(Long, Int) K: ClassTag,
                               @specialized(Long, Int, Double) V: ClassTag](
     val keySet: OpenHashSet[K], var _values: Array[V])

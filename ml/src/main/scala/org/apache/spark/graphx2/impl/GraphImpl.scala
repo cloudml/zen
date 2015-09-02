@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx.impl
+package org.apache.spark.graphx2.impl
 
 import scala.reflect.{classTag, ClassTag}
 
@@ -23,13 +23,13 @@ import org.apache.spark.HashPartitioner
 import org.apache.spark.SparkContext._
 import org.apache.spark.rdd.{RDD, ShuffledRDD}
 import org.apache.spark.storage.StorageLevel
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.impl.GraphImpl._
-import org.apache.spark.graphx.util.BytecodeUtils
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.impl.GraphImpl._
+import org.apache.spark.graphx2.util.BytecodeUtils
 
 
 /**
- * An implementation of [[org.apache.spark.graphx.Graph]] to support computation on graphs.
+ * An implementation of [[org.apache.spark.graphx2.Graph]] to support computation on graphs.
  *
  * Graphs are represented using two RDDs: `vertices`, which contains vertex attributes and the
  * routing information for shipping vertex attributes to edge partitions, and

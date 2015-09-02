@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx
+package org.apache.spark.graphx2
 
 /**
  * An edge triplet represents an edge along with the vertex attributes of its neighboring vertices.

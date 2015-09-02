@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx.impl
+package org.apache.spark.graphx2.impl
 
 import scala.reflect.{classTag, ClassTag}
 
@@ -23,9 +23,9 @@ import org.apache.spark.{OneToOneDependency, HashPartitioner}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 
-import org.apache.spark.graphx._
+import org.apache.spark.graphx2._
 
-class EdgeRDDImpl[ED: ClassTag, VD: ClassTag] private[graphx] (
+class EdgeRDDImpl[ED: ClassTag, VD: ClassTag] (
     @transient override val partitionsRDD: RDD[(PartitionID, EdgePartition[ED, VD])],
     val targetStorageLevel: StorageLevel = StorageLevel.MEMORY_ONLY)
   extends EdgeRDD[ED](partitionsRDD.context, List(new OneToOneDependency(partitionsRDD))) {
@@ -125,12 +125,12 @@ class EdgeRDDImpl[ED: ClassTag, VD: ClassTag] private[graphx] (
     }, preservesPartitioning = true))
   }
 
-  private[graphx] def withPartitionsRDD[ED2: ClassTag, VD2: ClassTag](
+  def withPartitionsRDD[ED2: ClassTag, VD2: ClassTag](
       partitionsRDD: RDD[(PartitionID, EdgePartition[ED2, VD2])]): EdgeRDDImpl[ED2, VD2] = {
     new EdgeRDDImpl(partitionsRDD, this.targetStorageLevel)
   }
 
-  override private[graphx] def withTargetStorageLevel(
+  override def withTargetStorageLevel(
       targetStorageLevel: StorageLevel): EdgeRDDImpl[ED, VD] = {
     new EdgeRDDImpl(this.partitionsRDD, targetStorageLevel)
   }

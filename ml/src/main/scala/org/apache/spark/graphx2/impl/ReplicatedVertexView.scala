@@ -15,18 +15,18 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx.impl
+package org.apache.spark.graphx2.impl
 
 import scala.reflect.{classTag, ClassTag}
 
 import org.apache.spark.SparkContext._
 import org.apache.spark.rdd.RDD
 
-import org.apache.spark.graphx._
+import org.apache.spark.graphx2._
 
 /**
  * Manages shipping vertex attributes to the edge partitions of an
- * [[org.apache.spark.graphx.EdgeRDD]]. Vertex attributes may be partially shipped to construct a
+ * [[org.apache.spark.graphx2.EdgeRDD]]. Vertex attributes may be partially shipped to construct a
  * triplet view with vertex attributes on only one side, and they may be updated. An active vertex
  * set may additionally be shipped to the edge partitions. Be careful not to store a reference to
  * `edges`, since it may be modified when the attribute shipping level is upgraded.

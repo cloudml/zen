@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx
+package org.apache.spark.graphx2
 
 import scala.language.implicitConversions
 import scala.reflect.ClassTag
 
-import org.apache.spark.graphx.impl._
+import org.apache.spark.graphx2.impl._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 
@@ -454,7 +454,7 @@ abstract class Graph[VD: ClassTag, ED: ClassTag] protected () extends Serializab
    *   will be run on edges with *both* vertices in the active set. The active set must have the
    *   same index as the graph's vertices.
    */
-  private[graphx] def aggregateMessagesWithActiveSet[A: ClassTag](
+  def aggregateMessagesWithActiveSet[A: ClassTag](
       sendMsg: EdgeContext[VD, ED, A] => Unit,
       mergeMsg: (A, A) => A,
       tripletFields: TripletFields,

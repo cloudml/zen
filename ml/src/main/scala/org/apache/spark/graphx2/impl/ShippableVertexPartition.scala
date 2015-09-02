@@ -15,24 +15,22 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx.impl
+package org.apache.spark.graphx2.impl
 
 import scala.reflect.ClassTag
 
 import org.apache.spark.util.collection.{BitSet, PrimitiveVector}
 
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.util.collection.GraphXPrimitiveKeyOpenHashMap
 
 /** Stores vertex attributes to ship to an edge partition. */
-private[graphx]
 class VertexAttributeBlock[VD: ClassTag](val vids: Array[VertexId], val attrs: Array[VD])
   extends Serializable {
   def iterator: Iterator[(VertexId, VD)] =
     (0 until vids.size).iterator.map { i => (vids(i), attrs(i)) }
 }
 
-private[graphx]
 object ShippableVertexPartition {
   /** Construct a `ShippableVertexPartition` from the given vertices without any routing table. */
   def apply[VD: ClassTag](iter: Iterator[(VertexId, VD)]): ShippableVertexPartition[VD] =
@@ -92,9 +90,8 @@ object ShippableVertexPartition {
 
 /**
  * A map from vertex id to vertex attribute that additionally stores edge partition join sites for
- * each vertex attribute, enabling joining with an [[org.apache.spark.graphx.EdgeRDD]].
+ * each vertex attribute, enabling joining with an [[org.apache.spark.graphx2.EdgeRDD]].
  */
-private[graphx]
 class ShippableVertexPartition[VD: ClassTag](
     val index: VertexIdToIndexMap,
     val values: Array[VD],
@@ -150,7 +147,7 @@ class ShippableVertexPartition[VD: ClassTag](
   }
 }
 
-private[graphx] class ShippableVertexPartitionOps[VD: ClassTag](self: ShippableVertexPartition[VD])
+class ShippableVertexPartitionOps[VD: ClassTag](self: ShippableVertexPartition[VD])
   extends VertexPartitionBaseOps[VD, ShippableVertexPartition](self) {
 
   def withIndex(index: VertexIdToIndexMap): ShippableVertexPartition[VD] = {

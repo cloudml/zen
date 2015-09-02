@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx
+package org.apache.spark.graphx2
 
 import org.apache.spark.SparkConf
 
-import org.apache.spark.graphx.impl._
-import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
+import org.apache.spark.graphx2.impl._
+import org.apache.spark.graphx2.util.collection.GraphXPrimitiveKeyOpenHashMap
 
 import org.apache.spark.util.collection.{OpenHashSet, BitSet}
 import org.apache.spark.util.BoundedPriorityQueue

@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx.impl
+package org.apache.spark.graphx2.impl
 
 import scala.reflect.{classTag, ClassTag}
 
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.util.collection.GraphXPrimitiveKeyOpenHashMap
 import org.apache.spark.util.collection.BitSet
 
 /**
@@ -51,7 +51,6 @@ import org.apache.spark.util.collection.BitSet
  * @param vertexAttrs an array of vertex attributes where the offsets are local vertex ids
  * @param activeSet an optional active vertex set for filtering computation on the edges
  */
-private[graphx]
 class EdgePartition[
     @specialized(Char, Int, Boolean, Byte, Long, Float, Double) ED: ClassTag, VD: ClassTag](
     localSrcIds: Array[Int],

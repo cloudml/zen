@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx.impl;
+package org.apache.spark.graphx2.impl;
 
 /**
  * Criteria for filtering edges based on activeness. For internal use only.

@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx.impl
+package org.apache.spark.graphx2.impl
 
 import scala.language.higherKinds
 import scala.language.implicitConversions
@@ -24,15 +24,15 @@ import scala.reflect.ClassTag
 import org.apache.spark.Logging
 import org.apache.spark.util.collection.BitSet
 
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.util.collection.GraphXPrimitiveKeyOpenHashMap
 
 /**
  * An class containing additional operations for subclasses of VertexPartitionBase that provide
  * implicit evidence of membership in the `VertexPartitionBaseOpsConstructor` typeclass (for
  * example, [[VertexPartition.VertexPartitionOpsConstructor]]).
  */
-private[graphx] abstract class VertexPartitionBaseOps
+abstract class VertexPartitionBaseOps
     [VD: ClassTag, Self[X] <: VertexPartitionBase[X] : VertexPartitionBaseOpsConstructor]
     (self: Self[VD])
   extends Serializable with Logging {

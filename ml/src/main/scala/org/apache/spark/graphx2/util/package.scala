@@ -15,9 +15,9 @@
  * limitations under the License.
  */
 
-package org.apache.spark.graphx
+package org.apache.spark.graphx2
 
 /**
- * Collections of utilities used by graphx.
+ * Collections of utilities used by graphx2.
  */
 package object util
