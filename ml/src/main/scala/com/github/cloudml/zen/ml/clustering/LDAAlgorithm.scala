@@ -24,7 +24,6 @@ import java.util.concurrent.CountDownLatch
 import LDADefines._
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
 import com.github.cloudml.zen.ml.util._
-import org.apache.log4j.Logger
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.GraphImpl
 import org.apache.spark.util.collection.AppendOnlyMap
@@ -89,6 +88,7 @@ class FastLDA extends LDAAlgorithm {
         alphaRatio * (tCounter + alphaAS) / (tCounter + betaSum)
       }
       val totalSize = ep.size
+      val results = new Array[ED](totalSize)
       val sizePerThrd = {
         val npt = totalSize / numThreads
         if (npt * numThreads == totalSize) npt else npt + 1
@@ -97,7 +97,6 @@ class FastLDA extends LDAAlgorithm {
       val threads = new Array[Thread](numThreads)
       for (threadId <- threads.indices) {
         threads(threadId) = new Thread(new Runnable {
-          val logger: Logger = Logger.getLogger(this.getClass.getName)
           val gen = new XORShiftRandom((numPartitions * seed + pid) * numThreads + threadId)
           // table/ftree is a per term data structure
           // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
@@ -132,9 +131,9 @@ class FastLDA extends LDAAlgorithm {
                 val topics = ep.data(i)
                 for (i <- topics.indices) {
                   val currentTopic = topics(i)
-                  docTopicCounter.synchronized{ docTopicCounter(currentTopic) -= 1 }
-                  termTopicCounter.synchronized{ termTopicCounter(currentTopic) -= 1 }
-                  totalTopicCounter(currentTopic) -= 1
+                  // docTopicCounter.synchronized{ docTopicCounter(currentTopic) -= 1 }
+                  // termTopicCounter.synchronized{ termTopicCounter(currentTopic) -= 1 }
+                  // totalTopicCounter(currentTopic) -= 1
                   dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, cdfSampler, beta, betaSum)
                   globalSampler.update(currentTopic, itemRatio(currentTopic) * beta)
                   lastSampler.update(currentTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
@@ -142,15 +141,14 @@ class FastLDA extends LDAAlgorithm {
                   val newTopic = tokenSampling(gen, globalSampler, lastSampler, cdfSampler, termTopicCounter,
                     docTopicCounter, currentTopic)
                   topics(i) = newTopic
-                  docTopicCounter.synchronized{ docTopicCounter(newTopic) += 1 }
-                  termTopicCounter.synchronized{ termTopicCounter(newTopic) += 1 }
-                  totalTopicCounter(newTopic) += 1
+                  // docTopicCounter.synchronized{ docTopicCounter(newTopic) += 1 }
+                  // termTopicCounter.synchronized{ termTopicCounter(newTopic) += 1 }
+                  // totalTopicCounter(newTopic) += 1
                   globalSampler.update(newTopic, itemRatio(currentTopic) * beta)
                   lastSampler.update(newTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
                 }
+                results(i) = topics
               }
-            } catch {
-              case e: Exception => logger.error(e.getLocalizedMessage, e)
             } finally {
               doneSignal.countDown()
             }
@@ -160,9 +158,9 @@ class FastLDA extends LDAAlgorithm {
       threads.foreach(_.start())
       doneSignal.await()
 
-      ep.withData(ep.data)
+      ep.withData(results)
     })
-    GraphImpl.fromExistingRDDs(vertices, newEdges)
+    GraphImpl(vertices.mapValues(_ => null), newEdges)
   }
 
   private[ml] def tokenSampling(gen: Random,
