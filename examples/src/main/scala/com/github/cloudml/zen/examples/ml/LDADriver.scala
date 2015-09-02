@@ -145,7 +145,7 @@ object LDADriver {
     val conf = sc.getConf
     val docsPath = conf.get(cs_inputPath)
     val sr = conf.getDouble(cs_sampleRate, 1.0)
-    val rawDocs = sc.textFile(docsPath, numPartitions).sample(false, sr).coalesce(numPartitions, shuffle=true)
+    val rawDocs = sc.textFile(docsPath, numPartitions).sample(false, sr)
     convertDocsToBagOfWords(sc, rawDocs, storageLevel)
   }
 
