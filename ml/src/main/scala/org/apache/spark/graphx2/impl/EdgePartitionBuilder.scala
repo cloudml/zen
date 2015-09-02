@@ -128,6 +128,7 @@ private[impl] case class EdgeWithLocalIds[@specialized ED](
     srcId: VertexId, dstId: VertexId, localSrcId: Int, localDstId: Int, attr: ED)
 
 private[impl] object EdgeWithLocalIds {
+  // scalastyle:off
   implicit def lexicographicOrdering[ED]: Ordering[EdgeWithLocalIds[ED]] =
     new Ordering[EdgeWithLocalIds[ED]] {
       override def compare(a: EdgeWithLocalIds[ED], b: EdgeWithLocalIds[ED]): Int = {

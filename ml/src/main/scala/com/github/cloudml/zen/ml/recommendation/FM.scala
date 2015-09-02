@@ -18,7 +18,8 @@
 package com.github.cloudml.zen.ml.recommendation
 
 import java.util.{Random => JavaRandom}
-import com.github.cloudml.zen.ml.partitioner.DBHPartitioner
+
+import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.recommendation.FM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.Utils
@@ -111,10 +112,10 @@ private[ml] abstract class FM extends Serializable with Logging {
       logInfo(s"Start train (Iteration $iter/$iterations)")
       val startedAt = System.nanoTime()
       val previousVertices = vertices
-      val margin = forward(iter)
-      var (_, rmse, gradient) = backward(margin, iter)
-      gradient = updateGradientSum(gradient, iter)
-      vertices = updateWeight(gradient, iter)
+      val margin = forward(innerIter)
+      var (_, rmse, gradient) = backward(margin, innerIter)
+      gradient = updateGradientSum(gradient, innerIter)
+      vertices = updateWeight(gradient, innerIter)
       checkpointVertices()
       vertices.count()
       dataSet = GraphImpl.fromExistingRDDs(vertices, edges)

@@ -23,7 +23,7 @@ import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.{FTree, AliasTable, XORShiftRandom}
 import breeze.linalg.{SparseVector => BSV, DenseVector => BDV}
 import org.apache.spark.SparkConf
-import org.apache.spark.graphx._
+import org.apache.spark.graphx2._
 
 
 object LDADefines {

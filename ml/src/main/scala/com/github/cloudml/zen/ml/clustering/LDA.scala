@@ -25,8 +25,8 @@ import LDADefines._
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum}
 import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.impl.GraphImpl
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.impl.GraphImpl
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
 import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
 import org.apache.spark.rdd.RDD

@@ -23,7 +23,7 @@ import com.github.cloudml.zen.ml.util.SparkHacker
 import breeze.linalg.{SparseVector => BSV}
 import org.apache.hadoop.fs.Path
 import org.apache.spark.deploy.SparkHadoopUtil
-import org.apache.spark.graphx.GraphXUtils
+import org.apache.spark.graphx2.GraphXUtils
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{SparkContext, SparkConf}
