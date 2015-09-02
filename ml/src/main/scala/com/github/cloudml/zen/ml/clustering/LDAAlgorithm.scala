@@ -24,6 +24,7 @@ import java.util.concurrent.CountDownLatch
 import LDADefines._
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
 import com.github.cloudml.zen.ml.util._
+import org.apache.log4j.Logger
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.GraphImpl
 import org.apache.spark.util.collection.AppendOnlyMap
@@ -97,6 +98,7 @@ class FastLDA extends LDAAlgorithm {
       val threads = new Array[Thread](numThreads)
       for (threadId <- threads.indices) {
         threads(threadId) = new Thread(new Runnable {
+          val logger: Logger = Logger.getLogger(this.getClass.getName)
           val gen = new XORShiftRandom((numPartitions * seed + pid) * numThreads + threadId)
           // table/ftree is a per term data structure
           // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
@@ -149,6 +151,8 @@ class FastLDA extends LDAAlgorithm {
                 }
                 results(i) = topics
               }
+            } catch {
+              case e: Exception => logger.error(e.getLocalizedMessage, e)
             } finally {
               doneSignal.countDown()
             }
