@@ -18,7 +18,6 @@
 package com.github.cloudml.zen.ml.util
 
 import java.util.Random
-import breeze.linalg.{Vector => BV}
 
 trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
   def length: Int
@@ -28,6 +27,5 @@ trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
   def sampleFrom(base: T, gen: Random): Int
   def update(state: Int, value: T): Unit
   def deltaUpdate(state: Int, delta: T): Unit
-  def resetDist(dist: BV[T], sum: T): DiscreteSampler[T]
-  def resetDist(dist: BV[T]): DiscreteSampler[T]
+  def resetDist(distIter: Iterator[(Int, T)], used: Int): DiscreteSampler[T]
 }

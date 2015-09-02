@@ -118,8 +118,7 @@ class FastLDA extends LDAAlgorithm {
 
           override def run(): Unit = {
             try {
-              val tdt = tDense(itemRatio, beta, numTopics)
-              globalSampler.resetDist(tdt._2, tdt._1)
+              tDense(globalSampler, itemRatio, beta, numTopics)
               for (i <- startPos until endPos) {
                 val localSrcId = ep.localSrcIds(i)
                 val localDstId = ep.localDstIds(i)
@@ -127,8 +126,7 @@ class FastLDA extends LDAAlgorithm {
                 val docTopicCounter = ep.vertexAttrs(localDstId)
                 if (lastVid != localSrcId) {
                   lastVid = localSrcId
-                  val wst = wSparse(itemRatio, totalTopicCounter, termTopicCounter)
-                  lastSampler.resetDist(wst._2, wst._1)
+                  wSparse(lastSampler, itemRatio, termTopicCounter)
                 }
                 val topics = ep.data(i)
                 for (i <- topics.indices) {
@@ -136,7 +134,7 @@ class FastLDA extends LDAAlgorithm {
                   // docTopicCounter.synchronized{ docTopicCounter(currentTopic) -= 1 }
                   // termTopicCounter.synchronized{ termTopicCounter(currentTopic) -= 1 }
                   // totalTopicCounter(currentTopic) -= 1
-                  dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, cdfSampler, beta, betaSum)
+                  dSparse(cdfSampler, totalTopicCounter, termTopicCounter, docTopicCounter, beta, betaSum)
                   globalSampler.update(currentTopic, itemRatio(currentTopic) * beta)
                   lastSampler.update(currentTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
 
@@ -170,7 +168,7 @@ class FastLDA extends LDAAlgorithm {
   private[ml] def tokenSampling(gen: Random,
     t: DiscreteSampler[Double],
     w: DiscreteSampler[Double],
-    d: CumulativeDist[Double],
+    d: DiscreteSampler[Double],
     termTopicCounter: VD,
     docTopicCounter: VD,
     currentTopic: Int): Int = {
@@ -179,10 +177,7 @@ class FastLDA extends LDAAlgorithm {
     val distSum = dwSum + t.norm
     val genSum = gen.nextDouble() * distSum
     if (genSum < dSum) {
-      val used = docTopicCounter.used
-      val index = docTopicCounter.index
-      val pos = CumulativeDist.binarySelect(d.data, genSum, 0, used, greater=true)
-      index(pos)
+      d.sampleFrom(genSum, gen)
     } else if (genSum < dwSum) {
       w match {
         case wt: AliasTable[Double] => sampleSV(gen, wt, termTopicCounter, currentTopic)
@@ -198,17 +193,12 @@ class FastLDA extends LDAAlgorithm {
    * t = \frac{{\beta }_{w} \bar{\alpha} ( {n}_{k}^{-di} + \acute{\alpha} ) } {({n}_{k}^{-di}+\bar{\beta})
    * ({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
    */
-  private[ml] def tDense(itemRatio: Int => Double,
+  private[ml] def tDense(t: DiscreteSampler[Double],
+    itemRatio: Int => Double,
     beta: Double,
-    numTopics: Int): (Double, BDV[Double]) = {
-    val t = BDV.zeros[Double](numTopics)
-    var sum = 0D
-    for (topic <- 0 until numTopics) {
-      val last = beta * itemRatio(topic)
-      t(topic) = last
-      sum += last
-    }
-    (sum, t)
+    numTopics: Int): DiscreteSampler[Double] = {
+    val dist = Range(0, numTopics).map(t => (t, itemRatio(t) * beta))
+    t.resetDist(dist.iterator, dist.length)
   }
 
   /**
@@ -216,17 +206,13 @@ class FastLDA extends LDAAlgorithm {
    * w = \frac{ {n}_{kw}^{-di} \bar{\alpha} ( {n}_{k}^{-di} + \acute{\alpha} )}{({n}_{k}^{-di}+\bar{\beta})
    * ({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
    */
-  private[ml] def wSparse(itemRatio: Int => Double,
-    totalTopicCounter: BDV[Count],
-    termTopicCounter: VD): (Double, BSV[Double]) = {
-    val w = BSV.zeros[Double](totalTopicCounter.length)
-    var sum = 0D
-    for ((topic, count) <- termTopicCounter.activeIterator.filter(_._2 > 0)) {
-      val last = count * itemRatio(topic)
-      w(topic) = last
-      sum += last
+  private[ml] def wSparse(w: DiscreteSampler[Double],
+    itemRatio: Int => Double,
+    termTopicCounter: VD): DiscreteSampler[Double] = {
+    val distIter = termTopicCounter.activeIterator.map {
+      case (t, c) => (t, itemRatio(t) * c)
     }
-    (sum, w)
+    w.resetDist(distIter, termTopicCounter.used)
   }
 
   /**
@@ -235,19 +221,16 @@ class FastLDA extends LDAAlgorithm {
    * {({n}_{k}^{-di}+\bar{\beta})({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
    * =  \frac{{n}_{kd} ^{-di}({n}_{kw}^{-di}+{\beta}_{w})}{({n}_{k}^{-di}+\bar{\beta}) }
    */
-  private[ml] def dSparse(totalTopicCounter: BDV[Count],
+  private[ml] def dSparse(d: DiscreteSampler[Double],
+    totalTopicCounter: BDV[Count],
     termTopicCounter: VD,
     docTopicCounter: VD,
-    d: CumulativeDist[Double],
     beta: Double,
-    betaSum: Double): Unit = {
-    val data = d.data
-    var sum = 0D
-    for (((topic, count), i) <- docTopicCounter.activeIterator.zipWithIndex) {
-      val last = count * (termTopicCounter(topic) + beta) / (totalTopicCounter(topic) + betaSum)
-      sum += last
-      data(i) = sum
+    betaSum: Double): DiscreteSampler[Double] = {
+    val distIter = docTopicCounter.activeIterator.map {
+      case (t, c) => (t, c * (termTopicCounter(t) + beta) / (totalTopicCounter(t) + betaSum))
     }
+    d.resetDist(distIter, docTopicCounter.used)
   }
 }
 
@@ -293,11 +276,11 @@ class LightLDA extends LDAAlgorithm {
         if (dD == null || gen.nextDouble() < 1e-6) {
           var dv = dDense(totalTopicCounter, alpha, alphaAS, numTokens)
           dDSum = dv._1
-          dD = AliasTable.generateAlias(dv._2, dDSum)
+          dD = AliasTable.generateAlias(dv._2)
 
           dv = wDense(totalTopicCounter, numTerms, beta)
           wDSum = dv._1
-          wD = AliasTable.generateAlias(dv._2, wDSum)
+          wD = AliasTable.generateAlias(dv._2)
         }
         val (dSum, d) = docTopicCounter.synchronized {
           docTable(x => x == null || x.get() == null || gen.nextDouble() < 1e-2,
@@ -448,7 +431,7 @@ class LightLDA extends LDAAlgorithm {
     val termSum = beta * numTerms
     val w = BSV.zeros[Double](numTopics)
     var sum = 0D
-    termTopicCounter.activeIterator.foreach { t =>
+    val distIter = termTopicCounter.activeIterator.filter(_._2 > 0).foreach { t =>
       val topic = t._1
       val count = t._2
       if (count > 0) {
@@ -521,7 +504,7 @@ class LightLDA extends LDAAlgorithm {
     } else {
       docTopicCounter.synchronized {
         val sv = dSparse(docTopicCounter)
-        val d = (sv._1, AliasTable.generateAlias(sv._2, sv._1))
+        val d = (sv._1, AliasTable.generateAlias(sv._2))
         cacheMap.update(docId, new SoftReference(d))
         d
       }
@@ -535,7 +518,7 @@ class LightLDA extends LDAAlgorithm {
     numTerms: Int,
     beta: Double): Double = {
     val sv = wSparse(totalTopicCounter, termTopicCounter, numTerms, beta)
-    AliasTable.generateAlias(sv._2, sv._1, table)
+    table.resetDist(sv._2.activeIterator, sv._2.activeSize)
     sv._1
   }
 }

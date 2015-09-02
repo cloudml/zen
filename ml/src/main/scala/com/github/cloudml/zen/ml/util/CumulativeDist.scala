@@ -68,13 +68,10 @@ private[zen] class CumulativeDist[@specialized(Double, Int, Float, Long) T: Clas
 
   def deltaUpdate(state: Int, delta: T): Unit = {}
 
-  def resetDist(dist: BV[T], sum: T): this.type = resetDist(dist)
-
-  def resetDist(dist: BV[T]): this.type = synchronized {
-    val used = dist.activeSize
+  def resetDist(distIter: Iterator[(Int, T)], used: Int): this.type = synchronized {
     reset(used)
     var sum = num.zero
-    for (((state, prob), i) <- dist.activeIterator.zipWithIndex) {
+    for (((state, prob), i) <- distIter.zipWithIndex) {
       sum = num.plus(sum, prob)
       _cdf(i) = sum
       _space(i) = state
@@ -98,7 +95,7 @@ private[zen] object CumulativeDist {
   def generateCdf[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](sv: BV[T]): CumulativeDist[T] = {
     val used = sv.activeSize
     val cdf = new CumulativeDist[T](used)
-    cdf.resetDist(sv)
+    cdf.resetDist(sv.activeIterator, used)
   }
 
   def binarySelect[T](arr: Array[T], key: T, begin: Int, end: Int, greater: Boolean)

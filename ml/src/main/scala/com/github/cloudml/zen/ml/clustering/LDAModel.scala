@@ -58,8 +58,8 @@ class LocalLDAModel(@transient val termTopicCounters: Array[BSV[Count]],
   @transient lazy val wordTableCache = new AppendOnlyMap[Int,
     SoftReference[AliasTable[Double]]](numTerms / 2)
   @transient lazy val tDenseTable = {
-    val dv = algo.tDense(itemRatio, beta, numTopics)
-    AliasTable.generateAlias(dv._2, dv._1)
+    val table = new AliasTable[Double](numTopics)
+    algo.tDense(table, itemRatio, beta, numTopics)
   }
 
   private def collectTopicCounter(): BDV[Count] = {
@@ -117,7 +117,7 @@ class LocalLDAModel(@transient val termTopicCounters: Array[BSV[Count]],
       val termId = tokens(i)
       val termTopicCounter = termTopicCounters(termId)
       val currentTopic = topics(i)
-      algo.dSparse(totalTopicCounter, termTopicCounter, docTopicCounter, docCdf, beta, betaSum)
+      algo.dSparse(docCdf, totalTopicCounter, termTopicCounter, docTopicCounter, beta, betaSum)
       val wSparseTable = wordTable(wordTableCache, totalTopicCounter, termTopicCounter, termId)
       val newTopic = algo.tokenSampling(gen, tDenseTable, wSparseTable, docCdf, termTopicCounter,
         docTopicCounter, currentTopic)
@@ -139,8 +139,9 @@ class LocalLDAModel(@transient val termTopicCounters: Array[BSV[Count]],
     if (termTopicCounter.used == 0) return null
     var w = cacheMap(termId)
     if (w == null || w.get() == null) {
-      val t = algo.wSparse(itemRatio, totalTopicCounter, termTopicCounter)
-      w = new SoftReference(AliasTable.generateAlias(t._2, t._1))
+      val table = new AliasTable[Double](termTopicCounter.used)
+      algo.wSparse(table, itemRatio, termTopicCounter)
+      w = new SoftReference(table)
       cacheMap.update(termId, w)
     }
     w.get()

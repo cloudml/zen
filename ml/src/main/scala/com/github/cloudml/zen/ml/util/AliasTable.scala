@@ -19,7 +19,7 @@ package com.github.cloudml.zen.ml.util
 
 import java.util.Random
 import scala.reflect.ClassTag
-import breeze.linalg.{Vector => BV, sum}
+import breeze.linalg.{Vector => BV}
 
 
 private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: Int)
@@ -80,10 +80,11 @@ private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag
 
   def deltaUpdate(state: Int, delta: T): Unit = {}
 
-  def resetDist(dist: BV[T], sum: T): this.type = synchronized {
-    val used = dist.activeSize
+  def resetDist(distIter: Iterator[(Int, T)], used: Int): this.type = synchronized {
+    val dist = distIter.toList
+    val sum = dist.map(_._2).sum
     reset(used)
-    val (loList, hiList) = dist.activeIterator.map(t => (t._1, num.times(t._2, num.fromInt(used)))).toList
+    val (loList, hiList) = dist.map(t => (t._1, num.times(t._2, num.fromInt(used))))
       .partition(t => num.lt(t._2, sum))
     var ls = 0
     var le = 0
@@ -119,8 +120,6 @@ private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag
     setNorm(sum)
   }
 
-  def resetDist(dist: BV[T]): this.type = resetDist(dist, dist.activeValuesIterator.sum)
-
   private def reset(newSize: Int): this.type = {
     if (_l.length < newSize) {
       _l = new Array[Int](newSize)
@@ -140,17 +139,8 @@ private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag
 
 private[zen] object AliasTable {
   def generateAlias[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](sv: BV[T]): AliasTable[T] = {
-    generateAlias(sv, sv.activeValuesIterator.sum)
-  }
-
-  def generateAlias[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](sv: BV[T], sum: T): AliasTable[T] = {
     val used = sv.activeSize
     val table = new AliasTable[T](used)
-    generateAlias(sv, sum, table)
-  }
-
-  def generateAlias[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](
-    sv: BV[T], sum: T, table: AliasTable[T]): AliasTable[T] = {
-    table.resetDist(sv, sum)
+    table.resetDist(sv.activeIterator, used)
   }
 }
