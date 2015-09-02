@@ -19,13 +19,13 @@ package com.github.cloudml.zen.ml.recommendation
 
 import java.util.{Random => JavaRandom}
 
-import com.github.cloudml.zen.ml.DBHPartitioner
+import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.recommendation.FM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.Utils
 import org.apache.spark.Logging
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.impl.{EdgeRDDImpl, GraphImpl}
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.impl.{EdgeRDDImpl, GraphImpl}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel

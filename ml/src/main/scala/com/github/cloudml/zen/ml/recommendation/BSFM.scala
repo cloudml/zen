@@ -17,14 +17,14 @@
 
 package com.github.cloudml.zen.ml.recommendation
 
-import com.github.cloudml.zen.ml.DBHPartitioner
+import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.recommendation.BSFM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.Utils
 import org.apache.commons.math3.primes.Primes
 import org.apache.spark.{SparkContext, Logging}
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.impl.{EdgeRDDImpl, GraphImpl}
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.impl.{EdgeRDDImpl, GraphImpl}
 import org.apache.spark.mllib.linalg.{Vector => SV}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
