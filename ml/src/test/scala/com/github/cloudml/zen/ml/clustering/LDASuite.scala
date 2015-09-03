@@ -20,10 +20,11 @@ package com.github.cloudml.zen.ml.clustering
 import java.io.File
 import java.util.Random
 
+import com.github.cloudml.zen.ml.clustering.LDADefines._
+import com.github.cloudml.zen.ml.util.SharedSparkContext
 import breeze.linalg.functions.euclideanDistance
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import breeze.stats.distributions.Poisson
-import com.github.cloudml.zen.ml.util.SharedSparkContext
 import com.google.common.io.Files
 import org.apache.spark.storage.StorageLevel
 import org.scalatest.FunSuite
@@ -35,6 +36,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
   test("FastLDA || Gibbs sampling") {
     val model = generateRandomLDAModel(numTopics, numTerms)
     val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
+    sc.getConf.set(cs_numThreads, 4.toString)
 
     val data = sc.parallelize(corpus, 2)
     data.cache()

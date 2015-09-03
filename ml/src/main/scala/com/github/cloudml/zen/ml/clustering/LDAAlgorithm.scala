@@ -89,6 +89,7 @@ class FastLDA extends LDAAlgorithm {
         alphaRatio * (tCounter + alphaAS) / (tCounter + betaSum)
       }
       val totalSize = ep.size
+      val results = new Array[ED](totalSize)
       val sizePerThrd = {
         val npt = totalSize / numThreads
         if (npt * numThreads == totalSize) npt else npt + 1
@@ -146,6 +147,7 @@ class FastLDA extends LDAAlgorithm {
                   globalSampler.update(newTopic, itemRatio(currentTopic) * beta)
                   lastSampler.update(newTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
                 }
+                results(i) = topics
               }
             } catch {
               case e: Exception => logger.error(e.getLocalizedMessage, e)
@@ -158,7 +160,7 @@ class FastLDA extends LDAAlgorithm {
       threads.foreach(_.start())
       doneSignal.await()
 
-      ep.withData(ep.data)
+      ep.withData(results)
     })
     GraphImpl(vertices.mapValues(_ => null), newEdges)
   }
