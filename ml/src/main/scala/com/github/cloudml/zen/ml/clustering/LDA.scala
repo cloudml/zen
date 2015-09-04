@@ -27,7 +27,8 @@ import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
 import org.apache.log4j.Logger
 import org.apache.spark.graphx2._
-import org.apache.spark.graphx2.impl.GraphImpl
+import org.apache.spark.graphx2.impl.{VertexAttributeBlock, GraphImpl}
+import org.apache.spark.graphx2.util.collection.GraphXPrimitiveVector
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
 import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
 import org.apache.spark.rdd.RDD
@@ -422,7 +423,7 @@ object LDA {
     val graph = corpus.asInstanceOf[GraphImpl[VD, ED]]
     val vertices = graph.vertices
     val edges = graph.replicatedVertexView.edges
-    val newCounterPartition = edges.partitionsRDD.mapPartitions(_.flatMap(t => {
+    val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap(t => {
       val ep = t._2
       val totalSize = ep.size
       val verts = ep.vertexAttrs.map(t => BSV.zeros[Count](numTopics))
@@ -462,24 +463,39 @@ object LDA {
       threads.foreach(_.start())
       doneSignal.await()
 
-      verts.zipWithIndex.map {
-        case (cnts, i) => (ep.local2global(i), cnts)
-      }
+      verts.zipWithIndex.map { case (cnts, i) => (ep.local2global(i), cnts) }
     })).partitionBy(vertices.partitioner.get)
-    val newCounter = vertices.aggregateUsingIndex[VD](newCounterPartition, _ :+= _)
-
-    val newVerts = vertices.leftJoin(newCounter)((id: VertexId, data: VD, o: Option[VD]) => {
-      o match {
-        case Some(u) => u
-        case None => data
-      }
+    val newCounters = vertices.aggregateUsingIndex[VD](shippedCounters, _ :+= _)
+    val newVerts = vertices.leftJoin(newCounters)((vid, left, right) => right match {
+      case Some(u) => u
+      case None => left
     })
-    val changedVerts = vertices.diff(newVerts)
-    val shippedVerts = changedVerts.shipVertexAttributes(shipSrc=true, shipDst=true).partitionBy(edges.partitioner.get)
+
+    val shippedVerts = vertices.diff(newVerts).partitionsRDD.mapPartitions(_.flatMap(svp => {
+      val rt = svp.routingTable
+      Iterator.tabulate(rt.numEdgePartitions)(pid => {
+        val initialSize = rt.partitionSize(pid)
+        val vids = new GraphXPrimitiveVector[VertexId](initialSize)
+        val attrs = new GraphXPrimitiveVector[VD](initialSize)
+        rt.foreachWithinEdgePartition(pid, includeSrc=true, includeDst=true)(vid => {
+          if (svp.isDefined(vid)) {
+            vids += vid
+            attrs += svp(vid)
+          }
+        })
+        (pid, new VertexAttributeBlock(vids.trim().array, attrs.trim().array))
+      })
+    })).partitionBy(edges.partitioner.get)
     val partRdd = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)((epIter, vabsIter) =>
-      epIter.map { case (pid, edgePartition) =>
-        (pid, edgePartition.updateVertices(vabsIter.flatMap(_._2.iterator)))
-      }
+      epIter.map { case (pid, ep) => {
+        val verts = ep.vertexAttrs
+        val vabs = vabsIter.flatMap(_._2.iterator)
+        while (vabs.hasNext) {
+          val (vid, vattr) = vabs.next()
+          verts(ep.global2local(vid)) = vattr
+        }
+        (pid, ep)
+      }}
     )
     val newEdges = edges.withPartitionsRDD(partRdd)
     GraphImpl.fromExistingRDDs(newVerts, newEdges)
