@@ -131,9 +131,6 @@ class FastLDA extends LDAAlgorithm {
                 val topics = ep.data(i)
                 for (i <- topics.indices) {
                   val currentTopic = topics(i)
-                  docTopicCounter.synchronized { docTopicCounter(currentTopic) -= 1 }
-                  termTopicCounter.synchronized { termTopicCounter(currentTopic) -= 1 }
-                  totalTopicCounter(currentTopic) -= 1
                   dSparse(cdfSampler, totalTopicCounter, termTopicCounter, docTopicCounter, beta, betaSum)
                   globalSampler.update(currentTopic, itemRatio(currentTopic) * beta)
                   lastSampler.update(currentTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
@@ -141,9 +138,6 @@ class FastLDA extends LDAAlgorithm {
                   val newTopic = tokenSampling(gen, globalSampler, lastSampler, cdfSampler, termTopicCounter,
                     docTopicCounter, currentTopic)
                   topics(i) = newTopic
-                  docTopicCounter.synchronized { docTopicCounter(newTopic) += 1 }
-                  termTopicCounter.synchronized { termTopicCounter(newTopic) += 1 }
-                  totalTopicCounter(newTopic) += 1
                   globalSampler.update(newTopic, itemRatio(currentTopic) * beta)
                   lastSampler.update(newTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
                 }
