@@ -420,11 +420,12 @@ object LDA {
     val conf = corpus.edges.context.getConf
     val numThreads = conf.getInt(cs_numThreads, 1)
     val graph = corpus.asInstanceOf[GraphImpl[VD, ED]]
-    val newCounter = graph.edges.partitionsRDD.mapPartitions(_.flatMap(t => {
-      val triplets = t._2.tripletIterator(includeSrc=false, includeDst=false).toArray
-      val totalSize = triplets.length
-      val pairs = new Array[(VertexId, Array[Int])](totalSize << 1)
-
+    val vertices = graph.vertices
+    val edges = graph.replicatedVertexView.edges
+    val newCounterPartition = edges.partitionsRDD.mapPartitions(_.flatMap(t => {
+      val ep = t._2
+      val totalSize = ep.size
+      val verts = ep.vertexAttrs.map(t => BSV.zeros[Count](numTopics))
       val sizePerThrd = {
         val npt = totalSize / numThreads
         if (npt * numThreads == totalSize) npt else npt + 1
@@ -440,10 +441,15 @@ object LDA {
           override def run(): Unit = {
             try {
               for (i <- startPos until endPos) {
-                val edge = triplets(i)
-                val topics = edge.attr
-                pairs(i) = (edge.srcId, topics)
-                pairs(i + totalSize) = (edge.dstId, topics)
+                val localSrcId = ep.localSrcIds(i)
+                val localDstId = ep.localDstIds(i)
+                val termTopicCounter = verts(localSrcId)
+                val docTopicCounter = verts(localDstId)
+                val topics = ep.data(i)
+                for (t <- topics) {
+                  termTopicCounter.synchronized { termTopicCounter(t) += 1 }
+                  docTopicCounter.synchronized { docTopicCounter(t) += 1 }
+                }
               }
             } catch {
               case e: Exception => logger.error(e.getLocalizedMessage, e)
@@ -451,17 +457,32 @@ object LDA {
               doneSignal.countDown()
             }
           }
-        }, s"updateCounter thread $threadId")
+        }, s"aggregateLocal thread $threadId")
       }
       threads.foreach(_.start())
       doneSignal.await()
 
-      pairs
-    })).aggregateByKey(BSV.zeros[Count](numTopics), graph.vertices.partitioner.get)((agg, cur) => {
-      cur.foreach(agg(_) += 1)
-      agg
-    }, _ :+= _)
-    graph.joinVertices(newCounter)((_, _, counter) => counter)
+      verts.zipWithIndex.map {
+        case (cnts, i) => (ep.local2global(i), cnts)
+      }
+    })).partitionBy(vertices.partitioner.get)
+    val newCounter = vertices.aggregateUsingIndex[VD](newCounterPartition, _ :+= _)
+
+    val newVerts = vertices.leftJoin(newCounter)((id: VertexId, data: VD, o: Option[VD]) => {
+      o match {
+        case Some(u) => u
+        case None => data
+      }
+    })
+    val changedVerts = vertices.diff(newVerts)
+    val shippedVerts = changedVerts.shipVertexAttributes(shipSrc=true, shipDst=true).partitionBy(edges.partitioner.get)
+    val partRdd = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)((epIter, vabsIter) =>
+      epIter.map { case (pid, edgePartition) =>
+        (pid, edgePartition.updateVertices(vabsIter.flatMap(_._2.iterator)))
+      }
+    )
+    val newEdges = edges.withPartitionsRDD(partRdd)
+    GraphImpl.fromExistingRDDs(newVerts, newEdges)
   }
 
   private def updateDocTopicCounter(corpus: Graph[VD, ED],

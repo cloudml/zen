@@ -78,10 +78,9 @@ class FastLDA extends LDAAlgorithm {
     val sampl = conf.get(cs_accelMethod, "alias")
     val graph = corpus.asInstanceOf[GraphImpl[VD, ED]]
     val vertices = graph.vertices
-    val edges = graph.replicatedVertexView
-    val numPartitions = edges.edges.partitions.length
-    edges.upgrade(vertices, includeSrc=true, includeDst=true)
-    val newEdges = edges.edges.mapEdgePartitions((pid, ep) => {
+    val edges = graph.replicatedVertexView.edges
+    val numPartitions = edges.partitions.length
+    val newEdges = edges.mapEdgePartitions((pid, ep) => {
       val alphaRatio = alpha * numTopics / (numTokens - 1 + alphaAS * numTopics)
       val betaSum = beta * numTerms
       def itemRatio(topic: Int) = {
@@ -156,7 +155,7 @@ class FastLDA extends LDAAlgorithm {
 
       ep.withData(results)
     })
-    GraphImpl(vertices.mapValues(_ => null), newEdges)
+    GraphImpl.fromExistingRDDs(vertices, newEdges)
   }
 
   private[ml] def tokenSampling(gen: Random,
