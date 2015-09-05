@@ -33,6 +33,7 @@ import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
 import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
+import org.apache.spark.util.collection.BitSet
 
 
 class LDA(@transient private var corpus: Graph[VD, ED],
@@ -465,7 +466,26 @@ object LDA {
 
       verts.zipWithIndex.map { case (cnts, i) => (ep.local2global(i), cnts) }
     })).partitionBy(vertices.partitioner.get)
-    val newCounters = vertices.aggregateUsingIndex[VD](shippedCounters, _ :+= _)
+    val parts = vertices.partitionsRDD.zipPartitions(shippedCounters, true)((svpIter, msgIter) =>
+      svpIter.map(svp => {
+        val newMask = new BitSet(svp.capacity)
+        val newValues = new Array[VD](svp.capacity)
+        msgIter.foreach { case (vid, vdata) => {
+          val pos = svp.index.getPos(vid)
+          if (pos >= 0) {
+            if (newMask.get(pos)) {
+              newValues(pos) :+= vdata
+            } else {
+              // otherwise just store the new value
+              newMask.set(pos)
+              newValues(pos) = vdata
+            }
+          }
+        }}
+        svp.withValues(newValues).withMask(newMask)
+      })
+    )
+    val newCounters = vertices.withPartitionsRDD(parts)
     val newVerts = vertices.leftJoin(newCounters)((vid, left, right) => right match {
       case Some(u) => u
       case None => left
