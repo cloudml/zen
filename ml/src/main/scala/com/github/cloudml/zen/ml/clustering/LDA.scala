@@ -427,7 +427,7 @@ object LDA {
     val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap(t => {
       val ep = t._2
       val totalSize = ep.size
-      val verts = ep.vertexAttrs.map(t => BSV.zeros[Count](numTopics))
+      val verts = ep.vertexAttrs.map(_ => BSV.zeros[Count](numTopics))
       val sizePerThrd = {
         val npt = totalSize / numThreads
         if (npt * numThreads == totalSize) npt else npt + 1
@@ -464,32 +464,27 @@ object LDA {
       threads.foreach(_.start())
       doneSignal.await()
 
-      verts.zipWithIndex.map { case (cnts, i) => (ep.local2global(i), cnts) }
+      verts.zipWithIndex.map { case (cnts, i) =>
+        (ep.local2global(i), { cnts.compact(); cnts })
+      }
     })).partitionBy(vertices.partitioner.get)
-    val parts = vertices.partitionsRDD.zipPartitions(shippedCounters, true)((svpIter, msgIter) =>
-      svpIter.map(svp => {
-        val newMask = new BitSet(svp.capacity)
+    val newSvps = vertices.partitionsRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
+      (svpIter, msgIter) => svpIter.map(svp => {
+        val mask = svp.mask
         val newValues = new Array[VD](svp.capacity)
+        var i = mask.nextSetBit(0)
+        while (i >= 0) {
+          newValues(i) = BSV.zeros[Count](numTopics)
+          i = mask.nextSetBit(i + 1)
+        }
         msgIter.foreach { case (vid, vdata) => {
           val pos = svp.index.getPos(vid)
-          if (pos >= 0) {
-            if (newMask.get(pos)) {
-              newValues(pos) :+= vdata
-            } else {
-              // otherwise just store the new value
-              newMask.set(pos)
-              newValues(pos) = vdata
-            }
-          }
+          newValues(pos) :+= vdata
         }}
-        svp.withValues(newValues).withMask(newMask)
+        svp.withValues(newValues)
       })
     )
-    val newCounters = vertices.withPartitionsRDD(parts)
-    val newVerts = vertices.leftJoin(newCounters)((vid, left, right) => right match {
-      case Some(u) => u
-      case None => left
-    })
+    val newVerts = vertices.withPartitionsRDD(newSvps)
 
     val shippedVerts = vertices.diff(newVerts).partitionsRDD.mapPartitions(_.flatMap(svp => {
       val rt = svp.routingTable
@@ -506,8 +501,8 @@ object LDA {
         (pid, new VertexAttributeBlock(vids.trim().array, attrs.trim().array))
       })
     })).partitionBy(edges.partitioner.get)
-    val partRdd = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)((epIter, vabsIter) =>
-      epIter.map { case (pid, ep) => {
+    val newEps = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
+      (epIter, vabsIter) => epIter.map { case (pid, ep) => {
         val verts = ep.vertexAttrs
         val vabs = vabsIter.flatMap(_._2.iterator)
         while (vabs.hasNext) {
@@ -517,7 +512,7 @@ object LDA {
         (pid, ep)
       }}
     )
-    val newEdges = edges.withPartitionsRDD(partRdd)
+    val newEdges = edges.withPartitionsRDD(newEps)
     GraphImpl.fromExistingRDDs(newVerts, newEdges)
   }
 
