@@ -477,10 +477,42 @@ object LDA {
           newValues(i) = BSV.zeros[Count](numTopics)
           i = mask.nextSetBit(i + 1)
         }
-        msgIter.foreach { case (vid, vdata) => {
-          val pos = svp.index.getPos(vid)
-          newValues(pos) :+= vdata
-        }}
+        val doneSignal = new CountDownLatch(numThreads)
+        val threads = new Array[Thread](numThreads)
+        for (threadId <- threads.indices) {
+          threads(threadId) = new Thread(new Runnable {
+            val logger: Logger = Logger.getLogger(this.getClass.getName)
+
+            override def run(): Unit = {
+              try {
+                var t: (VertexId, BSV[Count]) = null
+                var isOver = false
+                while (!isOver) {
+                  msgIter.synchronized {
+                    t = if (msgIter.hasNext) {
+                      msgIter.next()
+                    } else {
+                      isOver = true
+                      null
+                    }
+                  }
+                  if (t != null) {
+                    val (vid, counter) = t
+                    val pos = svp.index.getPos(vid)
+                    newValues(pos) :+= counter
+                  }
+                }
+              } catch {
+                case e: Exception => logger.error(e.getLocalizedMessage, e)
+              } finally {
+                doneSignal.countDown()
+              }
+            }
+          }, s"aggregateLocal thread $threadId")
+        }
+        threads.foreach(_.start())
+        doneSignal.await()
+
         svp.withValues(newValues)
       })
     )
