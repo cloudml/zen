@@ -96,13 +96,14 @@ class FastLDA extends LDAAlgorithm {
       val threads = new Array[Thread](numThreads)
       for (threadId <- threads.indices) {
         threads(threadId) = new Thread(new Runnable {
+          val gen = new XORShiftRandom((numPartitions * seed + pid) * numThreads + threadId)
+          val startPos = sizePerThrd * threadId
+          val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
+
           override def run(): Unit = {
             val logger: Logger = Logger.getLogger(this.getClass.getName)
-            val gen = new XORShiftRandom((numPartitions * seed + pid) * numThreads + threadId)
-            val startPos = sizePerThrd * threadId
-            val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
             val lcSrcIds = ep.localSrcIds
-            val lcDstIds = ep.localSrcIds
+            val lcDstIds = ep.localDstIds
             val vattrs = ep.vertexAttrs
             val data = ep.data
             try {

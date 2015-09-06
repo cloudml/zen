@@ -438,10 +438,11 @@ object LDA {
       val threads = new Array[Thread](numThreads)
       for (threadId <- threads.indices) {
         threads(threadId) = new Thread(new Runnable {
+          val startPos = sizePerThrd * threadId
+          val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
+
           override def run(): Unit = {
             val logger: Logger = Logger.getLogger(this.getClass.getName)
-            val startPos = sizePerThrd * threadId
-            val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
             val lcSrcIds = ep.localSrcIds
             val lcDstIds = ep.localDstIds
             val data = ep.data
@@ -500,7 +501,7 @@ object LDA {
                   if (t != null) {
                     val (vid, counter) = t
                     val agg = newValues(index.getPos(vid))
-                    agg.synchronized { agg :+= counter}
+                    agg.synchronized { agg :+= counter }
                   }
                 }
               } catch {
