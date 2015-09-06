@@ -49,6 +49,16 @@ object LDADefines {
   val cs_saveAsSolid = "zen.lda.saveAsSolid"
   val cs_numThreads = "zen.lda.numThreads"
 
+  // make docId always be negative, so that the doc vertex always be the dest vertex
+  @inline def genNewDocId(docId: Long): VertexId = {
+    assert(docId >= 0)
+    -(docId + 1L)
+  }
+
+  @inline def isDocId(vid: VertexId): Boolean = vid < 0L
+
+  @inline def isTermId(vid: VertexId): Boolean = vid >= 0L
+
   def uniformDistSampler(gen: Random,
     tokens: Array[Int],
     topics: Array[Int],

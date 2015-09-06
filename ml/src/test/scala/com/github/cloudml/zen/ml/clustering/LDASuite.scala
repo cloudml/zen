@@ -94,7 +94,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
       lda.runGibbsSampling(totalIterations)
-      pps(i) = lda.perplexity()
+      pps(i) = LDAMetrics.perplexity(lda)
       i += 1
     }
 

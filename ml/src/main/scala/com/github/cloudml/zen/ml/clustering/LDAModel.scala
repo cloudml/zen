@@ -23,7 +23,7 @@ import java.util.Random
 
 import LDADefines._
 import com.github.cloudml.zen.ml.util._
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, norm => brzNorm, sum => brzSum}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, norm, sum}
 import com.google.common.base.Charsets
 import com.google.common.io.Files
 import org.apache.hadoop.io.{NullWritable, Text}
@@ -91,12 +91,12 @@ class LocalLDAModel(@transient val termTopicCounters: Array[BSV[Count]],
       docTopicCounter = sampleDoc(gen, docTopicCounter, tokens, topics, docCdf)
       if (i > burnIn) topicDist :+= docTopicCounter
     }
-    val norm = brzNorm(topicDist, 1)
-    topicDist.map(_ / norm)
+    val nm = norm(topicDist, 1)
+    topicDist.map(_ / nm)
   }
 
   private[ml] def vector2Array(bow: BV[Int]): Array[Int] = {
-    val docLen = brzSum(bow)
+    val docLen = sum(bow)
     val sent = new Array[Int](docLen)
     var offset = 0
     bow.activeIterator.filter(_._2 > 0).foreach { case (term, cn) =>
@@ -191,7 +191,7 @@ class DistributedLDAModel(@transient val termTopicCounters: RDD[(VertexId, TC)],
     for (i <- 1 to burnIn) {
       lda.gibbsSampling(i, inferenceOnly=true)
     }
-    lda.runSum(LDA.isDocId, totalIter - burnIn, inferenceOnly=true)
+    lda.runSum(isDocId, totalIter - burnIn, inferenceOnly=true)
   }
 
   def toLocalLDAModel: LocalLDAModel = {

@@ -23,12 +23,12 @@ import scala.reflect.ClassTag
 
 import LDA._
 import LDADefines._
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
 import org.apache.log4j.Logger
 import org.apache.spark.graphx2._
-import org.apache.spark.graphx2.impl.{EdgeRDDImpl, EdgePartition, VertexAttributeBlock, GraphImpl}
+import org.apache.spark.graphx2.impl.{EdgePartition, VertexAttributeBlock, GraphImpl}
 import org.apache.spark.graphx2.util.collection.GraphXPrimitiveVector
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
 import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
@@ -36,19 +36,19 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 
 
-class LDA(@transient private var corpus: Graph[TC, TA],
-  private val numTopics: Int,
-  private val numTerms: Int,
-  private val numDocs: Long,
-  private val numTokens: Long,
-  private var alpha: Double,
-  private var beta: Double,
-  private var alphaAS: Double,
-  private val algo: LDAAlgorithm,
-  private var storageLevel: StorageLevel) extends Serializable {
+class LDA(@transient var corpus: Graph[TC, TA],
+  val numTopics: Int,
+  val numTerms: Int,
+  val numDocs: Long,
+  val numTokens: Long,
+  var alpha: Double,
+  var beta: Double,
+  var alphaAS: Double,
+  val algo: LDAAlgorithm,
+  var storageLevel: StorageLevel) extends Serializable {
 
-  @transient private var seed = new XORShiftRandom().nextInt()
-  @transient private var totalTopicCounter = collectTopicCounter()
+  @transient var seed = new XORShiftRandom().nextInt()
+  @transient var totalTopicCounter = collectTopicCounter()
 
   def setAlpha(alpha: Double): this.type = {
     this.alpha = alpha
@@ -95,14 +95,16 @@ class LDA(@transient private var corpus: Graph[TC, TA],
     val pplx = scConf.getBoolean(cs_calcPerplexity, false)
     val saveIntv = scConf.getInt(cs_saveInterval, 0)
     if (pplx) {
-      println(s"Before Gibbs sampling: perplexity=${perplexity()}")
+      val perplexity = LDAMetrics.perplexity(this)
+      println(s"Before Gibbs sampling: perplexity=$perplexity")
     }
     for (iter <- 1 to totalIter) {
       println(s"Start Gibbs sampling (Iteration $iter/$totalIter)")
       val startedAt = System.nanoTime()
       gibbsSampling(iter)
       if (pplx) {
-        println(s"Gibbs sampling (Iteration $iter/$totalIter): perplexity=${perplexity()}")
+        val perplexity = LDAMetrics.perplexity(this)
+        println(s"Gibbs sampling (Iteration $iter/$totalIter): perplexity=$perplexity")
       }
       if (saveIntv > 0 && iter % saveIntv == 0) {
         val model = toLDAModel()
@@ -126,7 +128,7 @@ class LDA(@transient private var corpus: Graph[TC, TA],
     sampledCorpus.vertices.setName(s"sampledVertices-$sampIter")
 
     val newVerts = updateVertexCounters(sampledCorpus, numTopics, inferenceOnly)
-    corpus = refreshEdgeAssociations(sampledCorpus.edges, newVerts, Option(sampledCorpus.vertices))
+    corpus = refreshEdgeAssociations(sampledCorpus, newVerts)
     if (chkptIntv > 0 && sampIter % chkptIntv == 1 && sc.getCheckpointDir.isDefined) {
       corpus.checkpoint()
     }
@@ -201,146 +203,9 @@ class LDA(@transient private var corpus: Graph[TC, TA],
         minMap.getOrElse(topic, topic))
       )
       val newVerts = updateVertexCounters(mergingCorpus, numTopics)
-      refreshEdgeAssociations(mergingCorpus.edges, newVerts, Option(mergingCorpus.vertices))
+      refreshEdgeAssociations(mergingCorpus, newVerts)
     }
     minMap
-  }
-
-  /**
-   * the multiplcation between word distribution among all topics and the corresponding doc
-   * distribution among all topics:
-   * p(w)=\sum_{k}{p(k|d)*p(w|k)}=
-   * \sum_{k}{\frac{{n}_{kw}+{\beta }_{w}} {{n}_{k}+\bar{\beta }} \frac{{n}_{kd}+{\alpha }_{k}}{\sum{{n}_{k}}+
-   * \bar{\alpha }}}=
-   * \sum_{k} \frac{{\alpha }_{k}{\beta }_{w}  + {n}_{kw}{\alpha }_{k} + {n}_{kd}{\beta }_{w} + {n}_{kw}{n}_{kd}}
-   * {{n}_{k}+\bar{\beta }} \frac{1}{\sum{{n}_{k}}+\bar{\alpha }}}
-   * \exp^{-(\sum{\log(p(w))})/N}
-   * N is the number of tokens in corpus
-   */
-  def perplexity(): Double = {
-    val tCounter = this.totalTopicCounter
-    val numTokens = this.numTokens
-    val alphaAS = this.alphaAS
-    val alphaSum = this.numTopics * this.alpha
-    val alphaRatio = alphaSum / (numTokens + alphaAS * this.numTopics)
-    val beta = this.beta
-    val betaSum = this.numTerms * beta
-
-    val graph = corpus.asInstanceOf[GraphImpl[TC, TA]]
-    val vertices = graph.vertices
-    val edges = graph.edges
-    val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
-
-    // \frac{{\alpha }_{k}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
-    val tDenseSum = tCounter.valuesIterator.map(cnt =>
-      beta * alphaRatio * (cnt + alphaAS) / (cnt + betaSum)
-    ).sum
-
-    val cacheSvps = vertices.partitionsRDD.mapPartitions(_.map(svp => {
-      val totalSize = svp.capacity
-      val newValues = new Array[(TC, Double, Int)](totalSize)
-      val sizePerThrd = {
-        val npt = totalSize / numThreads
-        if (npt * numThreads == totalSize) npt else npt + 1
-      }
-      val doneSignal = new CountDownLatch(numThreads)
-      val threads = new Array[Thread](numThreads)
-      for (threadId <- threads.indices) {
-        threads(threadId) = new Thread(new Runnable {
-          val startPos = sizePerThrd * threadId
-          val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
-
-          override def run(): Unit = {
-            val logger: Logger = Logger.getLogger(this.getClass.getName)
-            val mask = svp.mask
-            val index = svp.index
-            val values = svp.values
-            try {
-              var i = mask.nextSetBit(startPos)
-              while (i < endPos && i >= 0) {
-                val vid = index.getValue(i)
-                assert(vid != null)
-                val counter = values(i)
-                assert(counter != null)
-                val pSum = counter.activeIterator.map {
-                  case (topic, cnt) =>
-                    if (isDocId(vid)) {
-                      cnt * beta / (tCounter(topic) + betaSum)
-                    } else {
-                      cnt * alphaRatio * (tCounter(topic) + alphaAS) / (tCounter(topic) + betaSum)
-                    }
-                }.sum
-                val cSum = if (isDocId(vid)) brzSum(counter) else 0
-                newValues(i) = (counter, pSum, cSum)
-                i = mask.nextSetBit(i + 1)
-              }
-            } catch {
-              case e: Exception => logger.error(e.getLocalizedMessage, e)
-            } finally {
-              doneSignal.countDown()
-            }
-          }
-        }, s"preComputing thread $threadId")
-      }
-      threads.foreach(_.start())
-      doneSignal.await()
-      svp.withValues(newValues)
-    }), preservesPartitioning=true)
-    val newVerts = vertices.withPartitionsRDD(cacheSvps)
-    val cachedGraph = refreshEdgeAssociations(edges, newVerts, None)
-    val pplxEdges = cachedGraph.edges.partitionsRDD.mapPartitions(_.map(t => {
-      val ep = t._2
-      val totalSize = ep.size
-      val sizePerThrd = {
-        val npt = totalSize / numThreads
-        if (npt * numThreads == totalSize) npt else npt + 1
-      }
-      val sums = new Array[Double](numThreads)
-      val doneSignal = new CountDownLatch(numThreads)
-      val threads = new Array[Thread](numThreads)
-      for (threadId <- threads.indices) {
-        threads(threadId) = new Thread(new Runnable {
-          val thid = threadId
-          val startPos = sizePerThrd * threadId
-          val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
-
-          override def run(): Unit = {
-            val logger: Logger = Logger.getLogger(this.getClass.getName)
-            val lcSrcIds = ep.localSrcIds
-            val lcDstIds = ep.localDstIds
-            val vattrs = ep.vertexAttrs
-            val audit = vattrs.count(_ != null)
-            logger.info(s"len(vattrs)=${vattrs.length}, not null=$audit")
-            val data = ep.data
-            try {
-              for (i <- startPos until endPos) {
-                val (termTopicCounter, wSparseSum, _) = vattrs(lcSrcIds(i))
-                val (docTopicCounter, dSparseSum, docSize) = vattrs(lcDstIds(i))
-                val occurs = data(i).length
-
-                // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
-                val dwSparseSum = docTopicCounter.activeIterator.map {
-                  case (topic, cnt) => cnt * termTopicCounter(topic) / (tCounter(topic) + betaSum)
-                }.sum
-                val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alphaSum)
-
-                sums(thid) += Math.log(prob) * occurs
-              }
-            } catch {
-              case e: Exception => logger.error(e.getLocalizedMessage, e)
-            } finally {
-              doneSignal.countDown()
-            }
-          }
-        }, s"perplexity thread $threadId")
-      }
-      threads.foreach(_.start())
-      doneSignal.await()
-      sums.sum
-    }), preservesPartitioning=true)
-
-    val termProb = pplxEdges.sum()
-    math.exp(-1 * termProb / numTokens)
   }
 }
 
@@ -469,7 +334,7 @@ object LDA {
     }
     partCorpus.persist(storageLevel)
     val newVerts = updateVertexCounters(partCorpus, numTopics)
-    val corpus = refreshEdgeAssociations(partCorpus.edges, newVerts, None)
+    val corpus = refreshEdgeAssociations(partCorpus, newVerts)
     corpus.persist(storageLevel)
     corpus.vertices.setName("vertices-0").count()
     val numEdges = corpus.edges.setName("edges-0").count()
@@ -496,16 +361,6 @@ object LDA {
     }
   }
 
-  // make docId always be negative, so that the doc vertex always be the dest vertex
-  @inline private def genNewDocId(docId: Long): Long = {
-    assert(docId >= 0)
-    -(docId + 1L)
-  }
-
-  @inline private[ml] def isDocId(id: Long): Boolean = id < 0L
-
-  @inline private[ml] def isTermId(id: Long): Boolean = id >= 0L
-
   private def updateVertexCounters(corpus: Graph[TC, TA],
     numTopics: Int,
     inferenceOnly: Boolean = false): VertexRDD[TC] = {
@@ -522,10 +377,15 @@ object LDA {
       }
       val vattrs = ep.vertexAttrs
       val results = if (inferenceOnly) {
-        for ((_, lcSrdId) <- ep.global2local.iterator.filter(t => isDocId(t._1))) {
-          vattrs(lcSrdId) = BSV.zeros[Count](numTopics)
+        val newVattrs = new Array[TC](vattrs.length)
+        for ((vid, lcId) <- ep.global2local.iterator) {
+          if (isDocId(vid)) {
+            newVattrs(lcId) = BSV.zeros[Count](numTopics)
+          } else {
+            newVattrs(lcId) = vattrs(lcId)
+          }
         }
-        vattrs
+        newVattrs
       } else {
         vattrs.map(_ => BSV.zeros[Count](numTopics))
       }
@@ -538,7 +398,7 @@ object LDA {
           val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
 
           override def run(): Unit = {
-            val logger: Logger = Logger.getLogger(this.getClass.getName)
+            val logger = Logger.getLogger(this.getClass.getName)
             val lcSrcIds = ep.localSrcIds
             val lcDstIds = ep.localDstIds
             val data = ep.data
@@ -596,7 +456,7 @@ object LDA {
         for (threadId <- threads.indices) {
           threads(threadId) = new Thread(new Runnable {
             override def run(): Unit = {
-              val logger: Logger = Logger.getLogger(this.getClass.getName)
+              val logger = Logger.getLogger(this.getClass.getName)
               val index = svp.index
               try {
                 var t: (VertexId, TC) = null
@@ -634,21 +494,23 @@ object LDA {
     vertices.withPartitionsRDD(newSvps)
   }
 
-  def refreshEdgeAssociations[VD: ClassTag, ED: ClassTag](prevEdges: EdgeRDD[ED],
-    newVerts: VertexRDD[VD],
-    prevVerts: Option[VertexRDD[VD]]): GraphImpl[VD, ED] = {
-    val edges = prevEdges.asInstanceOf[EdgeRDDImpl[ED, _]]
+  def refreshEdgeAssociations[VD: ClassTag, ED: ClassTag, VD2: ClassTag](graph: Graph[VD, ED],
+    newVerts: VertexRDD[VD2])(implicit eq: VD =:= VD2 = null): GraphImpl[VD2, ED] = {
+    val pg = graph.asInstanceOf[GraphImpl[VD, ED]]
+    val vertices = pg.vertices
+    val edges = pg.edges
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
-    val changedVerts = prevVerts match {
-      case Some(pv) => pv.diff(newVerts)
-      case None => newVerts
+    val changedVerts = if (eq != null) {
+      vertices.asInstanceOf[VertexRDD[VD2]].diff(newVerts)
+    } else {
+      newVerts
     }
     val shippedVerts = changedVerts.partitionsRDD.mapPartitions(_.flatMap(svp => {
       val rt = svp.routingTable
       Iterator.tabulate(rt.numEdgePartitions)(pid => {
         val initialSize = rt.partitionSize(pid)
         val vids = new GraphXPrimitiveVector[VertexId](initialSize)
-        val attrs = new GraphXPrimitiveVector[VD](initialSize)
+        val attrs = new GraphXPrimitiveVector[VD2](initialSize)
         rt.foreachWithinEdgePartition(pid, includeSrc=true, includeDst=true)(vid => {
           if (svp.isDefined(vid)) {
             vids += vid
@@ -661,16 +523,16 @@ object LDA {
     val newEps = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
       (epIter, vabsIter) => epIter.map {
         case (pid, ep) =>
-          val results = new Array[VD](ep.vertexAttrs.length)
+          val results = new Array[VD2](ep.vertexAttrs.length)
           val g2l = ep.global2local
           val doneSignal = new CountDownLatch(numThreads)
           val threads = new Array[Thread](numThreads)
           for (threadId <- threads.indices) {
             threads(threadId) = new Thread(new Runnable {
               override def run(): Unit = {
-                val logger: Logger = Logger.getLogger(this.getClass.getName)
+                val logger = Logger.getLogger(this.getClass.getName)
                 try {
-                  var t: (PartitionID, VertexAttributeBlock[VD]) = null
+                  var t: (PartitionID, VertexAttributeBlock[VD2]) = null
                   var isOver = false
                   while (!isOver) {
                     vabsIter.synchronized {
@@ -697,6 +559,8 @@ object LDA {
           }
           threads.foreach(_.start())
           doneSignal.await()
+          val audit = results.count(_ != null)
+          assert(audit == results.length, s"$audit, ${results.length}")
           val newEp = new EdgePartition(ep.localSrcIds, ep.localDstIds, ep.data, ep.index, g2l,
             ep.local2global, results, ep.activeSet)
           (pid, newEp)

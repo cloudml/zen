@@ -92,6 +92,7 @@ class FastLDA extends LDAAlgorithm {
         val npt = totalSize / numThreads
         if (npt * numThreads == totalSize) npt else npt + 1
       }
+      val data = ep.data
       val doneSignal = new CountDownLatch(numThreads)
       val threads = new Array[Thread](numThreads)
       for (threadId <- threads.indices) {
@@ -101,11 +102,10 @@ class FastLDA extends LDAAlgorithm {
           val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
 
           override def run(): Unit = {
-            val logger: Logger = Logger.getLogger(this.getClass.getName)
+            val logger = Logger.getLogger(this.getClass.getName)
             val lcSrcIds = ep.localSrcIds
             val lcDstIds = ep.localDstIds
             val vattrs = ep.vertexAttrs
-            val data = ep.data
             try {
               // table/ftree is a per term data structure
               // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
@@ -152,7 +152,7 @@ class FastLDA extends LDAAlgorithm {
       }
       threads.foreach(_.start())
       doneSignal.await()
-      ep
+      ep.withData(data)
     })
     GraphImpl.fromExistingRDDs(vertices, newEdges)
   }
@@ -311,16 +311,7 @@ class LightLDA extends LDAAlgorithm {
 
             val newTopic = tokenSampling(gen, docTopicCounter, termTopicCounter, docProposal,
               currentTopic, proposalTopic, q, p)
-            assert(newTopic >= 0 && newTopic < numTopics)
-            if (newTopic != currentTopic) {
-              topics(i) = newTopic
-              docTopicCounter(currentTopic) -= 1
-              docTopicCounter(newTopic) += 1
-              termTopicCounter(currentTopic) -= 1
-              termTopicCounter(newTopic) += 1
-              totalTopicCounter(currentTopic) -= 1
-              totalTopicCounter(newTopic) += 1
-            }
+            topics(i) = newTopic
           }
         }
         topics
