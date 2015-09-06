@@ -443,7 +443,7 @@ object LDA {
             val startPos = sizePerThrd * threadId
             val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
             val lcSrcIds = ep.localSrcIds
-            val lcDstIds = ep.localSrcIds
+            val lcDstIds = ep.localDstIds
             val data = ep.data
             try {
               for (i <- startPos until endPos) {
@@ -499,8 +499,8 @@ object LDA {
                   }
                   if (t != null) {
                     val (vid, counter) = t
-                    val pos = svp.index.getPos(vid)
-                    newValues(pos) :+= counter
+                    val agg = newValues(index.getPos(vid))
+                    agg.synchronized { agg :+= counter}
                   }
                 }
               } catch {
