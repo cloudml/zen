@@ -31,7 +31,7 @@ import org.apache.spark.util.collection.AppendOnlyMap
 
 
 abstract class LDAAlgorithm extends Serializable {
-  private[ml] def sampleGraph(corpus: Graph[VD, ED],
+  private[ml] def sampleGraph(corpus: Graph[TC, TA],
     totalTopicCounter: BDV[Count],
     seed: Int,
     numTokens: Long,
@@ -39,11 +39,11 @@ abstract class LDAAlgorithm extends Serializable {
     numTerms: Int,
     alpha: Double,
     alphaAS: Double,
-    beta: Double): Graph[VD, ED]
+    beta: Double): Graph[TC, TA]
 
   private[ml] def sampleSV(gen: Random,
     table: AliasTable[Double],
-    sv: VD,
+    sv: TC,
     currentTopic: Int,
     currentTopicCounter: Int = 0,
     numSampling: Int = 0): Int = {
@@ -64,7 +64,7 @@ abstract class LDAAlgorithm extends Serializable {
 }
 
 class FastLDA extends LDAAlgorithm {
-  override private[ml] def sampleGraph(corpus: Graph[VD, ED],
+  override private[ml] def sampleGraph(corpus: Graph[TC, TA],
     totalTopicCounter: BDV[Count],
     seed: Int,
     numTokens: Long,
@@ -72,13 +72,13 @@ class FastLDA extends LDAAlgorithm {
     numTerms: Int,
     alpha: Double,
     alphaAS: Double,
-    beta: Double): Graph[VD, ED] = {
-    val conf = corpus.edges.context.getConf
+    beta: Double): GraphImpl[TC, TA] = {
+    val graph = corpus.asInstanceOf[GraphImpl[TC, TA]]
+    val vertices = graph.vertices
+    val edges = graph.edges
+    val conf = edges.context.getConf
     val numThreads = conf.getInt(cs_numThreads, 1)
     val sampl = conf.get(cs_accelMethod, "alias")
-    val graph = corpus.asInstanceOf[GraphImpl[VD, ED]]
-    val vertices = graph.vertices
-    val edges = graph.replicatedVertexView.edges
     val numPartitions = edges.partitions.length
     val newEdges = edges.mapEdgePartitions((pid, ep) => {
       val alphaRatio = alpha * numTopics / (numTokens - 1 + alphaAS * numTopics)
@@ -161,8 +161,8 @@ class FastLDA extends LDAAlgorithm {
     t: DiscreteSampler[Double],
     w: DiscreteSampler[Double],
     d: DiscreteSampler[Double],
-    termTopicCounter: VD,
-    docTopicCounter: VD,
+    termTopicCounter: TC,
+    docTopicCounter: TC,
     currentTopic: Int): Int = {
     val dSum = d.norm
     val dwSum = dSum + w.norm
@@ -200,7 +200,7 @@ class FastLDA extends LDAAlgorithm {
    */
   private[ml] def wSparse(w: DiscreteSampler[Double],
     itemRatio: Int => Double,
-    termTopicCounter: VD): DiscreteSampler[Double] = {
+    termTopicCounter: TC): DiscreteSampler[Double] = {
     val distIter = termTopicCounter.activeIterator.map {
       case (t, c) => (t, itemRatio(t) * c)
     }
@@ -215,8 +215,8 @@ class FastLDA extends LDAAlgorithm {
    */
   private[ml] def dSparse(d: DiscreteSampler[Double],
     totalTopicCounter: BDV[Count],
-    termTopicCounter: VD,
-    docTopicCounter: VD,
+    termTopicCounter: TC,
+    docTopicCounter: TC,
     beta: Double,
     betaSum: Double): DiscreteSampler[Double] = {
     val distIter = docTopicCounter.activeIterator.map {
@@ -227,7 +227,7 @@ class FastLDA extends LDAAlgorithm {
 }
 
 class LightLDA extends LDAAlgorithm {
-  override private[ml] def sampleGraph(corpus: Graph[VD, ED],
+  override private[ml] def sampleGraph(corpus: Graph[TC, TA],
     totalTopicCounter: BDV[Count],
     seed: Int,
     numTokens: Long,
@@ -235,7 +235,7 @@ class LightLDA extends LDAAlgorithm {
     numTerms: Int,
     alpha: Double,
     alphaAS: Double,
-    beta: Double): Graph[VD, ED] = {
+    beta: Double): Graph[TC, TA] = {
     val numPartitions = corpus.edges.partitions.length
     val sampledCorpus = corpus.mapTriplets((pid, iter) => {
       val gen = new XORShiftRandom(numPartitions * seed + pid)
@@ -349,13 +349,13 @@ class LightLDA extends LDAAlgorithm {
    * {n}_{k} is the number of tokens in corpus that belong to topic k
    */
   private[ml] def tokenSampling(gen: Random,
-    docTopicCounter: VD,
-    termTopicCounter: VD,
+    docTopicCounter: TC,
+    termTopicCounter: TC,
     docProposal: Boolean,
     currentTopic: Int,
     proposalTopic: Int,
-    q: (VD, Int, Boolean) => Double,
-    p: (VD, VD, Int, Boolean) => Double): Int = {
+    q: (TC, Int, Boolean) => Double,
+    p: (TC, TC, Int, Boolean) => Double): Int = {
     if (proposalTopic == currentTopic) return proposalTopic
     val cp = p(docTopicCounter, termTopicCounter, currentTopic, true)
     val np = p(docTopicCounter, termTopicCounter, proposalTopic, false)
@@ -373,8 +373,8 @@ class LightLDA extends LDAAlgorithm {
      alpha: Double,
      alphaAS: Double,
      numTokens: Long,
-     numTerms: Int)(docTopicCounter: VD,
-     termTopicCounter: VD,
+     numTerms: Int)(docTopicCounter: TC,
+     termTopicCounter: TC,
      topic: Int,
      isAdjustment: Boolean): Double = {
     val numTopics = docTopicCounter.length
@@ -397,14 +397,14 @@ class LightLDA extends LDAAlgorithm {
 
   private[ml] def wordProb(totalTopicCounter: BDV[Count],
     numTerms: Int,
-    beta: Double)(termTopicCounter: VD, topic: Int, isAdjustment: Boolean): Double = {
+    beta: Double)(termTopicCounter: TC, topic: Int, isAdjustment: Boolean): Double = {
     (termTopicCounter(topic) + beta) / (totalTopicCounter(topic) + beta * numTerms)
   }
 
   private[ml] def docProb(totalTopicCounter: BDV[Count],
     alpha: Double,
     alphaAS: Double,
-    numTokens: Long)(docTopicCounter: VD, topic: Int, isAdjustment: Boolean): Double = {
+    numTokens: Long)(docTopicCounter: TC, topic: Int, isAdjustment: Boolean): Double = {
     val adjustment = if (isAdjustment) -1 else 0
     val numTopics = totalTopicCounter.length
     val ratio = (totalTopicCounter(topic) + alphaAS) / (numTokens - 1 + alphaAS * numTopics)
@@ -416,7 +416,7 @@ class LightLDA extends LDAAlgorithm {
    * \frac{{n}_{kw}}{{n}_{k}+\bar{\beta}}
    */
   private[ml] def wSparse(totalTopicCounter: BDV[Count],
-    termTopicCounter: VD,
+    termTopicCounter: TC,
     numTerms: Int,
     beta: Double): (Double, BV[Double]) = {
     val numTopics = termTopicCounter.length
@@ -453,7 +453,7 @@ class LightLDA extends LDAAlgorithm {
     (sum, t)
   }
 
-  private[ml] def dSparse(docTopicCounter: VD): (Double, BV[Double]) = {
+  private[ml] def dSparse(docTopicCounter: TC): (Double, BV[Double]) = {
     val numTopics = docTopicCounter.length
     val d = BSV.zeros[Double](numTopics)
     var sum = 0D
@@ -488,7 +488,7 @@ class LightLDA extends LDAAlgorithm {
 
   private[ml] def docTable(updateFunc: SoftReference[(Double, AliasTable[Double])] => Boolean,
     cacheMap: AppendOnlyMap[VertexId, SoftReference[(Double, AliasTable[Double])]],
-    docTopicCounter: VD,
+    docTopicCounter: TC,
     docId: VertexId): (Double, AliasTable[Double]) = {
     val cacheD = cacheMap(docId)
     if (!updateFunc(cacheD)) {
@@ -505,7 +505,7 @@ class LightLDA extends LDAAlgorithm {
 
   private[ml] def wordTable(table: AliasTable[Double],
     totalTopicCounter: BDV[Count],
-    termTopicCounter: VD,
+    termTopicCounter: TC,
     termId: VertexId,
     numTerms: Int,
     beta: Double): Double = {

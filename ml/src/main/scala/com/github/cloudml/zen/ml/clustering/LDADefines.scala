@@ -30,8 +30,8 @@ object LDADefines {
   type DocId = VertexId
   type WordId = VertexId
   type Count = Int
-  type ED = Array[Int]
-  type VD = BSV[Count]
+  type TC = BSV[Count]
+  type TA = Array[Int]
   type BOW = (Long, BSV[Count])
 
   val sv_formatVersionV1_0 = "1.0"
@@ -63,7 +63,7 @@ object LDADefines {
   }
 
   def registerKryoClasses(conf: SparkConf): Unit = {
-    conf.registerKryoClasses(Array(classOf[VD], classOf[ED],
+    conf.registerKryoClasses(Array(classOf[TC], classOf[TA],
       classOf[BSV[Double]], classOf[BDV[Count]], classOf[BDV[Double]],
       classOf[BOW], classOf[Random], classOf[XORShiftRandom],
       classOf[LDA], classOf[LocalLDAModel], classOf[DistributedLDAModel],

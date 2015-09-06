@@ -161,7 +161,7 @@ class LocalLDAModel(@transient val termTopicCounters: Array[BSV[Count]],
   }
 }
 
-class DistributedLDAModel(@transient val termTopicCounters: RDD[(VertexId, VD)],
+class DistributedLDAModel(@transient val termTopicCounters: RDD[(VertexId, TC)],
   val numTopics: Int,
   val numTerms: Int,
   val numTokens: Long,
