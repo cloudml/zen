@@ -73,7 +73,7 @@ class FastLDA extends LDAAlgorithm {
     alpha: Double,
     alphaAS: Double,
     beta: Double): GraphImpl[TC, TA] = {
-    val graph = corpus.asInstanceOf[GraphImpl[TC, TA]]
+    val graph = refreshEdgeAssociations(corpus)
     val vertices = graph.vertices
     val edges = graph.edges
     val conf = edges.context.getConf

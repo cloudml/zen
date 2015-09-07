@@ -20,7 +20,6 @@ package com.github.cloudml.zen.ml.clustering
 import java.util.Random
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicIntegerArray
-import scala.reflect.ClassTag
 
 import LDA._
 import LDADefines._
@@ -29,8 +28,7 @@ import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
 import org.apache.log4j.Logger
 import org.apache.spark.graphx2._
-import org.apache.spark.graphx2.impl.{EdgeRDDImpl, EdgePartition, VertexAttributeBlock, GraphImpl}
-import org.apache.spark.graphx2.util.collection.GraphXPrimitiveVector
+import org.apache.spark.graphx2.impl.GraphImpl
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
 import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
 import org.apache.spark.rdd.RDD
@@ -128,8 +126,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
     sampledCorpus.edges.setName(s"sampledEdges-$sampIter")
     sampledCorpus.vertices.setName(s"sampledVertices-$sampIter")
 
-    val newVerts = updateVertexCounters(sampledCorpus, numTopics, inferenceOnly)
-    corpus = refreshEdgeAssociations(sampledCorpus.edges, newVerts)
+    corpus = updateVertexCounters(sampledCorpus, numTopics, inferenceOnly)
     if (chkptIntv > 0 && sampIter % chkptIntv == 1 && sc.getCheckpointDir.isDefined) {
       corpus.checkpoint()
     }
@@ -203,8 +200,6 @@ class LDA(@transient var corpus: Graph[TC, TA],
       val mergingCorpus = corpus.mapEdges(_.attr.map(topic =>
         minMap.getOrElse(topic, topic))
       )
-      val newVerts = updateVertexCounters(mergingCorpus, numTopics)
-      refreshEdgeAssociations(mergingCorpus.edges, newVerts)
     }
     minMap
   }
@@ -334,8 +329,7 @@ object LDA {
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     partCorpus.persist(storageLevel)
-    val newVerts = updateVertexCounters(partCorpus, numTopics)
-    val corpus = refreshEdgeAssociations(partCorpus.edges, newVerts)
+    val corpus = updateVertexCounters(partCorpus, numTopics)
     corpus.persist(storageLevel)
     corpus.vertices.setName("vertices-0").count()
     val numEdges = corpus.edges.setName("edges-0").count()
@@ -364,7 +358,7 @@ object LDA {
 
   private def updateVertexCounters(corpus: Graph[TC, TA],
     numTopics: Int,
-    inferenceOnly: Boolean = false): VertexRDD[TC] = {
+    inferenceOnly: Boolean = false): GraphImpl[TC, TA] = {
     val graph = corpus.asInstanceOf[GraphImpl[TC, TA]]
     val vertices = graph.vertices
     val edges = graph.edges
@@ -516,74 +510,6 @@ object LDA {
         svp.withValues(results)
       })
     )
-    vertices.withPartitionsRDD(partRDD)
-  }
-
-  def refreshEdgeAssociations[VD: ClassTag, ED: ClassTag](prevEdges: EdgeRDD[ED],
-    newVerts: VertexRDD[VD]): GraphImpl[VD, ED] = {
-    val edges = prevEdges.asInstanceOf[EdgeRDDImpl[ED, _]]
-    val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
-    val shippedVerts = newVerts.partitionsRDD.mapPartitions(_.flatMap(svp => {
-      val rt = svp.routingTable
-      Iterator.tabulate(rt.numEdgePartitions)(pid => {
-        val initialSize = rt.partitionSize(pid)
-        val vids = new GraphXPrimitiveVector[VertexId](initialSize)
-        val attrs = new GraphXPrimitiveVector[VD](initialSize)
-        rt.foreachWithinEdgePartition(pid, includeSrc=true, includeDst=true)(vid => {
-          if (svp.isDefined(vid)) {
-            vids += vid
-            attrs += svp(vid)
-          }
-        })
-        (pid, new VertexAttributeBlock(vids.trim().array, attrs.trim().array))
-      })
-    })).partitionBy(edges.partitioner.get)
-
-    val partRDD = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
-      (epIter, vabsIter) => epIter.map {
-        case (pid, ep) =>
-          val vattrs = ep.vertexAttrs
-          val g2l = ep.global2local
-          val results = new Array[VD](vattrs.length)
-          val doneSignal = new CountDownLatch(numThreads)
-          val threads = new Array[Thread](numThreads)
-          for (threadId <- threads.indices) {
-            threads(threadId) = new Thread(new Runnable {
-              override def run(): Unit = {
-                val logger = Logger.getLogger(this.getClass.getName)
-                try {
-                  var t: (PartitionID, VertexAttributeBlock[VD]) = null
-                  var isOver = false
-                  while (!isOver) {
-                    vabsIter.synchronized {
-                      t = if (vabsIter.hasNext) {
-                        vabsIter.next()
-                      } else {
-                        isOver = true
-                        null
-                      }
-                    }
-                    if (t != null) {
-                      for ((vid, vdata) <- t._2.iterator) {
-                        results(g2l(vid)) = vdata
-                      }
-                    }
-                  }
-                } catch {
-                  case e: Exception => logger.error(e.getLocalizedMessage, e)
-                } finally {
-                  doneSignal.countDown()
-                }
-              }
-            }, s"refreshEdges thread $threadId")
-          }
-          threads.foreach(_.start())
-          doneSignal.await()
-          val newEp = new EdgePartition(ep.localSrcIds, ep.localDstIds, ep.data, ep.index, g2l,
-            ep.local2global, results, ep.activeSet)
-          (pid, newEp)
-      }
-    )
-    GraphImpl.fromExistingRDDs(newVerts, edges.withPartitionsRDD(partRDD))
+    GraphImpl.fromExistingRDDs(vertices.withPartitionsRDD(partRDD), edges)
   }
 }

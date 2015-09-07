@@ -18,12 +18,17 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
+import java.util.concurrent.CountDownLatch
+import scala.reflect.ClassTag
 
 import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.{FTree, AliasTable, XORShiftRandom}
 import breeze.linalg.{SparseVector => BSV, DenseVector => BDV}
+import org.apache.log4j.Logger
 import org.apache.spark.SparkConf
 import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.impl._
+import org.apache.spark.graphx2.util.collection.GraphXPrimitiveVector
 
 
 object LDADefines {
@@ -81,5 +86,74 @@ object LDADefines {
       classOf[DBHPartitioner], classOf[VSDLPPartitioner], classOf[BBRPartitioner],
       classOf[AliasTable[Double]], classOf[AliasTable[Object]], classOf[FTree[Double]], classOf[FTree[Object]]
     ))
+  }
+
+  def refreshEdgeAssociations[VD: ClassTag, ED: ClassTag](graph: Graph[VD, ED]): GraphImpl[VD, ED] = {
+    val gimpl = graph.asInstanceOf[GraphImpl[VD, ED]]
+    val vertices = gimpl.vertices
+    val edges = gimpl.edges
+    val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
+    val shippedVerts = vertices.partitionsRDD.mapPartitions(_.flatMap(svp => {
+      val rt = svp.routingTable
+      Iterator.tabulate(rt.numEdgePartitions)(pid => {
+        val initialSize = rt.partitionSize(pid)
+        val vids = new GraphXPrimitiveVector[VertexId](initialSize)
+        val attrs = new GraphXPrimitiveVector[VD](initialSize)
+        rt.foreachWithinEdgePartition(pid, includeSrc=true, includeDst=true)(vid => {
+          if (svp.isDefined(vid)) {
+            vids += vid
+            attrs += svp(vid)
+          }
+        })
+        (pid, new VertexAttributeBlock(vids.trim().array, attrs.trim().array))
+      })
+    })).partitionBy(edges.partitioner.get)
+
+    val partRDD = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
+      (epIter, vabsIter) => epIter.map {
+        case (pid, ep) =>
+          val vattrs = ep.vertexAttrs
+          val g2l = ep.global2local
+          val results = new Array[VD](vattrs.length)
+          val doneSignal = new CountDownLatch(numThreads)
+          val threads = new Array[Thread](numThreads)
+          for (threadId <- threads.indices) {
+            threads(threadId) = new Thread(new Runnable {
+              override def run(): Unit = {
+                val logger = Logger.getLogger(this.getClass.getName)
+                try {
+                  var t: (PartitionID, VertexAttributeBlock[VD]) = null
+                  var isOver = false
+                  while (!isOver) {
+                    vabsIter.synchronized {
+                      t = if (vabsIter.hasNext) {
+                        vabsIter.next()
+                      } else {
+                        isOver = true
+                        null
+                      }
+                    }
+                    if (t != null) {
+                      for ((vid, vdata) <- t._2.iterator) {
+                        results(g2l(vid)) = vdata
+                      }
+                    }
+                  }
+                } catch {
+                  case e: Exception => logger.error(e.getLocalizedMessage, e)
+                } finally {
+                  doneSignal.countDown()
+                }
+              }
+            }, s"refreshEdges thread $threadId")
+          }
+          threads.foreach(_.start())
+          doneSignal.await()
+          val newEp = new EdgePartition(ep.localSrcIds, ep.localDstIds, ep.data, ep.index, g2l,
+            ep.local2global, results, ep.activeSet)
+          (pid, newEp)
+      }
+    )
+    GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
   }
 }

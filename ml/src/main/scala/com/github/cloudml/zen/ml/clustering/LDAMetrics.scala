@@ -19,11 +19,11 @@ package com.github.cloudml.zen.ml.clustering
 
 import java.util.concurrent.CountDownLatch
 
-import LDA._
 import LDADefines._
 import breeze.linalg.sum
 import org.apache.log4j.Logger
 import org.apache.spark.graphx2.impl.GraphImpl
+
 
 object LDAMetrics {
   /**
@@ -57,9 +57,9 @@ object LDAMetrics {
       beta * alphaRatio * (cnt + alphaAS) / (cnt + betaSum)
     ).sum
 
-    val newSvps = vertices.partitionsRDD.mapPartitions(_.map(svp => {
+    val partRDD = vertices.partitionsRDD.mapPartitions(_.map(svp => {
       val totalSize = svp.capacity
-      val newValues = new Array[(TC, Double, Int)](totalSize)
+      val results = new Array[(TC, Double, Int)](totalSize)
       val sizePerThrd = {
         val npt = totalSize / numThreads
         if (npt * numThreads == totalSize) npt else npt + 1
@@ -90,7 +90,7 @@ object LDAMetrics {
                     }
                 }.sum
                 val cSum = if (isDocId(vid)) sum(counter) else 0
-                newValues(i) = (counter, pSum, cSum)
+                results(i) = (counter, pSum, cSum)
                 i = mask.nextSetBit(i + 1)
               }
             } catch {
@@ -103,11 +103,12 @@ object LDAMetrics {
       }
       threads.foreach(_.start())
       doneSignal.await()
-      svp.withValues(newValues)
+      svp.withValues(results)
     }), preservesPartitioning=true)
-    val newVerts = vertices.withPartitionsRDD(newSvps)
-    val cachedGraph = refreshEdgeAssociations(graph, newVerts)
-    val pplxEdges = cachedGraph.edges.partitionsRDD.mapPartitions(_.map(t => {
+    val cachedGraph = GraphImpl.fromExistingRDDs(vertices.withPartitionsRDD(partRDD), edges)
+
+    val refrGraph = refreshEdgeAssociations(cachedGraph)
+    val llhRDD = refrGraph.edges.partitionsRDD.mapPartitions(_.map(t => {
       val ep = t._2
       val totalSize = ep.size
       val sizePerThrd = {
@@ -156,7 +157,7 @@ object LDAMetrics {
       sums.sum
     }), preservesPartitioning=true)
 
-    val termProb = pplxEdges.sum()
+    val termProb = llhRDD.sum()
     math.exp(-1 * termProb / numTokens)
   }
 }
