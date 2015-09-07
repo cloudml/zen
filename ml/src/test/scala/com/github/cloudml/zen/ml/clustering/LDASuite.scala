@@ -20,7 +20,7 @@ package com.github.cloudml.zen.ml.clustering
 import java.io.File
 import java.util.Random
 
-import com.github.cloudml.zen.ml.clustering.LDADefines._
+import LDADefines._
 import com.github.cloudml.zen.ml.util.SharedSparkContext
 import breeze.linalg.functions.euclideanDistance
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
@@ -33,54 +33,54 @@ class LDASuite extends FunSuite with SharedSparkContext {
 
   import LDASuite._
 
-//  test("FastLDA || Gibbs sampling") {
-//    val model = generateRandomLDAModel(numTopics, numTerms)
-//    val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
-//    sc.getConf.set(cs_numThreads, 4.toString)
-//
-//    val data = sc.parallelize(corpus, 2)
-//    data.cache()
-//    val pps = new Array[Double](incrementalLearning)
-//    val lda = LDA(data, numTopics, alpha, beta, alphaAS, new FastLDA, storageLevel)
-//    var i = 0
-//    val startedAt = System.currentTimeMillis()
-//    while (i < incrementalLearning) {
-//      lda.runGibbsSampling(totalIterations)
-//      pps(i) = lda.perplexity()
-//      i += 1
-//    }
-//
-//    println((System.currentTimeMillis() - startedAt) / 1e3)
-//    pps.foreach(println)
-//
-//    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
-//    assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
-//    assert(pps.head - pps.last > 0)
-//
-//    val ldaModel = lda.toLDAModel()
-//    val tempDir = Files.createTempDir()
-//    tempDir.deleteOnExit()
-//    val path = tempDir.toURI.toString + File.separator + "lda"
-//    ldaModel.save(sc, path, isTransposed = true)
-//    val sameModel = LDAModel.load(sc, path)
-//    assert(sameModel.toLocalLDAModel.termTopicCounters === ldaModel.toLocalLDAModel.termTopicCounters)
-//    assert(sameModel.alpha === ldaModel.alpha)
-//    assert(sameModel.beta === ldaModel.beta)
-//    assert(sameModel.alphaAS === ldaModel.alphaAS)
-//
-//    val localLdaModel = sameModel.toLocalLDAModel
-//    val tempDir2 = Files.createTempDir()
-//    tempDir2.deleteOnExit()
-//    val path2 = tempDir2.toString + File.separator + "lda.txt"
-//    localLdaModel.save(path2)
-//    val loadLdaModel = LDAModel.loadLocalLDAModel(path2)
-//
-//    assert(localLdaModel.termTopicCounters === loadLdaModel.termTopicCounters)
-//    assert(localLdaModel.alpha === loadLdaModel.alpha)
-//    assert(localLdaModel.beta === loadLdaModel.beta)
-//    assert(localLdaModel.alphaAS === loadLdaModel.alphaAS)
-//
-//  }
+  test("FastLDA || Gibbs sampling") {
+    val model = generateRandomLDAModel(numTopics, numTerms)
+    val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
+    sc.getConf.set(cs_numThreads, 4.toString)
+
+    val data = sc.parallelize(corpus, 2)
+    data.cache()
+    val pps = new Array[Double](incrementalLearning)
+    val lda = LDA(data, numTopics, alpha, beta, alphaAS, new FastLDA, storageLevel)
+    var i = 0
+    val startedAt = System.currentTimeMillis()
+    while (i < incrementalLearning) {
+      lda.runGibbsSampling(totalIterations)
+      pps(i) = LDAMetrics.perplexity(lda)
+      i += 1
+    }
+
+    println((System.currentTimeMillis() - startedAt) / 1e3)
+    pps.foreach(println)
+
+    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
+    assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
+    assert(pps.head - pps.last > 0)
+
+    val ldaModel = lda.toLDAModel()
+    val tempDir = Files.createTempDir()
+    tempDir.deleteOnExit()
+    val path = tempDir.toURI.toString + File.separator + "lda"
+    ldaModel.save(sc, path, isTransposed = true)
+    val sameModel = LDAModel.load(sc, path)
+    assert(sameModel.toLocalLDAModel.termTopicCounters === ldaModel.toLocalLDAModel.termTopicCounters)
+    assert(sameModel.alpha === ldaModel.alpha)
+    assert(sameModel.beta === ldaModel.beta)
+    assert(sameModel.alphaAS === ldaModel.alphaAS)
+
+    val localLdaModel = sameModel.toLocalLDAModel
+    val tempDir2 = Files.createTempDir()
+    tempDir2.deleteOnExit()
+    val path2 = tempDir2.toString + File.separator + "lda.txt"
+    localLdaModel.save(path2)
+    val loadLdaModel = LDAModel.loadLocalLDAModel(path2)
+
+    assert(localLdaModel.termTopicCounters === loadLdaModel.termTopicCounters)
+    assert(localLdaModel.alpha === loadLdaModel.alpha)
+    assert(localLdaModel.beta === loadLdaModel.beta)
+    assert(localLdaModel.alphaAS === loadLdaModel.alphaAS)
+
+  }
 
   test("LightLDA || Metropolis Hasting sampling") {
     val model = generateRandomLDAModel(numTopics, numTerms)
@@ -116,9 +116,9 @@ class LDASuite extends FunSuite with SharedSparkContext {
 }
 
 object LDASuite {
-  val numTopics = 5
+  val numTopics = 50
   val numTerms = 1000
-  val numDocs = 100
+  val numDocs = 1000
   val expectedDocLength = 300
   val alpha = 0.01
   val alphaAS = 1D

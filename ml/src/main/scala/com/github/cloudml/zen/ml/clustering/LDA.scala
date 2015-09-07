@@ -519,12 +519,17 @@ object LDA {
         })
         (pid, new VertexAttributeBlock(vids.trim().array, attrs.trim().array))
       })
-    }), preservesPartitioning=true).partitionBy(edges.partitioner.get)
+    })).partitionBy(edges.partitioner.get)
     val newEps = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
       (epIter, vabsIter) => epIter.map {
         case (pid, ep) =>
-          val results = new Array[VD2](ep.vertexAttrs.length)
+          val vattrs = ep.vertexAttrs
           val g2l = ep.global2local
+          val results = if (eq != null) {
+            vattrs.asInstanceOf[Array[VD2]]
+          } else {
+            new Array[VD2](vattrs.length)
+          }
           val doneSignal = new CountDownLatch(numThreads)
           val threads = new Array[Thread](numThreads)
           for (threadId <- threads.indices) {
@@ -559,8 +564,6 @@ object LDA {
           }
           threads.foreach(_.start())
           doneSignal.await()
-          val audit = results.count(_ != null)
-          assert(audit == results.length, s"$audit, ${results.length}")
           val newEp = new EdgePartition(ep.localSrcIds, ep.localDstIds, ep.data, ep.index, g2l,
             ep.local2global, results, ep.activeSet)
           (pid, newEp)
