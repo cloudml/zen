@@ -122,21 +122,15 @@ class LDA(@transient var corpus: Graph[TC, TA],
     val prevCorpus = corpus
     val sampledCorpus = algo.sampleGraph(corpus, totalTopicCounter, sampIter + seed,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
-    sampledCorpus.persist(storageLevel)
-    sampledCorpus.edges.setName(s"sampledEdges-$sampIter")
-    sampledCorpus.vertices.setName(s"sampledVertices-$sampIter")
-
     corpus = updateVertexCounters(sampledCorpus, numTopics, inferenceOnly)
     if (chkptIntv > 0 && sampIter % chkptIntv == 1 && sc.getCheckpointDir.isDefined) {
       corpus.checkpoint()
     }
     corpus.persist(storageLevel)
     corpus.edges.setName(s"edges-$sampIter").count()
-    corpus.vertices.setName(s"vertices-$sampIter").count()
+    corpus.vertices.setName(s"vertices-$sampIter")
     totalTopicCounter = collectTopicCounter()
-
     prevCorpus.unpersist(blocking=false)
-    sampledCorpus.unpersist(blocking=false)
   }
 
   /**

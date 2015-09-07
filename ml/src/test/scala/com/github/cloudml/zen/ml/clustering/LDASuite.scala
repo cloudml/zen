@@ -36,7 +36,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
   test("FastLDA || Gibbs sampling") {
     val model = generateRandomLDAModel(numTopics, numTerms)
     val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
-    sc.getConf.set(cs_numThreads, 4.toString)
+    sc.getConf.set(cs_numThreads, "4")
 
     val data = sc.parallelize(corpus, 2)
     data.cache()
@@ -116,9 +116,9 @@ class LDASuite extends FunSuite with SharedSparkContext {
 }
 
 object LDASuite {
-  val numTopics = 50
+  val numTopics = 10
   val numTerms = 1000
-  val numDocs = 1000
+  val numDocs = 500
   val expectedDocLength = 300
   val alpha = 0.01
   val alphaAS = 1D

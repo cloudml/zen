@@ -95,18 +95,46 @@ object LDADefines {
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
     val shippedVerts = vertices.partitionsRDD.mapPartitions(_.flatMap(svp => {
       val rt = svp.routingTable
-      Iterator.tabulate(rt.numEdgePartitions)(pid => {
-        val initialSize = rt.partitionSize(pid)
-        val vids = new GraphXPrimitiveVector[VertexId](initialSize)
-        val attrs = new GraphXPrimitiveVector[VD](initialSize)
-        rt.foreachWithinEdgePartition(pid, includeSrc=true, includeDst=true)(vid => {
-          if (svp.isDefined(vid)) {
-            vids += vid
-            attrs += svp(vid)
+      val totalSize = rt.numEdgePartitions
+      val results = new Array[(PartitionID, VertexAttributeBlock[VD])](totalSize)
+      val sizePerThrd = {
+        val npt = totalSize / numThreads
+        if (npt * numThreads == totalSize) npt else npt + 1
+      }
+      val doneSignal = new CountDownLatch(numThreads)
+      val threads = new Array[Thread](numThreads)
+      for (threadId <- threads.indices) {
+        threads(threadId) = new Thread(new Runnable {
+          val startPos = sizePerThrd * threadId
+          val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
+
+          override def run(): Unit = {
+            val logger = Logger.getLogger(this.getClass.getName)
+            try {
+              for (i <- startPos until endPos) {
+                val initialSize = rt.partitionSize(i)
+                val vids = new GraphXPrimitiveVector[VertexId](initialSize)
+                val attrs = new GraphXPrimitiveVector[VD](initialSize)
+                rt.foreachWithinEdgePartition(i, includeSrc = true, includeDst = true)(vid => {
+                  if (svp.isDefined(vid)) {
+                    vids += vid
+                    attrs += svp(vid)
+                  }
+                })
+                val vab = new VertexAttributeBlock(vids.trim().array, attrs.trim().array)
+                results(i) = (i, vab)
+              }
+            } catch {
+              case e: Exception => logger.error(e.getLocalizedMessage, e)
+            } finally {
+              doneSignal.countDown()
+            }
           }
-        })
-        (pid, new VertexAttributeBlock(vids.trim().array, attrs.trim().array))
-      })
+        }, s"shipVertAttrs thread $threadId")
+      }
+      threads.foreach(_.start())
+      doneSignal.await()
+      results
     })).partitionBy(edges.partitioner.get)
 
     val partRDD = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
