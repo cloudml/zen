@@ -134,7 +134,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
     }
     corpus.persist(storageLevel)
     corpus.edges.setName(s"edges-$sampIter").count()
-    corpus.vertices.setName(s"vertices-$sampIter")
+    corpus.vertices.setName(s"vertices-$sampIter").count()
     totalTopicCounter = collectTopicCounter()
 
     prevCorpus.unpersist(blocking=false)
@@ -560,7 +560,7 @@ object LDA {
                   doneSignal.countDown()
                 }
               }
-            }, s"updateVertices thread $threadId")
+            }, s"refreshEdges thread $threadId")
           }
           threads.foreach(_.start())
           doneSignal.await()
