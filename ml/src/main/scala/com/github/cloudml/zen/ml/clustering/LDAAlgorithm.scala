@@ -154,7 +154,7 @@ class FastLDA extends LDAAlgorithm {
       doneSignal.await()
       ep.withData(data)
     })
-    GraphImpl.fromExistingRDDs(vertices, newEdges)
+    GraphImpl(vertices, newEdges)
   }
 
   private[ml] def tokenSampling(gen: Random,
