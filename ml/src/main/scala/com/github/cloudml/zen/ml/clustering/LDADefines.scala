@@ -95,54 +95,23 @@ object LDADefines {
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
     val shippedVerts = vertices.partitionsRDD.mapPartitions(_.flatMap(svp => {
       val rt = svp.routingTable
-      val totalSize = rt.numEdgePartitions
-      val results = new Array[(PartitionID, VertexAttributeBlock[VD])](totalSize)
-      val sizePerThrd = {
-        val npt = totalSize / numThreads
-        if (npt * numThreads == totalSize) npt else npt + 1
-      }
-      val doneSignal = new CountDownLatch(numThreads)
-      val threads = new Array[Thread](numThreads)
-      for (threadId <- threads.indices) {
-        threads(threadId) = new Thread(new Runnable {
-          val startPos = sizePerThrd * threadId
-          val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
-
-          override def run(): Unit = {
-            val logger = Logger.getLogger(this.getClass.getName)
-            try {
-              for (i <- startPos until endPos) {
-                val initialSize = rt.partitionSize(i)
-                val vids = new GraphXPrimitiveVector[VertexId](initialSize)
-                val attrs = new GraphXPrimitiveVector[VD](initialSize)
-                rt.foreachWithinEdgePartition(i, includeSrc = true, includeDst = true)(vid => {
-                  if (svp.isDefined(vid)) {
-                    vids += vid
-                    attrs += svp(vid)
-                  }
-                })
-                val vab = new VertexAttributeBlock(vids.trim().array, attrs.trim().array)
-                results(i) = (i, vab)
-              }
-            } catch {
-              case e: Exception => logger.error(e.getLocalizedMessage, e)
-            } finally {
-              doneSignal.countDown()
-            }
+      Iterator.tabulate(rt.numEdgePartitions)(pid => {
+        val initialSize = rt.partitionSize(pid)
+        val vids = new GraphXPrimitiveVector[VertexId](initialSize)
+        val attrs = new GraphXPrimitiveVector[VD](initialSize)
+        rt.foreachWithinEdgePartition(pid, includeSrc=true, includeDst=true)(vid => {
+          if (svp.isDefined(vid)) {
+            vids += vid
+            attrs += svp(vid)
           }
-        }, s"shipVertAttrs thread $threadId")
-      }
-      threads.foreach(_.start())
-      doneSignal.await()
-      results
+        })
+        (pid, new VertexAttributeBlock(vids.trim().array, attrs.trim().array))
+      })
     })).partitionBy(edges.partitioner.get)
 
     val partRDD = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
       (epIter, vabsIter) => epIter.map {
         case (pid, ep) =>
-          val g2l = ep.global2local
-          val vertSize = ep.vertexAttrs.length
-          val results = new Array[VD](vertSize)
           val queue = new ConcurrentLinkedQueue[(PartitionID, VertexAttributeBlock[VD])]()
           val doneSignal = new CountDownLatch(numThreads)
           val threads = new Array[Thread](numThreads)
@@ -150,6 +119,8 @@ object LDADefines {
             threads(threadId) = new Thread(new Runnable {
               override def run(): Unit = {
                 val logger = Logger.getLogger(this.getClass.getName)
+                val vattrs = ep.vertexAttrs
+                val g2l = ep.global2local
                 var incomplete = true
                 try {
                   while (incomplete) {
@@ -162,7 +133,7 @@ object LDADefines {
                       incomplete = false
                     } else {
                       for ((vid, vdata) <- vab.iterator) {
-                        results(g2l(vid)) = vdata
+                        vattrs(g2l(vid)) = vdata
                       }
                     }
                   }
@@ -178,9 +149,7 @@ object LDADefines {
           vabsIter.foreach(queue.offer)
           Range(0, numThreads).foreach(thid => queue.offer((thid, null)))
           doneSignal.await()
-          val newEp = new EdgePartition(ep.localSrcIds, ep.localDstIds, ep.data, ep.index, g2l,
-            ep.local2global, results, ep.activeSet)
-          (pid, newEp)
+          (pid, ep)
       }
     )
     GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
