@@ -358,7 +358,6 @@ object LDA {
     val edges = graph.edges
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
     val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap(t => {
-      println(s"${System.currentTimeMillis()}: aggregateLocal start")
       val ep = t._2
       val totalSize = ep.size
       val sizePerThrd = {
@@ -451,16 +450,13 @@ object LDA {
           }
         }, s"aggregateLocal thread $threadId")
       }
-      println(s"${System.currentTimeMillis()}: aggregateLocal threads start")
       threads.foreach(_.start())
       doneSignal.await()
-      println(s"${System.currentTimeMillis()}: aggregateLocal threads end")
       results.filter(_ != null)
     }), preservesPartitioning=true).partitionBy(vertices.partitioner.get)
 
     val partRDD = vertices.partitionsRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
       (svpIter, cntsIter) => svpIter.map(svp => {
-        println(s"${System.currentTimeMillis()}: aggregateGlobal start")
         val mask = svp.mask
         val results = svp.values
         val queue = new ConcurrentLinkedQueue[(VertexId, TC)]()
@@ -501,12 +497,10 @@ object LDA {
             }
           }, s"aggregateGlobal thread $threadId")
         }
-        println(s"${System.currentTimeMillis()}: aggregateGlobal threads start")
         threads.foreach(_.start())
         cntsIter.foreach(queue.offer)
         Range(0, numThreads).foreach(thid => queue.offer((thid, null)))
         doneSignal.await()
-        println(s"${System.currentTimeMillis()}: aggregateGlobal threads end")
         svp.withValues(results)
       })
     )
