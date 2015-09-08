@@ -81,6 +81,7 @@ class FastLDA extends LDAAlgorithm {
     val sampl = conf.get(cs_accelMethod, "alias")
     val numPartitions = edges.partitions.length
     val newEdges = edges.mapEdgePartitions((pid, ep) => {
+      println(s"${System.currentTimeMillis()}: sampling start")
       val alphaRatio = alpha * numTopics / (numTokens - 1 + alphaAS * numTopics)
       val betaSum = beta * numTerms
       def itemRatio(topic: Int) = {
@@ -150,8 +151,10 @@ class FastLDA extends LDAAlgorithm {
           }
         }, s"sampling thread $threadId")
       }
+      println(s"${System.currentTimeMillis()}: sampling threads start")
       threads.foreach(_.start())
       doneSignal.await()
+      println(s"${System.currentTimeMillis()}: sampling threads end")
       ep.withData(data)
     })
     GraphImpl(vertices, newEdges)

@@ -18,7 +18,7 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
-import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch}
+import java.util.concurrent.{LinkedBlockingQueue, ConcurrentLinkedQueue, CountDownLatch}
 import scala.reflect.ClassTag
 
 import com.github.cloudml.zen.ml.partitioner._
@@ -94,6 +94,7 @@ object LDADefines {
     val edges = gimpl.edges
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
     val shippedVerts = vertices.partitionsRDD.mapPartitions(_.flatMap(svp => {
+      println(s"${System.currentTimeMillis()}: shipVertAttrs start")
       val rt = svp.routingTable
       val totalSize = rt.numEdgePartitions
       val results = new Array[(PartitionID, VertexAttributeBlock[VD])](totalSize)
@@ -132,18 +133,22 @@ object LDADefines {
           }
         }, s"shipVertAttrs thread $threadId")
       }
+      println(s"${System.currentTimeMillis()}: shipVertAttrs threads start")
       threads.foreach(_.start())
       doneSignal.await()
+      println(s"${System.currentTimeMillis()}: shipVertAttrs threads end")
       results
     })).partitionBy(edges.partitioner.get)
 
     val partRDD = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
       (epIter, vabsIter) => epIter.map {
         case (pid, ep) =>
+          println(s"${System.currentTimeMillis()}: refreshEdges start")
           val g2l = ep.global2local
           val vertSize = ep.vertexAttrs.length
           val results = new Array[VD](vertSize)
-          val queue = new ConcurrentLinkedQueue[(PartitionID, VertexAttributeBlock[VD])]()
+          // val vabs = vabsIter.toArray
+          val queue = new LinkedBlockingQueue[(PartitionID, VertexAttributeBlock[VD])](100)
           val doneSignal = new CountDownLatch(numThreads)
           val threads = new Array[Thread](numThreads)
           for (threadId <- threads.indices) {
@@ -153,10 +158,7 @@ object LDADefines {
                 var incomplete = true
                 try {
                   while (incomplete) {
-                    var t = queue.poll()
-                    while (t == null) {
-                      t = queue.poll()
-                    }
+                    var t = queue.take()
                     val (pid, vab) = t
                     if (vab == null) {
                       incomplete = false
@@ -174,10 +176,12 @@ object LDADefines {
               }
             }, s"refreshEdges thread $threadId")
           }
+          println(s"${System.currentTimeMillis()}: refreshEdges threads start")
           threads.foreach(_.start())
           vabsIter.foreach(queue.offer)
           Range(0, numThreads).foreach(thid => queue.offer((thid, null)))
           doneSignal.await()
+          println(s"${System.currentTimeMillis()}: refreshEdges threads end")
           val newEp = new EdgePartition(ep.localSrcIds, ep.localDstIds, ep.data, ep.index, g2l,
             ep.local2global, results, ep.activeSet)
           (pid, newEp)
