@@ -18,7 +18,7 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
-import java.util.concurrent.CountDownLatch
+import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch}
 import java.util.concurrent.atomic.AtomicIntegerArray
 
 import LDA._
@@ -386,13 +386,13 @@ object LDA {
                   val di = lcDstIds(i)
                   var docTuple = results(di)
                   if (docTuple == null) {
-                    if (marks.getAndIncrement(di) == 0) {
-                      results(di) = (l2g(di), BSV.zeros[Count](numTopics))
-                      docTuple = results(di)
+                    if (marks.getAndDecrement(di) == 0) {
+                      docTuple = (l2g(di), BSV.zeros[Count](numTopics))
+                      results(di) = docTuple
+                      marks.set(di, Int.MaxValue)
                     } else {
-                      while (docTuple == null) {
-                        docTuple = results(di)
-                      }
+                      while (marks.get(di) <= 0) {}
+                      docTuple = results(di)
                     }
                   }
                   val docTopicCounter = docTuple._2
@@ -409,24 +409,24 @@ object LDA {
                   val di = lcDstIds(i)
                   var termTuple = results(si)
                   if (termTuple == null) {
-                    if (marks.getAndIncrement(si) == 0) {
-                      results(si) = (l2g(si), BSV.zeros[Count](numTopics))
-                      termTuple = results(si)
+                    if (marks.getAndDecrement(si) == 0) {
+                      termTuple = (l2g(si), BSV.zeros[Count](numTopics))
+                      results(si) = termTuple
+                      marks.set(si, Int.MaxValue)
                     } else {
-                      while (termTuple == null) {
-                        termTuple = results(si)
-                      }
+                      while (marks.get(si) <= 0) {}
+                      termTuple = results(si)
                     }
                   }
                   var docTuple = results(di)
                   if (docTuple == null) {
-                    if (marks.getAndIncrement(di) == 0) {
-                      results(di) = (l2g(di), BSV.zeros[Count](numTopics))
-                      docTuple = results(di)
+                    if (marks.getAndDecrement(di) == 0) {
+                      docTuple = (l2g(di), BSV.zeros[Count](numTopics))
+                      results(di) = docTuple
+                      marks.set(di, Int.MaxValue)
                     } else {
-                      while (docTuple == null) {
-                        docTuple = results(di)
-                      }
+                      while (marks.get(di) <= 0) {}
+                      docTuple = results(di)
                     }
                   }
                   val termTopicCounter = termTuple._2
@@ -458,7 +458,8 @@ object LDA {
     val partRDD = vertices.partitionsRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
       (svpIter, cntsIter) => svpIter.map(svp => {
         val mask = svp.mask
-        val results = new Array[TC](svp.capacity)
+        val results = svp.values
+        val queue = new ConcurrentLinkedQueue[(VertexId, TC)]()
         var i = mask.nextSetBit(0)
         while (i >= 0) {
           results(i) = BSV.zeros[Count](numTopics)
@@ -471,20 +472,17 @@ object LDA {
             override def run(): Unit = {
               val logger = Logger.getLogger(this.getClass.getName)
               val index = svp.index
+              var incomplete = true
               try {
-                var t: (VertexId, TC) = null
-                var isOver = false
-                while (!isOver) {
-                  cntsIter.synchronized {
-                    t = if (cntsIter.hasNext) {
-                      cntsIter.next()
-                    } else {
-                      isOver = true
-                      null
-                    }
+                while (incomplete) {
+                  var t = queue.poll()
+                  while (t == null) {
+                    t = queue.poll()
                   }
-                  if (t != null) {
-                    val (vid, counter) = t
+                  val (vid, counter) = t
+                  if (counter == null) {
+                    incomplete = false
+                  } else {
                     val agg = results(index.getPos(vid))
                     agg.synchronized {
                       agg :+= counter
@@ -500,6 +498,8 @@ object LDA {
           }, s"aggregateGlobal thread $threadId")
         }
         threads.foreach(_.start())
+        cntsIter.foreach(queue.offer)
+        Range(0, numThreads).foreach(thid => queue.offer((thid, null)))
         doneSignal.await()
         svp.withValues(results)
       })

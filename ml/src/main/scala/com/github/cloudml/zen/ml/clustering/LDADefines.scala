@@ -18,7 +18,7 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
-import java.util.concurrent.CountDownLatch
+import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch}
 import scala.reflect.ClassTag
 
 import com.github.cloudml.zen.ml.partitioner._
@@ -140,29 +140,28 @@ object LDADefines {
     val partRDD = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
       (epIter, vabsIter) => epIter.map {
         case (pid, ep) =>
-          val vattrs = ep.vertexAttrs
           val g2l = ep.global2local
-          val results = new Array[VD](vattrs.length)
+          val vertSize = ep.vertexAttrs.length
+          val results = new Array[VD](vertSize)
+          val queue = new ConcurrentLinkedQueue[(PartitionID, VertexAttributeBlock[VD])]()
           val doneSignal = new CountDownLatch(numThreads)
           val threads = new Array[Thread](numThreads)
           for (threadId <- threads.indices) {
             threads(threadId) = new Thread(new Runnable {
               override def run(): Unit = {
                 val logger = Logger.getLogger(this.getClass.getName)
+                var incomplete = true
                 try {
-                  var t: (PartitionID, VertexAttributeBlock[VD]) = null
-                  var isOver = false
-                  while (!isOver) {
-                    vabsIter.synchronized {
-                      t = if (vabsIter.hasNext) {
-                        vabsIter.next()
-                      } else {
-                        isOver = true
-                        null
-                      }
+                  while (incomplete) {
+                    var t = queue.poll()
+                    while (t == null) {
+                      t = queue.poll()
                     }
-                    if (t != null) {
-                      for ((vid, vdata) <- t._2.iterator) {
+                    val (pid, vab) = t
+                    if (vab == null) {
+                      incomplete = false
+                    } else {
+                      for ((vid, vdata) <- vab.iterator) {
                         results(g2l(vid)) = vdata
                       }
                     }
@@ -176,6 +175,8 @@ object LDADefines {
             }, s"refreshEdges thread $threadId")
           }
           threads.foreach(_.start())
+          vabsIter.foreach(queue.offer)
+          Range(0, numThreads).foreach(thid => queue.offer((thid, null)))
           doneSignal.await()
           val newEp = new EdgePartition(ep.localSrcIds, ep.localDstIds, ep.data, ep.index, g2l,
             ep.local2global, results, ep.activeSet)
