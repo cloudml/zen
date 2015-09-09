@@ -91,7 +91,7 @@ object LDADefines {
   def refreshEdgeAssociations[VD: ClassTag, ED: ClassTag](graph: Graph[VD, ED]): GraphImpl[VD, ED] = {
     val gimpl = graph.asInstanceOf[GraphImpl[VD, ED]]
     val vertices = gimpl.vertices
-    val edges = gimpl.edges
+    val edges = gimpl.edges.asInstanceOf[EdgeRDDImpl[ED, _]]
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
     val shippedVerts = vertices.partitionsRDD.mapPartitions(_.flatMap(svp => {
       val rt = svp.routingTable
@@ -112,6 +112,7 @@ object LDADefines {
     val partRDD = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
       (epIter, vabsIter) => epIter.map {
         case (pid, ep) =>
+          val results = new Array[VD](ep.vertexAttrs.length)
           val queue = new ConcurrentLinkedQueue[(PartitionID, VertexAttributeBlock[VD])]()
           val doneSignal = new CountDownLatch(numThreads)
           val threads = new Array[Thread](numThreads)
@@ -119,7 +120,6 @@ object LDADefines {
             threads(threadId) = new Thread(new Runnable {
               override def run(): Unit = {
                 val logger = Logger.getLogger(this.getClass.getName)
-                val vattrs = ep.vertexAttrs
                 val g2l = ep.global2local
                 var incomplete = true
                 try {
@@ -133,7 +133,7 @@ object LDADefines {
                       incomplete = false
                     } else {
                       for ((vid, vdata) <- vab.iterator) {
-                        vattrs(g2l(vid)) = vdata
+                        results(g2l(vid)) = vdata
                       }
                     }
                   }
@@ -149,7 +149,7 @@ object LDADefines {
           vabsIter.foreach(queue.offer)
           Range(0, numThreads).foreach(thid => queue.offer((thid, null)))
           doneSignal.await()
-          (pid, ep)
+          (pid, ep.withVertexAttributes(results))
       }
     )
     GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))

@@ -391,7 +391,7 @@ object LDA {
                       results(di) = docTuple
                       marks.set(di, Int.MaxValue)
                     } else {
-                      while (marks.get(di) <= 0) {}
+                      while (marks.get(di) < 0) {}
                       docTuple = results(di)
                     }
                   }
@@ -414,7 +414,7 @@ object LDA {
                       results(si) = termTuple
                       marks.set(si, Int.MaxValue)
                     } else {
-                      while (marks.get(si) <= 0) {}
+                      while (marks.get(si) < 0) {}
                       termTuple = results(si)
                     }
                   }
@@ -425,7 +425,7 @@ object LDA {
                       results(di) = docTuple
                       marks.set(di, Int.MaxValue)
                     } else {
-                      while (marks.get(di) <= 0) {}
+                      while (marks.get(di) < 0) {}
                       docTuple = results(di)
                     }
                   }
