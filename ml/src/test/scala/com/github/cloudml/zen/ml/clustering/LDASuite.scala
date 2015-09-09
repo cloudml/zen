@@ -40,8 +40,9 @@ class LDASuite extends FunSuite with SharedSparkContext {
 
     val data = sc.parallelize(corpus, 2)
     data.cache()
+    val docs = LDA.initializeCorpusEdges(data, numTopics, storageLevel)
     val pps = new Array[Double](incrementalLearning)
-    val lda = LDA(data, numTopics, alpha, beta, alphaAS, new FastLDA, storageLevel)
+    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new FastLDA, storageLevel)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
@@ -88,8 +89,9 @@ class LDASuite extends FunSuite with SharedSparkContext {
 
     val data = sc.parallelize(corpus, 2)
     data.cache()
+    val docs = LDA.initializeCorpusEdges(data, numTopics, storageLevel)
     val pps = new Array[Double](incrementalLearning)
-    val lda = LDA(data, numTopics, alpha, beta, alphaAS, new LightLDA, storageLevel)
+    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new LightLDA, storageLevel)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
@@ -116,9 +118,9 @@ class LDASuite extends FunSuite with SharedSparkContext {
 }
 
 object LDASuite {
-  val numTopics = 10
+  val numTopics = 5
   val numTerms = 1000
-  val numDocs = 500
+  val numDocs = 100
   val expectedDocLength = 300
   val alpha = 0.01
   val alphaAS = 1D

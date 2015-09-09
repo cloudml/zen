@@ -367,7 +367,7 @@ object GraphImpl {
    * Create a graph from an EdgeRDD with the correct vertex type, setting missing vertices to
    * `defaultVertexAttr`. The vertices will have the same number of partitions as the EdgeRDD.
    */
-  private def fromEdgeRDD[VD: ClassTag, ED: ClassTag](
+  def fromEdgeRDD[VD: ClassTag, ED: ClassTag](
       edges: EdgeRDDImpl[ED, VD],
       defaultVertexAttr: VD,
       edgeStorageLevel: StorageLevel,

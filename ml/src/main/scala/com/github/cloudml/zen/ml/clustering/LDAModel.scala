@@ -176,17 +176,18 @@ class DistributedLDAModel(@transient val termTopicCounters: RDD[(VertexId, TC)],
 
   /**
    * inference interface
-   * @param docs tuple pair: (dicId, Vector), in which 'docId' is unique
-   *             recommended storage level: StorageLevel.MEMORY_AND_DISK
+   * @param bowDocs   tuple pair: (dicId, Vector), in which 'docId' is unique
+   *                  recommended storage level: StorageLevel.MEMORY_AND_DISK
    * @param totalIter overall iterations
-   * @param burnIn previous burnIn iters results will discard
+   * @param burnIn    previous burnIn iters results will discard
    */
-  def inference(docs: RDD[BOW],
+  def inference(bowDocs: RDD[BOW],
     totalIter: Int = 25,
     burnIn: Int = 22): RDD[(VertexId, BSV[Double])] = {
     require(totalIter > burnIn, "totalIter is less than burnInIter")
     require(totalIter > 0, "totalIter is less than 0")
     require(burnIn > 0, "burnIn is less than 0")
+    val docs = LDA.initializeCorpusEdges(bowDocs, numTopics, storageLevel)
     val lda = LDA(this, docs, algo)
     for (i <- 1 to burnIn) {
       lda.gibbsSampling(i, inferenceOnly=true)
@@ -202,7 +203,11 @@ class DistributedLDAModel(@transient val termTopicCounters: RDD[(VertexId, TC)],
 
   override def save(sc: SparkContext, path: String): Unit = save(sc, path, isTransposed=false)
 
-  def save(path: String): Unit = save(termTopicCounters.context, path, isTransposed=false)
+  def save(isTransposed: Boolean): Unit = {
+    val sc = termTopicCounters.context
+    val outpath = sc.getConf.get(cs_outputpath)
+    save(sc, outpath, isTransposed)
+  }
 
   /**
    * @param sc           Spark context to get HDFS env from

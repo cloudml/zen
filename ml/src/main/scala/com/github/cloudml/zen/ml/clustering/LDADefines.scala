@@ -41,6 +41,7 @@ object LDADefines {
 
   val sv_formatVersionV1_0 = "1.0"
   val sv_classNameV1_0 = "com.github.cloudml.zen.ml.clustering.DistributedLDAModel"
+  val cs_numTopics = "zen.lda.numTopics"
   val cs_numPartitions = "zen.lda.numPartitions"
   val cs_sampleRate = "zen.lda.sampleRate"
   val cs_LDAAlgorithm = "zen.lda.LDAAlgorithm"
@@ -54,6 +55,7 @@ object LDADefines {
   val cs_outputpath = "zen.lda.outputPath"
   val cs_saveAsSolid = "zen.lda.saveAsSolid"
   val cs_numThreads = "zen.lda.numThreads"
+  val cs_partPerNode = "zen.lda.partPerNode"
 
   // make docId always be negative, so that the doc vertex always be the dest vertex
   @inline def genNewDocId(docId: Long): VertexId = {

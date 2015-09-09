@@ -19,9 +19,9 @@ package com.github.cloudml.zen.ml.partitioner
 
 import scala.reflect.ClassTag
 
-import com.github.cloudml.zen.ml.clustering.LDADefines._
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl._
+import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 
 
@@ -32,8 +32,12 @@ object LBVertexRDDBuilder {
   // To implement this, modify VertexRDD's code first, add PartitionID in RDD element.
   def fromEdgeRDD[VD: ClassTag, ED: ClassTag](edges: EdgeRDD[ED],
     storageLevel: StorageLevel): GraphImpl[VD, ED] = {
-    val numPartitions = edges.context.getConf.getInt(cs_numPartitions, edges.partitions.length)
-    val vertices = VertexRDD.fromEdges(edges, numPartitions, null.asInstanceOf[VD])
-    GraphImpl.fromExistingRDDs(vertices, edges)
+    val eimpl = edges.asInstanceOf[EdgeRDDImpl[ED, VD]]
+    GraphImpl.fromEdgeRDD(eimpl, null.asInstanceOf[VD], storageLevel, storageLevel)
+  }
+
+  def fromEdges[VD: ClassTag, ED: ClassTag](edges: RDD[Edge[ED]],
+    storageLevel: StorageLevel): GraphImpl[VD, ED] = {
+    fromEdgeRDD[VD, ED](EdgeRDD.fromEdges[ED, VD](edges), storageLevel)
   }
 }
