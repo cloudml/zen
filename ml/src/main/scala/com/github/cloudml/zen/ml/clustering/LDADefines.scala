@@ -41,6 +41,7 @@ object LDADefines {
 
   val sv_formatVersionV1_0 = "1.0"
   val sv_classNameV1_0 = "com.github.cloudml.zen.ml.clustering.DistributedLDAModel"
+  val cs_numPartitions = "zen.lda.numPartitions"
   val cs_sampleRate = "zen.lda.sampleRate"
   val cs_LDAAlgorithm = "zen.lda.LDAAlgorithm"
   val cs_accelMethod = "zen.lda.accelMethod"

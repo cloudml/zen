@@ -19,6 +19,8 @@ package com.github.cloudml.zen.ml.partitioner
 
 import scala.math._
 import scala.reflect.ClassTag
+
+import com.github.cloudml.zen.ml.clustering.LDADefines._
 import org.apache.spark.Partitioner
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.GraphImpl
@@ -71,9 +73,11 @@ object DBHPartitioner {
   private[zen] def partitionByDBH[VD: ClassTag, ED: ClassTag](
     input: Graph[VD, ED],
     storageLevel: StorageLevel): Graph[VD, ED] = {
-    val numPartitions = input.edges.partitions.length
+    val edges = input.edges
+    val conf = edges.context.getConf
+    val numPartitions = conf.getInt(cs_numPartitions, edges.partitions.length)
     val dbh = new DBHPartitioner(numPartitions, 0)
-    val degGraph = GraphImpl(input.degrees, input.edges)
+    val degGraph = GraphImpl(input.degrees, edges)
     val newEdges = degGraph.triplets.mapPartitions(_.map(et =>
       (dbh.getKey(et), Edge(et.srcId, et.dstId, et.attr))
     )).partitionBy(dbh).map(_._2)

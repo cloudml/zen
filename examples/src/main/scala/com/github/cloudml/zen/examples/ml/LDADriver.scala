@@ -57,6 +57,7 @@ object LDADriver {
     val storageLevel = StorageLevel.fromString(slvlStr)
 
     val conf = new SparkConf()
+    conf.set(cs_numPartitions, s"$numPartitions")
     conf.set(cs_inputPath, inputPath)
     conf.set(cs_outputpath, outputPath)
     conf.set(cs_storageLevel, slvlStr)

@@ -19,6 +19,7 @@ package com.github.cloudml.zen.ml.partitioner
 
 import scala.reflect.ClassTag
 
+import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.util.{AliasTable, XORShiftRandom}
 import breeze.linalg.{SparseVector => BSV}
 import org.apache.spark.Partitioner
@@ -56,9 +57,11 @@ object BBRPartitioner {
   private[zen] def partitionByBBR[VD: ClassTag, ED: ClassTag](
     input: Graph[VD, ED],
     storageLevel: StorageLevel): Graph[VD, ED] = {
-    val numPartitions = input.edges.partitions.length
+    val edges = input.edges
+    val conf = edges.context.getConf
+    val numPartitions = conf.getInt(cs_numPartitions, edges.partitions.length)
     val bbr = new BBRPartitioner(numPartitions)
-    val degGraph = GraphImpl(input.degrees, input.edges)
+    val degGraph = GraphImpl(input.degrees, edges)
     val assnGraph = degGraph.mapTriplets((pid, iter) =>
       iter.map(et => (bbr.getKey(et), Edge(et.srcId, et.dstId, et.attr))), TripletFields.All)
     assnGraph.persist(storageLevel)
@@ -71,7 +74,7 @@ object BBRPartitioner {
       }
     }, _ + _, TripletFields.EdgeOnly)
     val (kids, koccurs) = assnVerts.filter(_._2 > 0L).collect().unzip
-    val partRdd = input.edges.context.parallelize(kids.zip(rearrage(koccurs, numPartitions)))
+    val partRdd = edges.context.parallelize(kids.zip(rearrage(koccurs, numPartitions)))
     val rearrGraph = assnGraph.mapVertices((_, _) => null.asInstanceOf[AliasTable[Long]])
       .joinVertices(partRdd)((_, _, arr) => AliasTable.generateAlias(arr))
 

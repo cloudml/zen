@@ -18,6 +18,8 @@
 package com.github.cloudml.zen.ml.partitioner
 
 import scala.reflect.ClassTag
+
+import com.github.cloudml.zen.ml.clustering.LDADefines._
 import breeze.linalg.{DenseMatrix, SparseVector => BSV}
 import com.github.cloudml.zen.ml.util.{FTree, XORShiftRandom}
 import org.apache.spark.Partitioner
@@ -56,10 +58,12 @@ object VSDLPPartitioner {
     input: Graph[VD, ED],
     numIter: Int,
     storageLevel: StorageLevel): Graph[VD, ED] = {
-    val numPartitions = input.edges.partitions.length
+    val edges = input.edges
+    val conf = edges.context.getConf
+    val numPartitions = conf.getInt(cs_numPartitions, edges.partitions.length)
     val vsdlp = new VSDLPPartitioner(numPartitions)
 
-    var pidGraph = input.mapEdges((pid, iter) => iter.map(t => pid)).mapVertices[PVD]((_, _) => null)
+    var pidGraph = input.mapEdges((pid, iter) => iter.map(_ => pid)).mapVertices[PVD]((_, _) => null)
     pidGraph.persist(storageLevel)
     for (iter <- 1 to numIter) {
       val transCounter = pidGraph.edges.mapPartitions(_.flatMap(edge => {
@@ -123,7 +127,7 @@ object VSDLPPartitioner {
       pidGraph.persist(storageLevel)
     }
 
-    val newEdges = input.edges.innerJoin(pidGraph.edges)((_, _, ed, toPid) => (toPid, ed))
+    val newEdges = edges.innerJoin(pidGraph.edges)((_, _, ed, toPid) => (toPid, ed))
       .mapPartitions(_.map(e =>(e.attr._1, Edge(e.srcId, e.dstId, e.attr._2))))
       .partitionBy(vsdlp).map(_._2)
     GraphImpl(input.vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
