@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicIntegerArray
 
 import LDA._
 import LDADefines._
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum}
 import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
 import org.apache.log4j.Logger
@@ -209,8 +209,8 @@ object LDA {
     storageLevel: StorageLevel): LDA = {
     val numTerms = bowDocs.first()._2.size
     val numDocs = bowDocs.count()
+    val numTokens = bowDocs.map(t => sum(t._2).toLong).reduce(_ + _)
     val corpus = initializeCorpus(bowDocs, numTopics, storageLevel)
-    val numTokens = corpus.edges.map(e => e.attr.length.toLong).reduce(_ + _)
     new LDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, algo, storageLevel)
   }
 
@@ -225,9 +225,9 @@ object LDA {
     val beta = computedModel.beta
     val alphaAS = computedModel.alphaAS
     val storageLevel = computedModel.storageLevel
+    val numDocs = bowDocs.count()
     val corpus = initializeCorpus(bowDocs, numTopics, storageLevel)
     corpus.joinVertices(computedModel.termTopicCounters)((_, _, computedCounter) => computedCounter)
-    val numDocs = bowDocs.count()
     new LDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, algo, storageLevel)
   }
 
@@ -322,15 +322,12 @@ object LDA {
       case _ =>
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
-    partCorpus.persist(storageLevel)
-    val corpus = updateVertexCounters(partCorpus, numTopics)
-    corpus.persist(storageLevel)
-    corpus.vertices.setName("vertices-0").count()
-    val numEdges = corpus.edges.setName("edges-0").count()
+    val numEdges = partCorpus.edges.setName("edges-0").persist(storageLevel).count()
     println(s"edges in the corpus: $numEdges")
+    val corpus = updateVertexCounters(partCorpus, numTopics)
+    corpus.vertices.setName("vertices-0").persist(storageLevel).count()
     docs.unpersist(blocking=false)
     initCorpus.unpersist(blocking=false)
-    partCorpus.unpersist(blocking=false)
     corpus
   }
 
