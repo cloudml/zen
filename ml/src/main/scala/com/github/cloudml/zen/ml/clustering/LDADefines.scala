@@ -115,43 +115,53 @@ object LDADefines {
     val partRDD = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
       (epIter, vabsIter) => epIter.map {
         case (pid, ep) =>
+          val g2l = ep.global2local
           val results = new Array[VD](ep.vertexAttrs.length)
-          val queue = new ConcurrentLinkedQueue[(PartitionID, VertexAttributeBlock[VD])]()
-          val doneSignal = new CountDownLatch(numThreads)
-          val threads = new Array[Thread](numThreads)
-          for (threadId <- threads.indices) {
-            threads(threadId) = new Thread(new Runnable {
-              override def run(): Unit = {
-                val logger = Logger.getLogger(this.getClass.getName)
-                val g2l = ep.global2local
-                var incomplete = true
-                try {
-                  while (incomplete) {
-                    var t = queue.poll()
-                    while (t == null) {
-                      t = queue.poll()
-                    }
-                    val (pid, vab) = t
-                    if (vab == null) {
-                      incomplete = false
-                    } else {
-                      for ((vid, vdata) <- vab.iterator) {
-                        results(g2l(vid)) = vdata
+          if (numThreads == 1) {
+            vabsIter.foreach {
+              case (_, vab) =>
+                for ((vid, vdata) <- vab.iterator) {
+                  results(g2l(vid)) = vdata
+                }
+            }
+          } else {
+            val numConsumers = numThreads - 1
+            val queue = new ConcurrentLinkedQueue[(PartitionID, VertexAttributeBlock[VD])]()
+            val doneSignal = new CountDownLatch(numConsumers)
+            val threads = new Array[Thread](numConsumers)
+            for (threadId <- threads.indices) {
+              threads(threadId) = new Thread(new Runnable {
+                override def run(): Unit = {
+                  val logger = Logger.getLogger(this.getClass.getName)
+                  var incomplete = true
+                  try {
+                    while (incomplete) {
+                      var t = queue.poll()
+                      while (t == null) {
+                        t = queue.poll()
+                      }
+                      val (_, vab) = t
+                      if (vab == null) {
+                        incomplete = false
+                      } else {
+                        for ((vid, vdata) <- vab.iterator) {
+                          results(g2l(vid)) = vdata
+                        }
                       }
                     }
+                  } catch {
+                    case e: Exception => logger.error(e.getLocalizedMessage, e)
+                  } finally {
+                    doneSignal.countDown()
                   }
-                } catch {
-                  case e: Exception => logger.error(e.getLocalizedMessage, e)
-                } finally {
-                  doneSignal.countDown()
                 }
-              }
-            }, s"refreshEdges thread $threadId")
+              }, s"refreshEdges thread $threadId")
+            }
+            threads.foreach(_.start())
+            vabsIter.foreach(queue.offer)
+            Range(0, numConsumers).foreach(thid => queue.offer((thid, null)))
+            doneSignal.await()
           }
-          threads.foreach(_.start())
-          vabsIter.foreach(queue.offer)
-          Range(0, numThreads).foreach(thid => queue.offer((thid, null)))
-          doneSignal.await()
           (pid, ep.withVertexAttributes(results))
       }
     )

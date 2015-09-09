@@ -469,54 +469,66 @@ object LDA {
 
     val partRDD = vertices.partitionsRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
       (svpIter, cntsIter) => svpIter.map(svp => {
-        val mask = svp.mask
         val results = svp.values
-        val queue = new ConcurrentLinkedQueue[(VertexId, TC)]()
+        val index = svp.index
         val marks = new AtomicIntegerArray(results.length)
-        val doneSignal = new CountDownLatch(numThreads)
-        val threads = new Array[Thread](numThreads)
-        for (threadId <- threads.indices) {
-          threads(threadId) = new Thread(new Runnable {
-            override def run(): Unit = {
-              val logger = Logger.getLogger(this.getClass.getName)
-              val index = svp.index
-              var incomplete = true
-              try {
-                while (incomplete) {
-                  var t = queue.poll()
-                  while (t == null) {
-                    t = queue.poll()
-                  }
-                  val (vid, counter) = t
-                  if (counter == null) {
-                    incomplete = false
-                  } else {
-                    val i = index.getPos(vid)
-                    if (marks.getAndDecrement(i) == 0) {
-                      results(i) = BSV.zeros[Count](numTopics)
-                      marks.set(i, Int.MaxValue)
-                    } else {
-                      while (marks.get(i) < 0) {}
-                    }
-                    val agg = results(i)
-                    agg.synchronized {
-                      agg :+= counter
-                    }
-                    marks.set(i, Int.MaxValue)
-                  }
-                }
-              } catch {
-                case e: Exception => logger.error(e.getLocalizedMessage, e)
-              } finally {
-                doneSignal.countDown()
+        if (numThreads == 1) {
+          cntsIter.foreach {
+            case (vid, counter) =>
+              val i = index.getPos(vid)
+              if (marks.getAndDecrement(i) == 0) {
+                results(i) = BSV.zeros[Count](numTopics)
               }
-            }
-          }, s"aggregateGlobal thread $threadId")
+              results(i) :+= counter
+              marks.set(i, Int.MaxValue)
+          }
+        } else {
+          val numConsumers = numThreads - 1
+          val queue = new ConcurrentLinkedQueue[(VertexId, TC)]()
+          val doneSignal = new CountDownLatch(numConsumers)
+          val threads = new Array[Thread](numConsumers)
+          for (threadId <- threads.indices) {
+            threads(threadId) = new Thread(new Runnable {
+              override def run(): Unit = {
+                val logger = Logger.getLogger(this.getClass.getName)
+                var incomplete = true
+                try {
+                  while (incomplete) {
+                    var t = queue.poll()
+                    while (t == null) {
+                      t = queue.poll()
+                    }
+                    val (vid, counter) = t
+                    if (counter == null) {
+                      incomplete = false
+                    } else {
+                      val i = index.getPos(vid)
+                      if (marks.getAndDecrement(i) == 0) {
+                        results(i) = BSV.zeros[Count](numTopics)
+                        marks.set(i, Int.MaxValue)
+                      } else {
+                        while (marks.get(i) < 0) {}
+                      }
+                      val agg = results(i)
+                      agg.synchronized {
+                        agg :+= counter
+                      }
+                      marks.set(i, Int.MaxValue)
+                    }
+                  }
+                } catch {
+                  case e: Exception => logger.error(e.getLocalizedMessage, e)
+                } finally {
+                  doneSignal.countDown()
+                }
+              }
+            }, s"aggregateGlobal thread $threadId")
+          }
+          threads.foreach(_.start())
+          cntsIter.foreach(queue.offer)
+          Range(0, numConsumers).foreach(thid => queue.offer((thid, null)))
+          doneSignal.await()
         }
-        threads.foreach(_.start())
-        cntsIter.foreach(queue.offer)
-        Range(0, numThreads).foreach(thid => queue.offer((thid, null)))
-        doneSignal.await()
         svp.withValues(results)
       })
     )
