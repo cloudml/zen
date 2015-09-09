@@ -65,7 +65,7 @@ object LDADriver {
 
     conf.set(cs_sampleRate, options.getOrElse("samplerate", "1.0"))
     conf.set(cs_numThreads, options.getOrElse("numthreads", "1"))
-    conf.set(cs_partPerNode, options.getOrElse("parpernode", "0"))
+    conf.set(cs_partPerNode, options.getOrElse("partpernode", "0"))
     conf.set(cs_LDAAlgorithm, options.getOrElse("ldaalgorithm", "fastlda"))
     conf.set(cs_accelMethod, options.getOrElse("accelmethod", "alias"))
     conf.set(cs_partStrategy, options.getOrElse("partstrategy", "dbh"))
@@ -142,23 +142,25 @@ object LDADriver {
     fs: FileSystem,
     storageLevel: StorageLevel): RDD[Edge[TA]] = {
     val inputPath = scConf.get(cs_inputPath)
-    val partStrategy = scConf.get(cs_partStrategy)
-    val rddPath = inputPath + s"rdd-$partStrategy"
-    if (!fs.exists(new Path(rddPath))) {
-      println("cached rdd doesn't exist, generating...")
-      val numTopics = scConf.get(cs_numTopics).toInt
-      val csc = new SparkContext(scConf)
-      val bowDocs = readDocsFromTxt(csc, storageLevel)
-      val edges = LDA.initializeCorpusEdges(bowDocs, numTopics, storageLevel)
-      edges.saveAsObjectFile(rddPath)
-      csc.stop()
-    }
+    val numTopics = scConf.get(cs_numTopics).toInt
+//    val partStrategy = scConf.get(cs_partStrategy)
+//    val rddPath = inputPath + s".cache-$partStrategy-t$numTopics"
+//    if (!fs.exists(new Path(rddPath))) {
+//      println("cached rdd doesn't exist, generating...")
+//      val csc = new SparkContext(scConf)
+//      val bowDocs = readDocsFromTxt(csc, storageLevel)
+//      val edges = LDA.initializeCorpusEdges(bowDocs, numTopics, storageLevel)
+//      edges.saveAsObjectFile(rddPath)
+//      csc.stop()
+//    }
     val exeCores = scConf.get(cs_partPerNode).toInt
     if (exeCores > 0) {
       scConf.set("spark.executor.cores", s"$exeCores")
     }
     val sc = new SparkContext(scConf)
-    sc.objectFile(rddPath)
+    // sc.objectFile(rddPath)
+    val bowDocs = readDocsFromTxt(sc, storageLevel)
+    LDA.initializeCorpusEdges(bowDocs, numTopics, storageLevel)
   }
 
   def readDocsFromTxt(sc: SparkContext, storageLevel: StorageLevel): RDD[BOW] = {

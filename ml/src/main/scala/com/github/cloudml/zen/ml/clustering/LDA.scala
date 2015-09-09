@@ -472,11 +472,7 @@ object LDA {
         val mask = svp.mask
         val results = svp.values
         val queue = new ConcurrentLinkedQueue[(VertexId, TC)]()
-        var i = mask.nextSetBit(0)
-        while (i >= 0) {
-          results(i) = BSV.zeros[Count](numTopics)
-          i = mask.nextSetBit(i + 1)
-        }
+        val marks = new AtomicIntegerArray(results.length)
         val doneSignal = new CountDownLatch(numThreads)
         val threads = new Array[Thread](numThreads)
         for (threadId <- threads.indices) {
@@ -495,10 +491,18 @@ object LDA {
                   if (counter == null) {
                     incomplete = false
                   } else {
-                    val agg = results(index.getPos(vid))
+                    val i = index.getPos(vid)
+                    if (marks.getAndDecrement(i) == 0) {
+                      results(i) = BSV.zeros[Count](numTopics)
+                      marks.set(i, Int.MaxValue)
+                    } else {
+                      while (marks.get(i) < 0) {}
+                    }
+                    val agg = results(i)
                     agg.synchronized {
                       agg :+= counter
                     }
+                    marks.set(i, Int.MaxValue)
                   }
                 }
               } catch {
