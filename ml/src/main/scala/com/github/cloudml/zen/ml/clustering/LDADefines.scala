@@ -126,7 +126,7 @@ object LDADefines {
             }
           } else {
             val numConsumers = numThreads - 1
-            val queue = new ConcurrentLinkedQueue[(PartitionID, VertexAttributeBlock[VD])]()
+            val queue = new ConcurrentLinkedQueue[Seq[(PartitionID, VertexAttributeBlock[VD])]]()
             val doneSignal = new CountDownLatch(numConsumers)
             val threads = new Array[Thread](numConsumers)
             for (threadId <- threads.indices) {
@@ -140,12 +140,13 @@ object LDADefines {
                       while (t == null) {
                         t = queue.poll()
                       }
-                      val (_, vab) = t
-                      if (vab == null) {
-                        incomplete = false
-                      } else {
-                        for ((vid, vdata) <- vab.iterator) {
-                          results(g2l(vid)) = vdata
+                      for ((_, vab) <- t) {
+                        if (vab == null) {
+                          incomplete = false
+                        } else {
+                          for ((vid, vdata) <- vab.iterator) {
+                            results(g2l(vid)) = vdata
+                          }
                         }
                       }
                     }
@@ -158,8 +159,8 @@ object LDADefines {
               }, s"refreshEdges thread $threadId")
             }
             threads.foreach(_.start())
-            vabsIter.foreach(queue.offer)
-            Range(0, numConsumers).foreach(thid => queue.offer((thid, null)))
+            vabsIter.grouped(numConsumers).foreach(queue.offer)
+            Range(0, numConsumers).foreach(thid => queue.offer(Seq((thid, null))))
             doneSignal.await()
           }
           (pid, ep.withVertexAttributes(results))
