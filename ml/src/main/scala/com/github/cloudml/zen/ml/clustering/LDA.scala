@@ -453,7 +453,7 @@ object LDA {
       threads.foreach(_.start())
       doneSignal.await()
       results.filter(_ != null)
-    }), preservesPartitioning=true).partitionBy(vertices.partitioner.get)
+    })).partitionBy(vertices.partitioner.get)
 
     val partRDD = vertices.partitionsRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
       (svpIter, cntsIter) => svpIter.map(svp => {

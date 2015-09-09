@@ -155,7 +155,7 @@ object LDAMetrics {
       threads.foreach(_.start())
       doneSignal.await()
       sums.sum
-    }), preservesPartitioning=true)
+    }))
 
     val termProb = llhRDD.sum()
     math.exp(-1 * termProb / numTokens)

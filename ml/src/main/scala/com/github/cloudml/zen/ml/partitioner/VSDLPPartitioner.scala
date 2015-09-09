@@ -123,9 +123,8 @@ object VSDLPPartitioner {
       pidGraph.persist(storageLevel)
     }
 
-    val newEdges = input.edges.innerJoin(pidGraph.edges)((_, _, ed, toPid) =>
-      (toPid, ed)).mapPartitions(_.map(e =>
-      (e.attr._1, Edge(e.srcId, e.dstId, e.attr._2))), preservesPartitioning=true)
+    val newEdges = input.edges.innerJoin(pidGraph.edges)((_, _, ed, toPid) => (toPid, ed))
+      .mapPartitions(_.map(e =>(e.attr._1, Edge(e.srcId, e.dstId, e.attr._2))))
       .partitionBy(vsdlp).map(_._2)
     GraphImpl(input.vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
   }

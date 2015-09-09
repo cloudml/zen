@@ -82,7 +82,7 @@ object BBRPartitioner {
         val table = if (kid == et.srcId) et.srcAttr else et.dstAttr
         (table.sampleRandom(gen), edge)
       })
-    }, preservesPartitioning=true).partitionBy(bbr).map(_._2)
+    }).partitionBy(bbr).map(_._2)
     GraphImpl(input.vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
   }
 
