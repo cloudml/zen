@@ -19,12 +19,13 @@ package com.github.cloudml.zen.ml.clustering
 
 import java.lang.ref.SoftReference
 import java.util.Random
-import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import scala.concurrent._
+import scala.concurrent.duration.Duration
 
 import LDADefines._
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
 import com.github.cloudml.zen.ml.util._
-import org.apache.log4j.Logger
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.GraphImpl
 import org.apache.spark.util.collection.AppendOnlyMap
@@ -87,71 +88,53 @@ class FastLDA extends LDAAlgorithm {
         val tCounter = totalTopicCounter(topic)
         alphaRatio * (tCounter + alphaAS) / (tCounter + betaSum)
       }
+      // table/ftree is a per term data structure
+      // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
+      // so, use below simple cache to avoid calculating table each time
+      val globalSampler: DiscreteSampler[Double] = sampl match {
+        case "ftree" => new FTree[Double](numTopics, isSparse=false)
+        case "alias" | "hybrid" => new AliasTable(numTopics)
+      }
+      tDense(globalSampler, itemRatio, beta, numTopics)
       val totalSize = ep.size
-      val sizePerThrd = {
-        val npt = totalSize / numThreads
-        if (npt * numThreads == totalSize) npt else npt + 1
-      }
+      val lcSrcIds = ep.localSrcIds
+      val lcDstIds = ep.localDstIds
+      val vattrs = ep.vertexAttrs
       val data = ep.data
-      val doneSignal = new CountDownLatch(numThreads)
-      val threads = new Array[Thread](numThreads)
-      for (threadId <- threads.indices) {
-        threads(threadId) = new Thread(new Runnable {
-          val gen = new XORShiftRandom((numPartitions * seed + pid) * numThreads + threadId)
-          val startPos = sizePerThrd * threadId
-          val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
 
-          override def run(): Unit = {
-            val logger = Logger.getLogger(this.getClass.getName)
-            val lcSrcIds = ep.localSrcIds
-            val lcDstIds = ep.localDstIds
-            val vattrs = ep.vertexAttrs
-            try {
-              // table/ftree is a per term data structure
-              // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
-              // so, use below simple cache to avoid calculating table each time
-              val globalSampler: DiscreteSampler[Double] = sampl match {
-                case "ftree" => new FTree[Double](numTopics, isSparse=false)
-                case "alias" | "hybrid" => new AliasTable(numTopics)
-              }
-              var lastVid: Int = -1
-              val lastSampler: DiscreteSampler[Double] = sampl match {
-                case "alias" => new AliasTable[Double](numTopics)
-                case "ftree" | "hybrid" => new FTree(numTopics, isSparse=true)
-              }
-              val cdfSampler: CumulativeDist[Double] = new CumulativeDist[Double](numTopics)
-              tDense(globalSampler, itemRatio, beta, numTopics)
-              for (i <- startPos until endPos) {
-                val localSrcId = lcSrcIds(i)
-                val termTopicCounter = vattrs(localSrcId)
-                if (lastVid != localSrcId) {
-                  lastVid = localSrcId
-                  wSparse(lastSampler, itemRatio, termTopicCounter)
-                }
-                val docTopicCounter = vattrs(lcDstIds(i))
-                val topics = data(i)
-                for (i <- topics.indices) {
-                  val currentTopic = topics(i)
-                  dSparse(cdfSampler, totalTopicCounter, termTopicCounter, docTopicCounter, beta, betaSum)
-                  globalSampler.update(currentTopic, itemRatio(currentTopic) * beta)
-                  lastSampler.update(currentTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
-                  val newTopic = tokenSampling(gen, globalSampler, lastSampler, cdfSampler, termTopicCounter,
-                    docTopicCounter, currentTopic)
-                  topics(i) = newTopic
-                  globalSampler.update(newTopic, itemRatio(currentTopic) * beta)
-                  lastSampler.update(newTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
-                }
-              }
-            } catch {
-              case e: Exception => logger.error(e.getLocalizedMessage, e)
-            } finally {
-              doneSignal.countDown()
-            }
+      implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+      val all = Future.traverse(ep.index.iterator)(t => Future {
+        val offset = t._2
+        val gen = new XORShiftRandom((numPartitions * seed + pid) * totalSize + offset)
+        val lastSampler: DiscreteSampler[Double] = sampl match {
+          case "alias" => new AliasTable[Double](numTopics)
+          case "ftree" | "hybrid" => new FTree(numTopics, isSparse = true)
+        }
+        val cdfSampler: CumulativeDist[Double] = new CumulativeDist[Double](numTopics)
+        var pos = offset
+        val lcVid = lcSrcIds(offset)
+        val termTopicCounter = vattrs(lcVid)
+        wSparse(lastSampler, itemRatio, termTopicCounter)
+        while (pos < totalSize && lcSrcIds(pos) == lcVid) {
+          val docTopicCounter = vattrs(lcDstIds(pos))
+          val topics = data(pos)
+          for (i <- topics.indices) {
+            val currentTopic = topics(i)
+            dSparse(cdfSampler, totalTopicCounter, termTopicCounter, docTopicCounter, beta, betaSum)
+            globalSampler.update(currentTopic, itemRatio(currentTopic) * beta)
+            lastSampler.update(currentTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
+            val newTopic = tokenSampling(gen, globalSampler, lastSampler, cdfSampler, termTopicCounter,
+              docTopicCounter, currentTopic)
+            topics(i) = newTopic
+            globalSampler.update(newTopic, itemRatio(currentTopic) * beta)
+            lastSampler.update(newTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
           }
-        }, s"sampling thread $threadId")
-      }
-      threads.foreach(_.start())
-      doneSignal.await()
+          pos += 1
+        }
+      })
+      Await.ready(all, Duration.Inf)
+      ec.shutdown()
+
       ep.withData(data)
     })
     GraphImpl(vertices, newEdges)

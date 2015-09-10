@@ -80,9 +80,9 @@ object LDADriver {
       conf.set("spark.serializer", "org.apache.spark.serializer.JavaSerializer")
     }
 
-    val execCores = options.get("execcores").map(_.toInt).getOrElse(0)
-    if (execCores > 0) {
-      conf.set("spark.executor.cores", s"$execCores")
+    val paraParts = options.get("paraparts").map(_.toInt).getOrElse(0)
+    if (paraParts > 0) {
+      conf.set("spark.executor.cores", s"$paraParts")
     }
 
     val hadoopConf = SparkHadoopUtil.get.newConfiguration(conf)
@@ -164,7 +164,7 @@ object LDADriver {
       "           -calcPerplexity=<true|*false>\n" +
       "           -saveInterval=<Int(*0)> (0 or negative disables save at intervals)\n" +
       "           -saveAsSolid=<true|*false>\n" +
-      "           -execCores=<Int(*0)> (0 uses Spark conf setting)\n" +
+      "           -paraParts=<Int(*0)> (0 uses Spark conf setting)\n" +
       "           -useKryo=<true|*false>"
     if (args.length < 8) {
       println(usage)
