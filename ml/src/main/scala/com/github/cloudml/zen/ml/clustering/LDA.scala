@@ -23,11 +23,10 @@ import java.util.concurrent.atomic.AtomicIntegerArray
 
 import LDA._
 import LDADefines._
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
 import org.apache.log4j.Logger
-import org.apache.spark.{SparkContext, SparkConf}
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.GraphImpl
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}

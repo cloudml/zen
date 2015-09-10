@@ -414,7 +414,7 @@ class LightLDA extends LDAAlgorithm {
     val termSum = beta * numTerms
     val w = BSV.zeros[Double](numTopics)
     var sum = 0D
-    val distIter = termTopicCounter.activeIterator.filter(_._2 > 0).foreach { t =>
+    termTopicCounter.activeIterator.filter(_._2 > 0).foreach { t =>
       val topic = t._1
       val count = t._2
       if (count > 0) {

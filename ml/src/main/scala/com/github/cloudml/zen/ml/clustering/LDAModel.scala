@@ -176,7 +176,7 @@ class DistributedLDAModel(@transient val termTopicCounters: RDD[(VertexId, TC)],
 
   /**
    * inference interface
-   * @param rawDocs   tuple pair: (dicId, Vector), in which 'docId' is unique
+   * @param bowDocs   tuple pair: (dicId, Vector), in which 'docId' is unique
    *                  recommended storage level: StorageLevel.MEMORY_AND_DISK
    * @param totalIter overall iterations
    * @param burnIn    previous burnIn iters results will discard
