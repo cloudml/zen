@@ -18,13 +18,14 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
-import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch}
+import java.util.concurrent.Executors
+import scala.concurrent._
+import scala.concurrent.duration.Duration
 import scala.reflect.ClassTag
 
 import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.{FTree, AliasTable, XORShiftRandom}
 import breeze.linalg.{SparseVector => BSV, DenseVector => BDV}
-import org.apache.log4j.Logger
 import org.apache.spark.SparkConf
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl._
@@ -116,52 +117,15 @@ object LDADefines {
         case (pid, ep) =>
           val g2l = ep.global2local
           val results = new Array[VD](ep.vertexAttrs.length)
-          if (numThreads == 1) {
-            vabsIter.foreach {
-              case (_, vab) =>
-                for ((vid, vdata) <- vab.iterator) {
-                  results(g2l(vid)) = vdata
-                }
+          implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+          val all = Future.traverse(vabsIter)(t => Future {
+            val vab = t._2
+            for ((vid, vdata) <- vab.iterator) {
+              results(g2l(vid)) = vdata
             }
-          } else {
-            val numConsumers = numThreads - 1
-            val queue = new ConcurrentLinkedQueue[Seq[(PartitionID, VertexAttributeBlock[VD])]]()
-            val doneSignal = new CountDownLatch(numConsumers)
-            val threads = new Array[Thread](numConsumers)
-            for (threadId <- threads.indices) {
-              threads(threadId) = new Thread(new Runnable {
-                override def run(): Unit = {
-                  val logger = Logger.getLogger(this.getClass.getName)
-                  var incomplete = true
-                  try {
-                    while (incomplete) {
-                      var t = queue.poll()
-                      while (t == null) {
-                        t = queue.poll()
-                      }
-                      for ((_, vab) <- t) {
-                        if (vab == null) {
-                          incomplete = false
-                        } else {
-                          for ((vid, vdata) <- vab.iterator) {
-                            results(g2l(vid)) = vdata
-                          }
-                        }
-                      }
-                    }
-                  } catch {
-                    case e: Exception => logger.error(e.getLocalizedMessage, e)
-                  } finally {
-                    doneSignal.countDown()
-                  }
-                }
-              }, s"refreshEdges thread $threadId")
-            }
-            threads.foreach(_.start())
-            vabsIter.grouped(numConsumers).foreach(queue.offer)
-            Range(0, numConsumers).foreach(thid => queue.offer(Seq((thid, null))))
-            doneSignal.await()
-          }
+          })
+          Await.ready(all, Duration.Inf)
+          ec.shutdown()
           (pid, ep.withVertexAttributes(results))
       }
     )
