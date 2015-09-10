@@ -18,15 +18,16 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
-import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch}
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicIntegerArray
+import scala.concurrent._
+import scala.concurrent.duration.Duration
 
 import LDA._
 import LDADefines._
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
-import org.apache.log4j.Logger
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.GraphImpl
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
@@ -388,98 +389,54 @@ object LDA {
     val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap(t => {
       val ep = t._2
       val totalSize = ep.size
-      val sizePerThrd = {
-        val npt = totalSize / numThreads
-        if (npt * numThreads == totalSize) npt else npt + 1
-      }
-      val vertSize = ep.vertexAttrs.length
+      val lcSrcIds = ep.localSrcIds
+      val lcDstIds = ep.localDstIds
+      val l2g = ep.local2global
+      val vattrs = ep.vertexAttrs
+      val data = ep.data
+      val vertSize = vattrs.length
       val results = new Array[(VertexId, TC)](vertSize)
       val marks = new AtomicIntegerArray(vertSize)
-      val doneSignal = new CountDownLatch(numThreads)
-      val threads = new Array[Thread](numThreads)
-      for (threadId <- threads.indices) {
-        threads(threadId) = new Thread(new Runnable {
-          val startPos = sizePerThrd * threadId
-          val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
 
-          override def run(): Unit = {
-            val logger = Logger.getLogger(this.getClass.getName)
-            val lcSrcIds = ep.localSrcIds
-            val lcDstIds = ep.localDstIds
-            val l2g = ep.local2global
-            val data = ep.data
-            try {
-              if (inferenceOnly) {
-                for (i <- startPos until endPos) {
-                  val di = lcDstIds(i)
-                  var docTuple = results(di)
-                  if (docTuple == null) {
-                    if (marks.getAndDecrement(di) == 0) {
-                      docTuple = (l2g(di), BSV.zeros[Count](numTopics))
-                      results(di) = docTuple
-                      marks.set(di, Int.MaxValue)
-                    } else {
-                      while (marks.get(di) < 0) {}
-                      docTuple = results(di)
-                    }
-                  }
-                  val docTopicCounter = docTuple._2
-                  val topics = data(i)
-                  for (t <- topics) {
-                    docTopicCounter.synchronized {
-                      docTopicCounter(t) += 1
-                    }
-                  }
-                }
-              } else {
-                for (i <- startPos until endPos) {
-                  val si = lcSrcIds(i)
-                  val di = lcDstIds(i)
-                  var termTuple = results(si)
-                  if (termTuple == null) {
-                    if (marks.getAndDecrement(si) == 0) {
-                      termTuple = (l2g(si), BSV.zeros[Count](numTopics))
-                      results(si) = termTuple
-                      marks.set(si, Int.MaxValue)
-                    } else {
-                      while (marks.get(si) < 0) {}
-                      termTuple = results(si)
-                    }
-                  }
-                  var docTuple = results(di)
-                  if (docTuple == null) {
-                    if (marks.getAndDecrement(di) == 0) {
-                      docTuple = (l2g(di), BSV.zeros[Count](numTopics))
-                      results(di) = docTuple
-                      marks.set(di, Int.MaxValue)
-                    } else {
-                      while (marks.get(di) < 0) {}
-                      docTuple = results(di)
-                    }
-                  }
-                  val termTopicCounter = termTuple._2
-                  val docTopicCounter = docTuple._2
-                  val topics = data(i)
-                  for (t <- topics) {
-                    termTopicCounter.synchronized {
-                      termTopicCounter(t) += 1
-                    }
-                    docTopicCounter.synchronized {
-                      docTopicCounter(t) += 1
-                    }
-                  }
-                }
-              }
-            } catch {
-              case e: Exception => logger.error(e.getLocalizedMessage, e)
-            } finally {
-              doneSignal.countDown()
+      implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+      val all = Future.traverse(ep.index.iterator)(t => Future {
+        var pos = t._2
+        val lcVid = lcSrcIds(pos)
+        var termTuple = results(lcVid)
+        if (termTuple == null && !inferenceOnly) {
+          termTuple = (l2g(lcVid), BSV.zeros[Count](numTopics))
+          results(lcVid) = termTuple
+        }
+        val termTopicCounter = termTuple._2
+        while (pos < totalSize && lcSrcIds(pos) == lcVid) {
+          val di = lcDstIds(pos)
+          var docTuple = results(di)
+          if (docTuple == null) {
+            if (marks.getAndDecrement(di) == 0) {
+              docTuple = (l2g(di), BSV.zeros[Count](numTopics))
+              results(di) = docTuple
+              marks.set(di, Int.MaxValue)
+            } else {
+              while (marks.get(di) < 0) {}
+              docTuple = results(di)
             }
           }
-        }, s"aggregateLocal thread $threadId")
-      }
-      threads.foreach(_.start())
-      doneSignal.await()
+          val docTopicCounter = docTuple._2
+          val topics = data(pos)
+          for (t <- topics) {
+            if (!inferenceOnly) {
+              termTopicCounter(t) += 1
+            }
+            docTopicCounter.synchronized {
+              docTopicCounter(t) += 1
+            }
+          }
+          pos += 1
+        }
+      })
+      Await.ready(all, Duration.Inf)
+      ec.shutdown()
+
       results.filter(_ != null)
     })).partitionBy(vertices.partitioner.get)
 
@@ -488,64 +445,23 @@ object LDA {
         val results = svp.values
         val index = svp.index
         val marks = new AtomicIntegerArray(results.length)
-        if (numThreads == 1) {
-          cntsIter.foreach {
-            case (vid, counter) =>
-              val i = index.getPos(vid)
-              if (marks.getAndDecrement(i) == 0) {
-                results(i) = BSV.zeros[Count](numTopics)
-              }
-              results(i) :+= counter
-              marks.set(i, Int.MaxValue)
+        implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+        val all = Future.traverse(cntsIter)(cnts => Future {
+          val (vid, counter) = cnts
+          val i = index.getPos(vid)
+          if (marks.getAndDecrement(i) == 0) {
+            results(i) = counter
+          } else {
+            while (marks.get(i) < 0) {}
+            val agg = results(i)
+            agg.synchronized {
+              agg :+= counter
+            }
           }
-        } else {
-          val numConsumers = numThreads - 1
-          val queue = new ConcurrentLinkedQueue[Seq[(VertexId, TC)]]()
-          val doneSignal = new CountDownLatch(numConsumers)
-          val threads = new Array[Thread](numConsumers)
-          for (threadId <- threads.indices) {
-            threads(threadId) = new Thread(new Runnable {
-              override def run(): Unit = {
-                val logger = Logger.getLogger(this.getClass.getName)
-                var incomplete = true
-                try {
-                  while (incomplete) {
-                    var t = queue.poll()
-                    while (t == null) {
-                      t = queue.poll()
-                    }
-                    for ((vid, counter) <- t) {
-                      if (counter == null) {
-                        incomplete = false
-                      } else {
-                        val i = index.getPos(vid)
-                        if (marks.getAndDecrement(i) == 0) {
-                          results(i) = BSV.zeros[Count](numTopics)
-                          marks.set(i, Int.MaxValue)
-                        } else {
-                          while (marks.get(i) < 0) {}
-                        }
-                        val agg = results(i)
-                        agg.synchronized {
-                          agg :+= counter
-                        }
-                        marks.set(i, Int.MaxValue)
-                      }
-                    }
-                  }
-                } catch {
-                  case e: Exception => logger.error(e.getLocalizedMessage, e)
-                } finally {
-                  doneSignal.countDown()
-                }
-              }
-            }, s"aggregateGlobal thread $threadId")
-          }
-          threads.foreach(_.start())
-          cntsIter.grouped(numConsumers).foreach(queue.offer)
-          Range(0, numConsumers).foreach(thid => queue.offer(Seq((thid.toLong, null))))
-          doneSignal.await()
-        }
+          marks.set(i, Int.MaxValue)
+        })
+        Await.ready(all, Duration.Inf)
+        ec.shutdown()
         svp.withValues(results)
       })
     )
