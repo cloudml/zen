@@ -100,7 +100,7 @@ object LDADriver {
     }
     fs.delete(new Path(checkpointPath), true)
 
-    val sc: SparkContext = null
+    var sc: SparkContext = null
     try {
       println("start LDA on user profile")
       println(s"numTopics = $numTopics, totalIteration = $totalIter")
@@ -108,7 +108,7 @@ object LDADriver {
       println(s"inputDataPath = $inputPath")
 
       val docs = loadCorpus(conf, fs, storageLevel)
-      val sc = docs.context
+      sc = docs.context
       sc.setCheckpointDir(checkpointPath)
       val trainingTime = runTraining(docs, numTopics, totalIter, alpha, beta, alphaAS, storageLevel)
       println(s"Training time consumed: $trainingTime seconds")
