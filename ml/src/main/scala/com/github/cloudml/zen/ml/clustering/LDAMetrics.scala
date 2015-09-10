@@ -17,11 +17,12 @@
 
 package com.github.cloudml.zen.ml.clustering
 
-import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import scala.concurrent._
+import scala.concurrent.duration.Duration
 
 import LDADefines._
 import breeze.linalg.sum
-import org.apache.log4j.Logger
 import org.apache.spark.graphx2.impl.GraphImpl
 
 
@@ -58,106 +59,63 @@ object LDAMetrics {
     ).sum
 
     val partRDD = vertices.partitionsRDD.mapPartitions(_.map(svp => {
-      val totalSize = svp.capacity
-      val results = new Array[(TC, Double, Int)](totalSize)
-      val sizePerThrd = {
-        val npt = totalSize / numThreads
-        if (npt * numThreads == totalSize) npt else npt + 1
-      }
-      val doneSignal = new CountDownLatch(numThreads)
-      val threads = new Array[Thread](numThreads)
-      for (threadId <- threads.indices) {
-        threads(threadId) = new Thread(new Runnable {
-          val startPos = sizePerThrd * threadId
-          val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
-
-          override def run(): Unit = {
-            val logger = Logger.getLogger(this.getClass.getName)
-            val mask = svp.mask
-            val index = svp.index
-            val values = svp.values
-            try {
-              var i = mask.nextSetBit(startPos)
-              while (i < endPos && i >= 0) {
-                val vid = index.getValue(i)
-                val counter = values(i)
-                val pSum = counter.activeIterator.map {
-                  case (topic, cnt) =>
-                    if (isDocId(vid)) {
-                      cnt * beta / (tCounter(topic) + betaSum)
-                    } else {
-                      cnt * alphaRatio * (tCounter(topic) + alphaAS) / (tCounter(topic) + betaSum)
-                    }
-                }.sum
-                val cSum = if (isDocId(vid)) sum(counter) else 0
-                results(i) = (counter, pSum, cSum)
-                i = mask.nextSetBit(i + 1)
-              }
-            } catch {
-              case e: Exception => logger.error(e.getLocalizedMessage, e)
-            } finally {
-              doneSignal.countDown()
+      val index = svp.index
+      val values= svp.values
+      val results = new Array[(TC, Double, Int)](svp.capacity)
+      implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+      val all = Future.traverse(svp.mask.iterator)(i => Future {
+        val vid = index.getValue(i)
+        val counter = values(i)
+        val pSum = counter.activeIterator.map {
+          case (topic, cnt) =>
+            if (isDocId(vid)) {
+              cnt * beta / (tCounter(topic) + betaSum)
+            } else {
+              cnt * alphaRatio * (tCounter(topic) + alphaAS) / (tCounter(topic) + betaSum)
             }
-          }
-        }, s"preComputing thread $threadId")
-      }
-      threads.foreach(_.start())
-      doneSignal.await()
+        }.sum
+        val cSum = if (isDocId(vid)) sum(counter) else 0
+        results(i) = (counter, pSum, cSum)
+      })
+      Await.ready(all, Duration.Inf)
+      ec.shutdown()
       svp.withValues(results)
     }), preservesPartitioning=true)
     val cachedGraph = GraphImpl.fromExistingRDDs(vertices.withPartitionsRDD(partRDD), edges)
 
     val refrGraph = refreshEdgeAssociations(cachedGraph)
-    val llhRDD = refrGraph.edges.partitionsRDD.mapPartitions(_.map(t => {
+    val sumPart = refrGraph.edges.partitionsRDD.mapPartitions(_.map(t => {
       val ep = t._2
       val totalSize = ep.size
-      val sizePerThrd = {
-        val npt = totalSize / numThreads
-        if (npt * numThreads == totalSize) npt else npt + 1
-      }
-      val sums = new Array[Double](numThreads)
-      val doneSignal = new CountDownLatch(numThreads)
-      val threads = new Array[Thread](numThreads)
-      for (threadId <- threads.indices) {
-        threads(threadId) = new Thread(new Runnable {
-          val thid = threadId
-          val startPos = sizePerThrd * threadId
-          val endPos = math.min(sizePerThrd * (threadId + 1), totalSize)
-
-          override def run(): Unit = {
-            val logger = Logger.getLogger(this.getClass.getName)
-            val lcSrcIds = ep.localSrcIds
-            val lcDstIds = ep.localDstIds
-            val vattrs = ep.vertexAttrs
-            val data = ep.data
-            try {
-              for (i <- startPos until endPos) {
-                val (termTopicCounter, wSparseSum, _) = vattrs(lcSrcIds(i))
-                val (docTopicCounter, dSparseSum, docSize) = vattrs(lcDstIds(i))
-                val occurs = data(i).length
-
-                // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
-                val dwSparseSum = docTopicCounter.activeIterator.map {
-                  case (topic, cnt) => cnt * termTopicCounter(topic) / (tCounter(topic) + betaSum)
-                }.sum
-                val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alphaSum)
-
-                sums(thid) += Math.log(prob) * occurs
-              }
-            } catch {
-              case e: Exception => logger.error(e.getLocalizedMessage, e)
-            } finally {
-              doneSignal.countDown()
-            }
-          }
-        }, s"perplexity thread $threadId")
-      }
-      threads.foreach(_.start())
-      doneSignal.await()
-      sums.sum
+      val lcSrcIds = ep.localSrcIds
+      val lcDstIds = ep.localDstIds
+      val vattrs = ep.vertexAttrs
+      val data = ep.data
+      implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+      val all = Future.traverse(ep.index.iterator)(t => Future {
+        var pos = t._2
+        val lcVid = lcSrcIds(pos)
+        val (termTopicCounter, wSparseSum, _) = vattrs(lcVid)
+        var lcSum = 0D
+        while (pos < totalSize && lcSrcIds(pos) == lcVid) {
+          val (docTopicCounter, dSparseSum, docSize) = vattrs(lcDstIds(pos))
+          val occurs = data(pos).length
+          // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
+          val dwSparseSum = docTopicCounter.activeIterator.map {
+            case (topic, cnt) => cnt * termTopicCounter(topic) / (tCounter(topic) + betaSum)
+          }.sum
+          val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alphaSum)
+          lcSum += Math.log(prob) * occurs
+        }
+        lcSum
+      })
+      val sums = for (results <- all) yield results.sum
+      val result = Await.result(sums, Duration.Inf)
+      ec.shutdown()
+      result
     }))
 
-    val termProb = llhRDD.sum()
+    val termProb = sumPart.sum()
     math.exp(-1 * termProb / numTokens)
   }
 }
