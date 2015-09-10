@@ -106,10 +106,11 @@ object LDAMetrics {
           }.sum
           val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alphaSum)
           lcSum += Math.log(prob) * occurs
+          pos += 1
         }
         lcSum
       })
-      val sums = for (results <- all) yield results.sum
+      val sums = all.map(_.sum)
       val result = Await.result(sums, Duration.Inf)
       ec.shutdown()
       result
