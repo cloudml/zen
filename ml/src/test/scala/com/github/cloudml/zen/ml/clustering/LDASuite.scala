@@ -40,7 +40,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
 
     val data = sc.parallelize(corpus, 2)
     data.cache()
-    val docs = LDA.initializeCorpusEdges(data, numTopics, storageLevel)
+    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, storageLevel)
     val pps = new Array[Double](incrementalLearning)
     val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new FastLDA, storageLevel)
     var i = 0
@@ -89,7 +89,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
 
     val data = sc.parallelize(corpus, 2)
     data.cache()
-    val docs = LDA.initializeCorpusEdges(data, numTopics, storageLevel)
+    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, storageLevel)
     val pps = new Array[Double](incrementalLearning)
     val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new LightLDA, storageLevel)
     var i = 0
@@ -180,7 +180,7 @@ object LDASuite {
     model: Array[BDV[Double]],
     numDocs: Int,
     numTerms: Int,
-    numTopics: Int): Array[(Long, BSV[Int])] = {
+    numTopics: Int): Array[BOW] = {
     (0 until numDocs).map { i =>
       val rand = new Random()
       val numTermsPerDoc = Poisson.distribution(expectedDocLength).sample()

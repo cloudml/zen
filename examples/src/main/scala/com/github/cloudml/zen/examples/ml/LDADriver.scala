@@ -20,8 +20,7 @@ package com.github.cloudml.zen.examples.ml
 import com.github.cloudml.zen.ml.clustering.LDA
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.util.SparkHacker
-import breeze.linalg.{SparseVector => BSV}
-import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.hadoop.fs.Path
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.graphx2._
 import org.apache.spark.rdd.RDD
@@ -49,8 +48,8 @@ object LDADriver {
     assert(totalIter > 0, "totalIter must be greater than 0")
     assert(numPartitions > 0, "numPartitions must be greater than 0")
 
-    val inputPath = options("inpath")
-    val outputPath = options("outpath")
+    val inputPath = options("inputpath")
+    val outputPath = options("outputpath")
     val checkpointPath = outputPath + ".checkpoint"
 
     val slvlStr = options.getOrElse("storagelevel", "MEMORY_AND_DISK_SER").toUpperCase
@@ -65,7 +64,6 @@ object LDADriver {
 
     conf.set(cs_sampleRate, options.getOrElse("samplerate", "1.0"))
     conf.set(cs_numThreads, options.getOrElse("numthreads", "1"))
-    conf.set(cs_partPerNode, options.getOrElse("partpernode", "0"))
     conf.set(cs_LDAAlgorithm, options.getOrElse("ldaalgorithm", "fastlda"))
     conf.set(cs_accelMethod, options.getOrElse("accelmethod", "alias"))
     conf.set(cs_partStrategy, options.getOrElse("partstrategy", "dbh"))
@@ -74,13 +72,18 @@ object LDADriver {
     conf.set(cs_saveInterval, options.getOrElse("saveinterval", "0"))
     conf.set(cs_saveAsSolid, options.getOrElse("saveassolid", "false"))
 
-    val useKyro = options.getOrElse("usekryo", "false").toBoolean
+    val useKyro = options.get("usekryo").exists(_.toBoolean)
     if (useKyro) {
       conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
       GraphXUtils.registerKryoClasses(conf)
       registerKryoClasses(conf)
     } else {
       conf.set("spark.serializer", "org.apache.spark.serializer.JavaSerializer")
+    }
+
+    val execCores = options.get("execcores").map(_.toInt).getOrElse(0)
+    if (execCores > 0) {
+      conf.set("spark.executor.cores", s"$execCores")
     }
 
     val hadoopConf = SparkHadoopUtil.get.newConfiguration(conf)
@@ -100,16 +103,15 @@ object LDADriver {
     }
     fs.delete(new Path(checkpointPath), true)
 
-    var sc: SparkContext = null
+    val sc = new SparkContext(conf)
     try {
+      sc.setCheckpointDir(checkpointPath)
       println("start LDA on user profile")
       println(s"numTopics = $numTopics, totalIteration = $totalIter")
       println(s"alpha = $alpha, beta = $beta, alphaAS = $alphaAS")
       println(s"inputDataPath = $inputPath")
 
-      val docs = loadCorpus(conf, fs, storageLevel)
-      sc = docs.context
-      sc.setCheckpointDir(checkpointPath)
+      val docs = loadCorpus(sc, storageLevel)
       val trainingTime = runTraining(docs, numTopics, totalIter, alpha, beta, alphaAS, storageLevel)
       println(s"Training time consumed: $trainingTime seconds")
 
@@ -122,7 +124,7 @@ object LDADriver {
     }
   }
 
-  def runTraining(docs: RDD[Edge[TA]],
+  def runTraining(docs: EdgeRDD[TA],
     numTopics: Int,
     totalIter: Int,
     alpha: Double,
@@ -138,73 +140,15 @@ object LDADriver {
     (trainingEndedTime - trainingStartedTime) / 1e3
   }
 
-  def loadCorpus(scConf: SparkConf,
-    fs: FileSystem,
-    storageLevel: StorageLevel): RDD[Edge[TA]] = {
-    val inputPath = scConf.get(cs_inputPath)
-    val numTopics = scConf.get(cs_numTopics).toInt
-//    val partStrategy = scConf.get(cs_partStrategy)
-//    val rddPath = inputPath + s".cache-$partStrategy-t$numTopics"
-//    if (!fs.exists(new Path(rddPath))) {
-//      println("cached rdd doesn't exist, generating...")
-//      val csc = new SparkContext(scConf)
-//      val bowDocs = readDocsFromTxt(csc, storageLevel)
-//      val edges = LDA.initializeCorpusEdges(bowDocs, numTopics, storageLevel)
-//      edges.saveAsObjectFile(rddPath)
-//      csc.stop()
-//    }
-    val exeCores = scConf.get(cs_partPerNode).toInt
-    if (exeCores > 0) {
-      scConf.set("spark.executor.cores", s"$exeCores")
-    }
-    val sc = new SparkContext(scConf)
-    // sc.objectFile(rddPath)
-    val bowDocs = readDocsFromTxt(sc, storageLevel)
-    LDA.initializeCorpusEdges(bowDocs, numTopics, storageLevel)
-  }
-
-  def readDocsFromTxt(sc: SparkContext, storageLevel: StorageLevel): RDD[BOW] = {
+  def loadCorpus(sc: SparkContext,
+    storageLevel: StorageLevel): EdgeRDD[TA] = {
     val conf = sc.getConf
-    val docsPath = conf.get(cs_inputPath)
+    val inputPath = conf.get(cs_inputPath)
+    val numTopics = conf.get(cs_numTopics).toInt
     val numPartitions = conf.get(cs_numPartitions).toInt
     val sr = conf.get(cs_sampleRate).toDouble
-    val rawDocs = sc.textFile(docsPath, numPartitions).sample(false, sr)
-    rawDocs.persist(storageLevel).setName("rawDocs")
-    val wordsLength = rawDocs.mapPartitions { iter =>
-      val iterator = iter.map { line =>
-        val items = line.split("\\t|\\s+")
-        var max = Integer.MIN_VALUE
-        items.tail.foreach(token => max = math.max(token.split(":")(0).toInt, max))
-        max
-      }
-      Iterator.single[Int](iterator.max)
-    }.collect().max + 1
-    println(s"the max words id: $wordsLength")
-    val bowDocs = rawDocs.map { line =>
-      val tokens = line.split("\\t|\\s+")
-      val docId = tokens(0).toLong
-      if (tokens.length == 1) println(tokens.mkString("\t"))
-      val docTermCount = BSV.zeros[Int](wordsLength)
-      for (t <- tokens.tail) {
-        val termCountPair = t.split(':')
-        val termId = termCountPair(0).toInt
-        val termCount = if (termCountPair.length > 1) {
-          termCountPair(1).toInt
-        } else {
-          1
-        }
-        docTermCount(termId) += termCount
-      }
-      if (docTermCount.activeSize < 1) {
-        println(s"docTermCount active iterator: ${docTermCount.activeIterator.mkString(";")}")
-      }
-      (docId, docTermCount)
-    }
-    bowDocs.persist(storageLevel).setName("bowDocs")
-    val numDocs = bowDocs.count()
-    println(s"num docs in the corpus: $numDocs")
-    rawDocs.unpersist(blocking=false)
-    bowDocs
+    val rawDocs = sc.textFile(inputPath, numPartitions).sample(false, sr)
+    LDA.initializeCorpusEdges(rawDocs, "raw", numTopics, storageLevel)
   }
 
   def parseArgs(args: Array[String]): OptionMap = {
@@ -213,7 +157,6 @@ object LDADriver {
       "        -totalIter=<Int> -numPartitions=<Int>\n" +
       "  Options: -sampleRate=<Double(*1.0)>\n" +
       "           -numThreads=<Int(*1)>\n" +
-      "           -partPerNode=<Int(*0)> (0 uses Spark conf setting)\n" +
       "           -LDAAlgorithm=<*FastLDA|LightLDA>\n" +
       "           -accelMethod=<*Alias|FTree|Hybrid>\n" +
       "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK_SER)>\n" +
@@ -222,6 +165,7 @@ object LDADriver {
       "           -calcPerplexity=<true|*false>\n" +
       "           -saveInterval=<Int(*0)> (0 or negative disables save at intervals)\n" +
       "           -saveAsSolid=<true|*false>\n" +
+      "           -execCores=<Int(*0)> (0 uses Spark conf setting)\n" +
       "           -useKryo=<true|*false>"
     if (args.length < 8) {
       println(usage)
@@ -233,9 +177,9 @@ object LDADriver {
       list match {
         case Nil => map
         case head :: Nil if !isSwitch(head) =>
-          nextOption(map ++ Map("outpath" -> head), Nil)
+          nextOption(map ++ Map("outputpath" -> head), Nil)
         case head :: tail if !isSwitch(head) =>
-          nextOption(map ++ Map("inpath" -> head), tail)
+          nextOption(map ++ Map("inputpath" -> head), tail)
         case head :: tail if isSwitch(head) =>
           var kv = head.toLowerCase.split("=", 2)
           if (kv.length == 1) {

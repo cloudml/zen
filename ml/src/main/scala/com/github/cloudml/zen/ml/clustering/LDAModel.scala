@@ -176,7 +176,7 @@ class DistributedLDAModel(@transient val termTopicCounters: RDD[(VertexId, TC)],
 
   /**
    * inference interface
-   * @param bowDocs   tuple pair: (dicId, Vector), in which 'docId' is unique
+   * @param rawDocs   tuple pair: (dicId, Vector), in which 'docId' is unique
    *                  recommended storage level: StorageLevel.MEMORY_AND_DISK
    * @param totalIter overall iterations
    * @param burnIn    previous burnIn iters results will discard
@@ -187,7 +187,7 @@ class DistributedLDAModel(@transient val termTopicCounters: RDD[(VertexId, TC)],
     require(totalIter > burnIn, "totalIter is less than burnInIter")
     require(totalIter > 0, "totalIter is less than 0")
     require(burnIn > 0, "burnIn is less than 0")
-    val docs = LDA.initializeCorpusEdges(bowDocs, numTopics, storageLevel)
+    val docs = LDA.initializeCorpusEdges(bowDocs, "bow", numTopics, storageLevel)
     val lda = LDA(this, docs, algo)
     for (i <- 1 to burnIn) {
       lda.gibbsSampling(i, inferenceOnly=true)
@@ -205,8 +205,8 @@ class DistributedLDAModel(@transient val termTopicCounters: RDD[(VertexId, TC)],
 
   def save(isTransposed: Boolean): Unit = {
     val sc = termTopicCounters.context
-    val outpath = sc.getConf.get(cs_outputpath)
-    save(sc, outpath, isTransposed)
+    val outputPath = sc.getConf.get(cs_outputpath)
+    save(sc, outputPath, isTransposed)
   }
 
   /**
@@ -307,7 +307,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
 
   def loadLDAModel(metas: MetaT, rdd: RDD[BOW]): DistributedLDAModel = {
     val (numTopics, numTerms, numTokens, alpha, beta, alphaAS, isTransposed) = metas
-    val ttcs = if (isTransposed) {
+    val termCnts = if (isTransposed) {
       rdd.flatMap { case (topicId, vector) =>
         vector.activeIterator.map { case (termId, cn) =>
           val z = BSV.zeros[Count](numTopics)
@@ -321,8 +321,8 @@ object LDAModel extends Loader[DistributedLDAModel] {
       rdd
     }
     val storageLevel = StorageLevel.MEMORY_AND_DISK_SER
-    ttcs.persist(storageLevel)
-    new DistributedLDAModel(ttcs, numTopics, numTerms, numTokens, alpha, beta, alphaAS, storageLevel)
+    termCnts.persist(storageLevel)
+    new DistributedLDAModel(termCnts, numTopics, numTerms, numTokens, alpha, beta, alphaAS, storageLevel)
   }
 
   def loadLocalLDAModel(filePath: String): LocalLDAModel = {
@@ -333,14 +333,14 @@ object LDAModel extends Loader[DistributedLDAModel] {
     val Array(sNumTopics, sNumTerms, sNumTokens, sAlpha, sBeta, sAlphaAS) = lines.get(0).split(" ")
     val numTopics = sNumTopics.toInt
     val numTerms = sNumTerms.toInt
-    val ttcs = Array.fill(numTerms)(BSV.zeros[Count](numTopics))
+    val termCnts = Array.fill(numTerms)(BSV.zeros[Count](numTopics))
     val iter = lines.listIterator(1)
     while (iter.hasNext) {
       val line = iter.next.trim
       if (!line.isEmpty && !line.startsWith("#")) {
         val its = line.split(" ")
         val offset = its.head.toInt
-        val sv = ttcs(offset)
+        val sv = termCnts(offset)
         its.tail.foreach { s =>
           val Array(index, value) = s.split(":")
           sv(index.toInt) = value.toInt
@@ -348,6 +348,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
         sv.compact()
       }
     }
-    new LocalLDAModel(ttcs, numTopics, numTerms, sNumTokens.toLong, sAlpha.toDouble, sBeta.toDouble, sAlphaAS.toDouble)
+    new LocalLDAModel(termCnts, numTopics, numTerms, sNumTokens.toLong,
+      sAlpha.toDouble, sBeta.toDouble, sAlphaAS.toDouble)
   }
 }

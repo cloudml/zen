@@ -201,14 +201,14 @@ class LDA(@transient var corpus: Graph[TC, TA],
 }
 
 object LDA {
-  def apply(docs: RDD[Edge[TA]],
+  def apply(docs: EdgeRDD[TA],
     numTopics: Int,
     alpha: Double,
     beta: Double,
     alphaAS: Double,
     algo: LDAAlgorithm,
     storageLevel: StorageLevel): LDA = {
-    val initCorpus = LBVertexRDDBuilder.fromEdges[TC, TA](docs, storageLevel)
+    val initCorpus = LBVertexRDDBuilder.fromEdgeRDD[TC, TA](docs, storageLevel)
     val edges = initCorpus.edges
     edges.setName("edges-0").persist(storageLevel)
     val numTokens = edges.map(_.attr.length.toLong).reduce(_ + _)
@@ -225,7 +225,7 @@ object LDA {
 
   // initialize LDA for inference or incremental training
   def apply(computedModel: DistributedLDAModel,
-    docs: RDD[Edge[TA]],
+    docs: EdgeRDD[TA],
     algo: LDAAlgorithm): LDA = {
     val numTopics = computedModel.numTopics
     val numTerms = computedModel.numTerms
@@ -236,7 +236,7 @@ object LDA {
     val storageLevel = computedModel.storageLevel
     println(s"tokens in the corpus: $numTokens")
     println(s"terms in the corpus: $numTerms")
-    val initCorpus = LBVertexRDDBuilder.fromEdges[TC, TA](docs, storageLevel)
+    val initCorpus = LBVertexRDDBuilder.fromEdgeRDD[TC, TA](docs, storageLevel)
     initCorpus.edges.setName("edges-0").persist(storageLevel)
     val corpus = updateVertexCounters(initCorpus, numTopics)
       .joinVertices(computedModel.termTopicCounters)((_, _, computedCounter) => computedCounter)
@@ -249,7 +249,7 @@ object LDA {
 
   /**
    * LDA training
-   * @param docs       RDD of corpus edges
+   * @param docs       EdgeRDD of corpus
    * @param totalIter  the number of iterations
    * @param numTopics  the number of topics (5000+ for large data)
    * @param alpha      recommend to be (5.0 /numTopics)
@@ -258,7 +258,7 @@ object LDA {
    * @param storageLevel StorageLevel that the LDA Model RDD uses
    * @return DistributedLDAModel
    */
-  def train(docs: RDD[Edge[TA]],
+  def train(docs: EdgeRDD[TA],
     totalIter: Int,
     numTopics: Int,
     alpha: Double,
@@ -281,7 +281,7 @@ object LDA {
     lda.toLDAModel()
   }
 
-  def incrementalTrain(docs: RDD[Edge[TA]],
+  def incrementalTrain(docs: EdgeRDD[TA],
     computedModel: DistributedLDAModel,
     totalIter: Int,
     storageLevel: StorageLevel): DistributedLDAModel = {
@@ -305,22 +305,21 @@ object LDA {
   }
 
   /**
-   * @param bowDocs  RDD of documents, which are term (word) count vectors paired with IDs.
+   * @param orgDocs  RDD of documents, which are term (word) count vectors paired with IDs.
    *                 The term count vectors are "bags of words" with a fixed-size vocabulary
    *                 (where the vocabulary size is the length of the vector).
    *                 Document IDs must be unique and >= 0.
    */
-  def initializeCorpusEdges(bowDocs: RDD[BOW],
+  def initializeCorpusEdges(orgDocs: RDD[_],
+    docType: String,
     numTopics: Int,
     storageLevel: StorageLevel): EdgeRDD[TA] = {
-    val conf = bowDocs.context.getConf
-    val edges = bowDocs.mapPartitionsWithIndex((pid, iter) => {
-      val gen = new XORShiftRandom(pid + 117)
-      iter.flatMap {
-        case (docId, doc) => initializeEdges(gen, doc, docId, numTopics)
-      }
-    })
-    val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdges(edges, storageLevel)
+    val conf = orgDocs.context.getConf
+    val docs = docType match {
+      case "raw" => convertRawDocs(orgDocs.asInstanceOf[RDD[String]], numTopics)
+      case "bow" => convertBowDocs(orgDocs.asInstanceOf[RDD[BOW]], numTopics)
+    }
+    val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdges(docs, storageLevel)
     initCorpus.persist(storageLevel)
     val partCorpus = conf.get(cs_partStrategy, "dbh") match {
       case "edge2d" =>
@@ -338,28 +337,46 @@ object LDA {
       case _ =>
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
-    val corpusEdges = partCorpus.edges
-    val numEdges = corpusEdges.persist(storageLevel).count()
+    val edges = partCorpus.edges
+    val numEdges = edges.persist(storageLevel).count()
     println(s"edges in the corpus: $numEdges")
-    bowDocs.unpersist(blocking=false)
     initCorpus.unpersist(blocking=false)
-    corpusEdges
+    edges
   }
 
-  private def initializeEdges(
-    gen: Random,
-    doc: BSV[Int],
-    docId: DocId,
-    numTopics: Int): Iterator[Edge[TA]] = {
-    val newDocId: DocId = genNewDocId(docId)
-    doc.activeIterator.filter(_._2 > 0).map {
-      case (termId, counter) =>
-        val topics = new Array[Int](counter)
-        for (i <- 0 until counter) {
-          topics(i) = gen.nextInt(numTopics)
-        }
-        Edge(termId, newDocId, topics)
-    }
+  def convertRawDocs(rawDocs: RDD[String], numTopics: Int): RDD[Edge[TA]] = {
+    rawDocs.mapPartitionsWithIndex((pid, iter) => {
+      val gen = new XORShiftRandom(pid + 117)
+      iter.flatMap(line => {
+        val tokens = line.split("\\t|\\s+")
+        val docId = tokens.head.toLong
+        val edger = toEdge(gen, docId, numTopics) _
+        tokens.tail.map(field => {
+          val pairs = field.split(":")
+          val termId = pairs(0).toInt
+          val termCnt = if (pairs.length > 1) pairs(1).toInt else 1
+          (termId, termCnt)
+        }).filter(_._2 > 0).map(edger)
+      })
+    })
+  }
+
+  def convertBowDocs(bowDocs: RDD[BOW], numTopics: Int): RDD[Edge[TA]] = {
+    bowDocs.mapPartitionsWithIndex((pid, iter) => {
+      val gen = new XORShiftRandom(pid + 117)
+      iter.flatMap{
+        case (docId, tokens) =>
+          val edger = toEdge(gen, docId, numTopics) _
+          tokens.activeIterator.filter(_._2 > 0).map(edger)
+      }
+    })
+  }
+
+  private def toEdge(gen: Random, docId: Long, numTopics: Int)
+    (termPair: (Int, Count)): Edge[TA] = {
+    val (termId, termCnt) = termPair
+    val topics = Array.fill(termCnt)(gen.nextInt(numTopics))
+    Edge(termId, genNewDocId(docId), topics)
   }
 
   private def updateVertexCounters(corpus: Graph[TC, TA],

@@ -28,7 +28,7 @@ import org.apache.spark.storage.StorageLevel
 object LBVertexRDDBuilder {
   // TODO: correctly implement this instead of using HashPartitioner
   // Locality based VertexRDD Builder, make each vertex put in the partition where edges need it most.
-  // But now GraphX's implementation of VertexRDD only support HashPartitioner.
+  // But now GraphX's implementation of VertexRDD only supports HashPartitioner.
   // To implement this, modify VertexRDD's code first, add PartitionID in RDD element.
   def fromEdgeRDD[VD: ClassTag, ED: ClassTag](edges: EdgeRDD[ED],
     storageLevel: StorageLevel): GraphImpl[VD, ED] = {

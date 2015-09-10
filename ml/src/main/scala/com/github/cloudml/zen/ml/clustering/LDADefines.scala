@@ -55,7 +55,6 @@ object LDADefines {
   val cs_outputpath = "zen.lda.outputPath"
   val cs_saveAsSolid = "zen.lda.saveAsSolid"
   val cs_numThreads = "zen.lda.numThreads"
-  val cs_partPerNode = "zen.lda.partPerNode"
 
   // make docId always be negative, so that the doc vertex always be the dest vertex
   @inline def genNewDocId(docId: Long): VertexId = {
