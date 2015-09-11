@@ -98,17 +98,23 @@ object LDADefines {
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
     val shippedVerts = vertices.partitionsRDD.mapPartitions(_.flatMap(svp => {
       val rt = svp.routingTable
-      Iterator.tabulate(rt.numEdgePartitions)(pid => {
-        val initialSize = rt.partitionSize(pid)
-        val vids = new GraphXPrimitiveVector[VertexId](initialSize)
-        val attrs = new GraphXPrimitiveVector[VD](initialSize)
-        rt.foreachWithinEdgePartition(pid, includeSrc=true, includeDst=true)(vid => {
-          if (svp.isDefined(vid)) {
-            vids += vid
-            attrs += svp(vid)
-          }
+      Range(0, rt.numEdgePartitions).grouped(numThreads).flatMap(batch => {
+        implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+        val all = Future.traverse(batch)(pid => Future {
+          val totalSize = rt.partitionSize(pid)
+          val vids = new GraphXPrimitiveVector[VertexId](totalSize)
+          val attrs = new GraphXPrimitiveVector[VD](totalSize)
+          rt.foreachWithinEdgePartition(pid, includeSrc = true, includeDst = true)(vid => {
+            if (svp.isDefined(vid)) {
+              vids += vid
+              attrs += svp(vid)
+            }
+          })
+          (pid, new VertexAttributeBlock(vids.trim().array, attrs.trim().array))
         })
-        (pid, new VertexAttributeBlock(vids.trim().array, attrs.trim().array))
+        val results = Await.result(all, Duration.Inf)
+        ec.shutdown()
+        results
       })
     })).partitionBy(edges.partitioner.get)
 
