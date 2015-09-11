@@ -210,12 +210,12 @@ object LDA {
     storageLevel: StorageLevel): LDA = {
     val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdgeRDD(docs, storageLevel)
     val edges = initCorpus.edges
-    edges.setName("edges-0").persist(storageLevel)
+    edges.persist(storageLevel).setName("edges-0")
     val numTokens = edges.map(_.attr.length.toLong).reduce(_ + _)
     println(s"tokens in the corpus: $numTokens")
     val corpus = updateVertexCounters(initCorpus, numTopics)
     val vertices = corpus.vertices
-    vertices.setName("vertices-0").persist(storageLevel)
+    vertices.persist(storageLevel).setName("vertices-0")
     val numTerms = vertices.filter(t => isTermId(t._1)).count().toInt
     println(s"terms in the corpus: $numTerms")
     val numDocs = vertices.filter(t => isDocId(t._1)).count()
