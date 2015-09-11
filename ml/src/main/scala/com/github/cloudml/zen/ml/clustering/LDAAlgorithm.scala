@@ -101,11 +101,13 @@ class FastLDA extends LDAAlgorithm {
       val lcDstIds = ep.localDstIds
       val vattrs = ep.vertexAttrs
       val data = ep.data
+      var indicator = 0
 
       implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
       val all = Future.traverse(ep.index.iterator)(t => Future {
         val offset = t._2
-        val gen = new XORShiftRandom((numPartitions * seed + pid) * totalSize + offset)
+        indicator += 1
+        val gen = new XORShiftRandom((seed * numPartitions + pid) * numThreads + indicator % numThreads)
         val lastSampler: DiscreteSampler[Double] = sampl match {
           case "alias" => new AliasTable[Double](numTopics)
           case "ftree" | "hybrid" => new FTree(numTopics, isSparse = true)

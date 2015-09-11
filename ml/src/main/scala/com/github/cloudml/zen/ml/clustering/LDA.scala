@@ -446,21 +446,22 @@ object LDA {
         val index = svp.index
         val marks = new AtomicIntegerArray(results.length)
         implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-        val all = Future.traverse(cntsIter)(cnts => Future {
-          val (vid, counter) = cnts
-          val i = index.getPos(vid)
-          if (marks.getAndDecrement(i) == 0) {
-            results(i) = counter
-          } else {
-            while (marks.get(i) < 0) {}
-            val agg = results(i)
-            agg.synchronized {
-              agg :+= counter
+        val all = cntsIter.grouped(numThreads * 10).map(cntGrp => Future {
+          for ((vid, counter) <- cntGrp) {
+            val i = index.getPos(vid)
+            if (marks.getAndDecrement(i) == 0) {
+              results(i) = counter
+            } else {
+              while (marks.get(i) < 0) {}
+              val agg = results(i)
+              agg.synchronized {
+                agg :+= counter
+              }
             }
+            marks.set(i, Int.MaxValue)
           }
-          marks.set(i, Int.MaxValue)
         })
-        Await.ready(all, Duration.Inf)
+        Await.ready(Future.sequence(all), Duration.Inf)
         ec.shutdown()
         svp.withValues(results)
       })
