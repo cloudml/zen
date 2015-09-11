@@ -39,7 +39,7 @@ import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods._
 
 
-class LocalLDAModel(@transient val termTopicCounters: Array[BSV[Count]],
+class LocalLDAModel(@transient val termTopicCounters: Array[TC],
   val numTopics: Int,
   val numTerms: Int,
   val numTokens: Long,
@@ -64,7 +64,7 @@ class LocalLDAModel(@transient val termTopicCounters: Array[BSV[Count]],
 
   private def collectTopicCounter(): BDV[Count] = {
     val total = BDV.zeros[Count](numTopics)
-    termTopicCounters.foreach(ttc => total :+= ttc)
+    termTopicCounters.foreach(ttc => total :++=: ttc)
     total
   }
 
@@ -109,10 +109,10 @@ class LocalLDAModel(@transient val termTopicCounters: Array[BSV[Count]],
   }
 
   private[ml] def sampleDoc(gen: Random,
-    docTopicCounter: BSV[Count],
+    docTopicCounter: TC,
     tokens: Array[Int],
     topics: Array[Int],
-    docCdf: CumulativeDist[Double]): BSV[Count] = {
+    docCdf: CumulativeDist[Double]): TC = {
     for (i <- topics.indices) {
       val termId = tokens(i)
       val termTopicCounter = termTopicCounters(termId)
@@ -127,14 +127,14 @@ class LocalLDAModel(@transient val termTopicCounters: Array[BSV[Count]],
         docTopicCounter(currentTopic) -= 1
       }
     }
-    docTopicCounter.compact()
+    // docTopicCounter.compact()
     docTopicCounter
   }
 
   private[ml] def wordTable(
     cacheMap: AppendOnlyMap[Int, SoftReference[AliasTable[Double]]],
     totalTopicCounter: BDV[Count],
-    termTopicCounter: BSV[Count],
+    termTopicCounter: TC,
     termId: Int): AliasTable[Double] = {
     if (termTopicCounter.used == 0) return null
     var w = cacheMap(termId)
@@ -183,7 +183,7 @@ class DistributedLDAModel(@transient val termTopicCounters: RDD[(VertexId, TC)],
    */
   def inference(bowDocs: RDD[BOW],
     totalIter: Int = 25,
-    burnIn: Int = 22): RDD[(VertexId, BSV[Double])] = {
+    burnIn: Int = 22): RDD[(VertexId, HashVector[Double])] = {
     require(totalIter > burnIn, "totalIter is less than burnInIter")
     require(totalIter > 0, "totalIter is less than 0")
     require(burnIn > 0, "burnIn is less than 0")
@@ -196,7 +196,7 @@ class DistributedLDAModel(@transient val termTopicCounters: RDD[(VertexId, TC)],
   }
 
   def toLocalLDAModel: LocalLDAModel = {
-    val ttcs = Array.fill(numTerms.toInt)(BSV.zeros[Count](numTopics))
+    val ttcs = Array.fill(numTerms.toInt)(HashVector.zeros[Count](numTopics))
     termTopicCounters.collect().foreach(t => ttcs(t._1.toInt) :+= t._2)
     new LocalLDAModel(ttcs, numTopics, numTerms, numTokens, alpha, beta, alphaAS)
   }
@@ -227,7 +227,7 @@ class DistributedLDAModel(@transient val termTopicCounters: RDD[(VertexId, TC)],
     val rdd = if (isTransposed) {
       termTopicCounters.flatMap { case (termId, vector) =>
         vector.activeIterator.map { case (topicId, cn) =>
-          val z = BSV.zeros[Count](numTerms.toInt)
+          val z = HashVector.zeros[Count](numTerms.toInt)
           z(termId.toInt) = cn
           (topicId.toLong, z)
         }
@@ -290,33 +290,35 @@ object LDAModel extends Loader[DistributedLDAModel] {
     (numTopics, numTerms, numTokens, alpha, beta, alphaAS, isTransposed)
   }
 
-  def parseLine(metas: MetaT, line: String): BOW = {
+  def parseLine(metas: MetaT, line: String): (Long, HashVector[Count]) = {
     val numTopics = metas._1
     val numTerms = metas._2
     val isTransposed = metas._7
     val numSize = if (isTransposed) numTerms else numTopics
-    val sv = BSV.zeros[Count](numSize)
+    val sv = HashVector.zeros[Count](numSize)
     val arr = line.split("\t")
     arr.tail.foreach { sub =>
       val Array(index, value) = sub.split(":")
       sv(index.toInt) = value.toInt
     }
-    sv.compact()
+    // sv.compact()
     (arr.head.toLong, sv)
   }
 
-  def loadLDAModel(metas: MetaT, rdd: RDD[BOW]): DistributedLDAModel = {
+  def loadLDAModel(metas: MetaT, rdd: RDD[(Long, HashVector[Count])]): DistributedLDAModel = {
     val (numTopics, numTerms, numTokens, alpha, beta, alphaAS, isTransposed) = metas
     val termCnts = if (isTransposed) {
-      rdd.flatMap { case (topicId, vector) =>
-        vector.activeIterator.map { case (termId, cn) =>
-          val z = BSV.zeros[Count](numTopics)
-          z(topicId.toInt) = cn
-          (termId.toLong, z)
+      rdd.flatMap {
+        case (topicId, vector) => vector.activeIterator.map {
+          case (termId, cn) =>
+            val z = HashVector.zeros[Count](numTopics)
+            z(topicId.toInt) = cn
+            (termId.toLong, z)
         }
-      }.reduceByKey(_ :+= _).map {
-        t => t._2.compact(); t
-      }
+      }.reduceByKey(_ :+= _)
+      //  .map {
+      //  t => t._2.compact(); t
+      // }
     } else {
       rdd
     }
@@ -333,7 +335,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
     val Array(sNumTopics, sNumTerms, sNumTokens, sAlpha, sBeta, sAlphaAS) = lines.get(0).split(" ")
     val numTopics = sNumTopics.toInt
     val numTerms = sNumTerms.toInt
-    val termCnts = Array.fill(numTerms)(BSV.zeros[Count](numTopics))
+    val termCnts = Array.fill(numTerms)(HashVector.zeros[Count](numTopics))
     val iter = lines.listIterator(1)
     while (iter.hasNext) {
       val line = iter.next.trim
@@ -345,7 +347,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
           val Array(index, value) = s.split(":")
           sv(index.toInt) = value.toInt
         }
-        sv.compact()
+        // sv.compact()
       }
     }
     new LocalLDAModel(termCnts, numTopics, numTerms, sNumTokens.toLong,

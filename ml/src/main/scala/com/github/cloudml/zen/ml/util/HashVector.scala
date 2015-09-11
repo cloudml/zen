@@ -80,6 +80,14 @@ class HashVector[@specialized(Double, Int, Float, Long) T: ClassTag](
 
   def activeValuesIterator: Iterator[T] = ha.valuesIterator
 
+  def mapValues[T2: ClassTag](f: T => T2)(implicit num: Numeric[T2]): HashVector[T2] = {
+    val hv = HashVector.zeros[T2](length)
+    activeIterator.foreach {
+      case (i, v) => hv(i) = f(v)
+    }
+    hv
+  }
+
   def toBHV: BHV[T] = new BHV(ha)
 }
 

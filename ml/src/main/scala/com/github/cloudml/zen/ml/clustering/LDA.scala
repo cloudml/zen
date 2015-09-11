@@ -27,7 +27,7 @@ import LDA._
 import LDADefines._
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import com.github.cloudml.zen.ml.partitioner._
-import com.github.cloudml.zen.ml.util.XORShiftRandom
+import com.github.cloudml.zen.ml.util.{HashVector, XORShiftRandom}
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.GraphImpl
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
@@ -84,7 +84,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
   private def scConf = corpus.edges.context.getConf
 
   private def collectTopicCounter(): BDV[Count] = {
-    val gtc = termVertices.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
+    val gtc = termVertices.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :++=: _, _ :+= _)
     val count = gtc.activeValuesIterator.map(_.toLong).sum
     assert(count == numTokens)
     gtc
@@ -141,9 +141,9 @@ class LDA(@transient var corpus: Graph[TC, TA],
    */
   def runSum(filter: VertexId => Boolean,
     runIter: Int = 0,
-    inferenceOnly: Boolean = false): RDD[(VertexId, BSV[Double])] = {
+    inferenceOnly: Boolean = false): RDD[(VertexId, HashVector[Double])] = {
     @inline def vertices = corpus.vertices.filter(t => filter(t._1))
-    var countersSum: RDD[(VertexId, BSV[Double])] = vertices.map(t => (t._1, t._2.mapValues(_.toDouble)))
+    var countersSum: RDD[(VertexId, HashVector[Double])] = vertices.map(t => (t._1, t._2.mapValues(_.toDouble)))
     countersSum.persist(storageLevel).count()
     for (iter <- 1 to runIter) {
       println(s"Save TopicModel (Iteration $iter/$runIter)")
@@ -158,7 +158,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
     val counters = if (runIter == 0) {
       countersSum
     } else {
-      val aver = countersSum.mapValues(_ /= (runIter + 1).toDouble)
+      val aver = countersSum.mapValues(_.mapValues(_ / (runIter + 1)))
       aver.persist(storageLevel).count()
       countersSum.unpersist(blocking=false)
       aver

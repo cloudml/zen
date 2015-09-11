@@ -23,7 +23,7 @@ import scala.concurrent._
 import scala.concurrent.duration.Duration
 import scala.reflect.ClassTag
 
-import com.github.cloudml.zen.ml.util.{FTree, AliasTable}
+import com.github.cloudml.zen.ml.util.{HashVector, FTree, AliasTable}
 import breeze.collection.mutable.SparseArray
 import breeze.linalg.{SparseVector => BSV}
 import org.apache.spark.SparkConf
@@ -36,7 +36,7 @@ object LDADefines {
   type DocId = VertexId
   type WordId = VertexId
   type Count = Int
-  type TC = BSV[Count]
+  type TC = HashVector[Count]
   type TA = Array[Int]
   type BOW = (Long, BSV[Count])
 
@@ -70,8 +70,8 @@ object LDADefines {
   def uniformDistSampler(gen: Random,
     tokens: Array[Int],
     topics: Array[Int],
-    numTopics: Int): BSV[Count] = {
-    val docTopicCounter = BSV.zeros[Count](numTopics)
+    numTopics: Int): TC = {
+    val docTopicCounter = HashVector.zeros[Count](numTopics)
     for (i <- tokens.indices) {
       val topic = gen.nextInt(numTopics)
       topics(i) = topic
