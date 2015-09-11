@@ -23,9 +23,9 @@ import scala.concurrent._
 import scala.concurrent.duration.Duration
 import scala.reflect.ClassTag
 
-import com.github.cloudml.zen.ml.partitioner._
-import com.github.cloudml.zen.ml.util.{FTree, AliasTable, XORShiftRandom}
-import breeze.linalg.{SparseVector => BSV, DenseVector => BDV}
+import com.github.cloudml.zen.ml.util.{FTree, AliasTable}
+import breeze.collection.mutable.SparseArray
+import breeze.linalg.{SparseVector => BSV}
 import org.apache.spark.SparkConf
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl._
@@ -81,13 +81,12 @@ object LDADefines {
   }
 
   def registerKryoClasses(conf: SparkConf): Unit = {
-    conf.registerKryoClasses(Array(classOf[TC], classOf[TA],
-      classOf[BSV[Double]], classOf[BDV[Count]], classOf[BDV[Double]],
-      classOf[BOW], classOf[Random], classOf[XORShiftRandom],
-      classOf[LDA], classOf[LocalLDAModel], classOf[DistributedLDAModel],
-      classOf[LDAAlgorithm], classOf[FastLDA], classOf[LightLDA],
-      classOf[DBHPartitioner], classOf[VSDLPPartitioner], classOf[BBRPartitioner],
-      classOf[AliasTable[Double]], classOf[AliasTable[Object]], classOf[FTree[Double]], classOf[FTree[Object]]
+    conf.registerKryoClasses(Array(
+      classOf[TC], classOf[TA],
+      classOf[BOW],
+      classOf[(TC, Double, Int)],  // for perplexity
+      classOf[AliasTable[Object]], classOf[FTree[Object]],  // for some partitioners
+      classOf[SparseArray[Object]]  // member of BSV
     ))
   }
 
