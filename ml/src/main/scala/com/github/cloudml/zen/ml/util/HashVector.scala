@@ -20,7 +20,7 @@ package com.github.cloudml.zen.ml.util
 import scala.reflect.ClassTag
 
 import breeze.collection.mutable.OpenAddressHashArray
-import breeze.linalg.{DenseVector=>BDV, HashVector=>BHV}
+import breeze.linalg.{DenseVector => BDV}
 import breeze.storage.Zero
 
 
@@ -28,24 +28,35 @@ class HashVector[@specialized(Double, Int, Float, Long) T: ClassTag](
   val ha: OpenAddressHashArray[T])(implicit num: Numeric[T])
   extends Serializable {
 
-  def apply(i: Int): T = ha(i)
+  @inline def apply(i: Int): T = ha(i)
 
-  def update(i: Int, v: T): Unit = {
+  @inline def update(i: Int, v: T): Unit = {
     ha(i) = v
   }
 
-  def length: Int = ha.length
+  @inline def length: Int = ha.length
 
   @inline def size: Int = length
 
   @inline def used: Int = ha.activeSize
+
+  @inline def data: Array[T] = ha.data
+
+  @inline def index: Array[Int] = ha.index
 
   def add(i: Int, v: T): this.type = {
     ha(i) = num.plus(ha(i), v)
     this
   }
 
+  def minus(i: Int, v: T): this.type = {
+    ha(i) = num.minus(ha(i), v)
+    this
+  }
+
   @inline def add(iv: (Int, T)): this.type = add(iv._1, iv._2)
+
+  @inline def minus(iv: (Int, T)): this.type = minus(iv._1, iv._2)
 
   def :+=(b: HashVector[T]): this.type = {
     b.activeIterator.foreach(add)
@@ -59,6 +70,26 @@ class HashVector[@specialized(Double, Int, Float, Long) T: ClassTag](
     t
   }
 
+  def :-=(b: HashVector[T]): this.type = {
+    b.activeIterator.foreach(minus)
+    this
+  }
+
+  def :-(b: HashVector[T]): HashVector[T] = {
+    val t = HashVector.zeros[T](length)
+    t :+= this
+    t :-= b
+    t
+  }
+
+  @inline def +=(b: HashVector[T]): this.type = this :+= b
+
+  @inline def +(b: HashVector[T]): HashVector[T] = this :+ b
+
+  @inline def -=(b: HashVector[T]): this.type = this :-= b
+
+  @inline def -(b: HashVector[T]): HashVector[T] = this :- b
+
   def :++=:(left: BDV[T]): BDV[T] = {
     for ((i, v) <- activeIterator) {
       left(i) = num.plus(left(i), v)
@@ -66,19 +97,15 @@ class HashVector[@specialized(Double, Int, Float, Long) T: ClassTag](
     left
   }
 
-  @inline def +=(b: HashVector[T]): this.type = this :+= b
-
-  @inline def +(b: HashVector[T]): HashVector[T] = this :+ b
-
   @inline def ++=:(left: BDV[T]): BDV[T] = left :++=: this
 
-  def activeSize: Int = ha.activeSize
+  @inline def activeSize: Int = ha.activeSize
 
-  def activeIterator: Iterator[(Int, T)] = ha.activeIterator
+  @inline def activeIterator: Iterator[(Int, T)] = ha.activeIterator
 
-  def activeKeysIterator: Iterator[Int] = ha.activeKeysIterator
+  @inline def activeKeysIterator: Iterator[Int] = ha.activeKeysIterator
 
-  def activeValuesIterator: Iterator[T] = ha.valuesIterator
+  @inline def activeValuesIterator: Iterator[T] = ha.valuesIterator
 
   def mapValues[T2: ClassTag](f: T => T2)(implicit num: Numeric[T2]): HashVector[T2] = {
     val hv = HashVector.zeros[T2](length)
@@ -88,7 +115,11 @@ class HashVector[@specialized(Double, Int, Float, Long) T: ClassTag](
     hv
   }
 
-  def toBHV: BHV[T] = new BHV(ha)
+  def sum: T = activeValuesIterator.sum
+
+  def norm: Double = math.sqrt(num.toDouble(activeValuesIterator.map(v => num.times(v, v)).sum))
+
+  def distanceWith(b: HashVector[T]): Double = (this :- b).norm
 }
 
 object HashVector {

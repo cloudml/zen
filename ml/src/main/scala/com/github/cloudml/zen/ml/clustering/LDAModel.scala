@@ -23,7 +23,7 @@ import java.util.Random
 
 import LDADefines._
 import com.github.cloudml.zen.ml.util._
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, norm, sum}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum}
 import com.google.common.base.Charsets
 import com.google.common.io.Files
 import org.apache.hadoop.io.{NullWritable, Text}
@@ -77,12 +77,12 @@ class LocalLDAModel(@transient val termTopicCounters: Array[TC],
   def inference(
     doc: BSV[Count],
     totalIter: Int = 10,
-    burnIn: Int = 5): BV[Double] = {
+    burnIn: Int = 5): HashVector[Double] = {
     require(totalIter > burnIn, "totalIter is less than burnInIter")
     require(totalIter > 0, "totalIter is less than 0")
     require(burnIn > 0, "burnInIter is less than 0")
     val gen = new XORShiftRandom()
-    val topicDist = BSV.zeros[Int](numTopics)
+    val topicDist = HashVector.zeros[Int](numTopics)
     val tokens = vector2Array(doc)
     val topics = new Array[Int](tokens.length)
     var docTopicCounter = uniformDistSampler(gen, tokens, topics, numTopics)
@@ -91,8 +91,8 @@ class LocalLDAModel(@transient val termTopicCounters: Array[TC],
       docTopicCounter = sampleDoc(gen, docTopicCounter, tokens, topics, docCdf)
       if (i > burnIn) topicDist :+= docTopicCounter
     }
-    val nm = norm(topicDist, 1)
-    topicDist.map(_ / nm)
+    val sum = topicDist.sum
+    topicDist.mapValues(_ / sum)
   }
 
   private[ml] def vector2Array(bow: BV[Int]): Array[Int] = {
@@ -117,15 +117,13 @@ class LocalLDAModel(@transient val termTopicCounters: Array[TC],
       val termId = tokens(i)
       val termTopicCounter = termTopicCounters(termId)
       val currentTopic = topics(i)
+      docTopicCounter(currentTopic) -= 1
       algo.dSparse(docCdf, totalTopicCounter, termTopicCounter, docTopicCounter, beta, betaSum)
       val wSparseTable = wordTable(wordTableCache, totalTopicCounter, termTopicCounter, termId)
       val newTopic = algo.tokenSampling(gen, tDenseTable, wSparseTable, docCdf, termTopicCounter,
         docTopicCounter, currentTopic)
-      if (newTopic != currentTopic) {
-        topics(i) = newTopic
-        docTopicCounter(newTopic) += 1
-        docTopicCounter(currentTopic) -= 1
-      }
+      topics(i) = newTopic
+      docTopicCounter(newTopic) += 1
     }
     // docTopicCounter.compact()
     docTopicCounter
@@ -171,7 +169,7 @@ class DistributedLDAModel(@transient val termTopicCounters: RDD[(VertexId, TC)],
   var storageLevel: StorageLevel) extends Serializable with Saveable {
 
   @transient val totalTopicCounter = termTopicCounters.map(_._2)
-    .aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
+    .aggregate(BDV.zeros[Count](numTopics))(_ :++=: _, _ :+= _)
   @transient val algo = new FastLDA
 
   /**

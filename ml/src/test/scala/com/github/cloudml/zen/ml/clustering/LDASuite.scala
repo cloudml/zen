@@ -22,15 +22,14 @@ import java.util.Random
 
 import LDADefines._
 import com.github.cloudml.zen.ml.util.SharedSparkContext
-import breeze.linalg.functions.euclideanDistance
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import breeze.stats.distributions.Poisson
 import com.google.common.io.Files
 import org.apache.spark.storage.StorageLevel
 import org.scalatest.FunSuite
 
-class LDASuite extends FunSuite with SharedSparkContext {
 
+class LDASuite extends FunSuite with SharedSparkContext {
   import LDASuite._
 
   test("FastLDA || Gibbs sampling") {
@@ -80,7 +79,6 @@ class LDASuite extends FunSuite with SharedSparkContext {
     assert(localLdaModel.alpha === loadLdaModel.alpha)
     assert(localLdaModel.beta === loadLdaModel.beta)
     assert(localLdaModel.alphaAS === loadLdaModel.alphaAS)
-
   }
 
   test("LightLDA || Metropolis Hasting sampling") {
@@ -111,7 +109,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     data.collect().foreach { case (_, sv) =>
       val a = ldaModel.inference(sv)
       val b = ldaModel.inference(sv)
-      val sim: Double = euclideanDistance(a, b)
+      val sim: Double = a.distanceWith(b)
       assert(sim < 0.1)
     }
   }

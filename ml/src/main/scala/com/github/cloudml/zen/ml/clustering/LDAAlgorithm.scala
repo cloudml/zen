@@ -296,7 +296,15 @@ class LightLDA extends LDAAlgorithm {
 
             val newTopic = tokenSampling(gen, docTopicCounter, termTopicCounter, docProposal,
               currentTopic, proposalTopic, q, p)
-            topics(i) = newTopic
+            if (newTopic != currentTopic) {
+              topics(i) = newTopic
+              docTopicCounter(currentTopic) -= 1
+              docTopicCounter(newTopic) += 1
+              termTopicCounter(currentTopic) -= 1
+              termTopicCounter(newTopic) += 1
+              totalTopicCounter(currentTopic) -= 1
+              totalTopicCounter(newTopic) += 1
+            }
           }
         }
         topics

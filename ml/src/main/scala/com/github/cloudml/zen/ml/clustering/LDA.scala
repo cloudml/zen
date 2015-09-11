@@ -25,7 +25,7 @@ import scala.concurrent.duration.Duration
 
 import LDA._
 import LDADefines._
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
+import breeze.linalg.{DenseVector => BDV}
 import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.{HashVector, XORShiftRandom}
 import org.apache.spark.graphx2._
@@ -176,13 +176,13 @@ class LDA(@transient var corpus: Graph[TC, TA],
   }
 
   def mergeDuplicateTopic(threshold: Double = 0.95D): Map[Int, Int] = {
-    val rows = termVertices.map(t => t._2).map { bsv =>
-      val length = bsv.length
-      val used = bsv.activeSize
-      val index = bsv.index.slice(0, used)
-      val data = bsv.data.slice(0, used).map(_.toDouble)
+    val rows = termVertices.map(t => t._2).map(v => {
+      val length = v.length
+      val used = v.activeSize
+      val index = v.index.slice(0, used)
+      val data = v.data.slice(0, used).map(_.toDouble)
       new SSV(length, index, data).asInstanceOf[SV]
-    }
+    })
     val simMatrix = new RowMatrix(rows).columnSimilarities()
     val minMap = simMatrix.entries.filter {
       case MatrixEntry(row, column, sim) => sim > threshold && row != column
@@ -406,7 +406,7 @@ object LDA {
         val lcVid = lcSrcIds(pos)
         var termTuple = results(lcVid)
         if (termTuple == null && !inferenceOnly) {
-          termTuple = (l2g(lcVid), BSV.zeros[Count](numTopics))
+          termTuple = (l2g(lcVid), HashVector.zeros[Count](numTopics))
           results(lcVid) = termTuple
         }
         val termTopicCounter = termTuple._2
@@ -415,7 +415,7 @@ object LDA {
           var docTuple = results(di)
           if (docTuple == null) {
             if (marks.getAndDecrement(di) == 0) {
-              docTuple = (l2g(di), BSV.zeros[Count](numTopics))
+              docTuple = (l2g(di), HashVector.zeros[Count](numTopics))
               results(di) = docTuple
               marks.set(di, Int.MaxValue)
             } else {

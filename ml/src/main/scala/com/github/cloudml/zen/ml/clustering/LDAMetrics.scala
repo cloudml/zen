@@ -22,7 +22,6 @@ import scala.concurrent._
 import scala.concurrent.duration.Duration
 
 import LDADefines._
-import breeze.linalg.sum
 import org.apache.spark.graphx2.impl.GraphImpl
 
 
@@ -74,7 +73,7 @@ object LDAMetrics {
               cnt * alphaRatio * (tCounter(topic) + alphaAS) / (tCounter(topic) + betaSum)
             }
         }.sum
-        val cSum = if (isDocId(vid)) sum(counter) else 0
+        val cSum = if (isDocId(vid)) counter.sum else 0
         results(i) = (counter, pSum, cSum)
       })
       Await.ready(all, Duration.Inf)
