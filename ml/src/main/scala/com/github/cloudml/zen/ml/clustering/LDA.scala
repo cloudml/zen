@@ -208,7 +208,7 @@ object LDA {
     alphaAS: Double,
     algo: LDAAlgorithm,
     storageLevel: StorageLevel): LDA = {
-    val initCorpus = LBVertexRDDBuilder.fromEdgeRDD[TC, TA](docs, storageLevel)
+    val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdgeRDD(docs, storageLevel)
     val edges = initCorpus.edges
     edges.setName("edges-0").persist(storageLevel)
     val numTokens = edges.map(_.attr.length.toLong).reduce(_ + _)
@@ -220,6 +220,7 @@ object LDA {
     println(s"terms in the corpus: $numTerms")
     val numDocs = vertices.filter(t => isDocId(t._1)).count()
     println(s"docs in the corpus: $numDocs")
+    docs.unpersist(blocking=false)
     new LDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, algo, storageLevel)
   }
 
@@ -236,7 +237,7 @@ object LDA {
     val storageLevel = computedModel.storageLevel
     println(s"tokens in the corpus: $numTokens")
     println(s"terms in the corpus: $numTerms")
-    val initCorpus = LBVertexRDDBuilder.fromEdgeRDD[TC, TA](docs, storageLevel)
+    val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdgeRDD(docs, storageLevel)
     initCorpus.edges.setName("edges-0").persist(storageLevel)
     val corpus = updateVertexCounters(initCorpus, numTopics)
       .joinVertices(computedModel.termTopicCounters)((_, _, computedCounter) => computedCounter)
@@ -244,6 +245,7 @@ object LDA {
     vertices.setName("vertices-0").persist(storageLevel)
     val numDocs = vertices.filter(t => isDocId(t._1)).count()
     println(s"docs in the corpus: $numDocs")
+    docs.unpersist(blocking=false)
     new LDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, algo, storageLevel)
   }
 
