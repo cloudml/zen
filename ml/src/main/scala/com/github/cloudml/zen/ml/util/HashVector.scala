@@ -18,14 +18,15 @@
 package com.github.cloudml.zen.ml.util
 
 import scala.reflect.ClassTag
+
 import breeze.collection.mutable.OpenAddressHashArray
-import breeze.linalg.{Vector => BV, DenseVector=>BDV, HashVector=>BHV}
+import breeze.linalg.{DenseVector=>BDV, HashVector=>BHV}
 import breeze.storage.Zero
 
 
 class HashVector[@specialized(Double, Int, Float, Long) T: ClassTag](
   val ha: OpenAddressHashArray[T])(implicit num: Numeric[T])
-  extends BV[T] with Serializable {
+  extends Serializable {
 
   def apply(i: Int): T = ha(i)
 
@@ -34,6 +35,8 @@ class HashVector[@specialized(Double, Int, Float, Long) T: ClassTag](
   }
 
   def length: Int = ha.length
+
+  @inline def size: Int = length
 
   @inline def used: Int = ha.activeSize
 
@@ -77,18 +80,7 @@ class HashVector[@specialized(Double, Int, Float, Long) T: ClassTag](
 
   def activeValuesIterator: Iterator[T] = ha.valuesIterator
 
-  def toBHV(implicit num: Numeric[T]): BHV[T] = {
-    implicit val zero = Zero(num.zero)
-    val bhv = BHV.zeros[T](size)
-    for ((i, v) <- activeIterator) {
-      bhv(i) = v
-    }
-    bhv
-  }
-
-  def repr: this.type = this
-
-  def copy: HashVector[T] = new HashVector[T](ha.copy)
+  def toBHV: BHV[T] = new BHV(ha)
 }
 
 object HashVector {
