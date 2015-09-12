@@ -23,8 +23,7 @@ import scala.concurrent._
 import scala.concurrent.duration.Duration
 import scala.reflect.ClassTag
 
-import com.github.cloudml.zen.ml.util.{HashVector, FTree, AliasTable}
-import breeze.collection.mutable.SparseArray
+import com.github.cloudml.zen.ml.util._
 import breeze.linalg.{SparseVector => BSV}
 import org.apache.spark.SparkConf
 import org.apache.spark.graphx2._
@@ -85,8 +84,7 @@ object LDADefines {
       classOf[TC], classOf[TA],
       classOf[BOW],
       classOf[(TC, Double, Int)],  // for perplexity
-      classOf[AliasTable[Object]], classOf[FTree[Object]],  // for some partitioners
-      classOf[SparseArray[Object]]  // member of BSV
+      classOf[AliasTable[Object]], classOf[FTree[Object]]  // for some partitioners
     ))
   }
 
