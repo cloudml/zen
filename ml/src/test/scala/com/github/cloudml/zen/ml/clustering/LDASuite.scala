@@ -22,7 +22,9 @@ import java.util.Random
 
 import LDADefines._
 import com.github.cloudml.zen.ml.util.SharedSparkContext
+
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
+import breeze.linalg.functions.euclideanDistance
 import breeze.stats.distributions.Poisson
 import com.google.common.io.Files
 import org.apache.spark.storage.StorageLevel
@@ -109,7 +111,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     data.collect().foreach { case (_, sv) =>
       val a = ldaModel.inference(sv)
       val b = ldaModel.inference(sv)
-      val sim: Double = a.distanceWith(b)
+      val sim: Double = euclideanDistance(a, b)
       assert(sim < 0.1)
     }
   }

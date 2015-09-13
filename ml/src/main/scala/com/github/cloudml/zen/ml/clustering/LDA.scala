@@ -25,9 +25,10 @@ import scala.concurrent.duration.Duration
 
 import LDA._
 import LDADefines._
-import breeze.linalg.{DenseVector => BDV}
 import com.github.cloudml.zen.ml.partitioner._
-import com.github.cloudml.zen.ml.util.{HashVector, XORShiftRandom}
+import com.github.cloudml.zen.ml.util.XORShiftRandom
+
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.GraphImpl
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
@@ -84,7 +85,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
   private def scConf = corpus.edges.context.getConf
 
   private def collectTopicCounter(): BDV[Count] = {
-    val gtc = termVertices.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :++=: _, _ :+= _)
+    val gtc = termVertices.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
     val count = gtc.activeValuesIterator.map(_.toLong).sum
     assert(count == numTokens)
     gtc
@@ -141,9 +142,9 @@ class LDA(@transient var corpus: Graph[TC, TA],
    */
   def runSum(filter: VertexId => Boolean,
     runIter: Int = 0,
-    inferenceOnly: Boolean = false): RDD[(VertexId, HashVector[Double])] = {
+    inferenceOnly: Boolean = false): RDD[(VertexId, BSV[Double])] = {
     @inline def vertices = corpus.vertices.filter(t => filter(t._1))
-    var countersSum: RDD[(VertexId, HashVector[Double])] = vertices.map(t => (t._1, t._2.mapValues(_.toDouble)))
+    var countersSum: RDD[(VertexId, BSV[Double])] = vertices.map(t => (t._1, t._2.mapValues(_.toDouble)))
     countersSum.persist(storageLevel).count()
     for (iter <- 1 to runIter) {
       println(s"Save TopicModel (Iteration $iter/$runIter)")
@@ -406,7 +407,7 @@ object LDA {
         val lcVid = lcSrcIds(pos)
         var termTuple = results(lcVid)
         if (termTuple == null && !inferenceOnly) {
-          termTuple = (l2g(lcVid), HashVector.zeros[Count](numTopics))
+          termTuple = (l2g(lcVid), BSV.zeros[Count](numTopics))
           results(lcVid) = termTuple
         }
         val termTopicCounter = termTuple._2
@@ -415,7 +416,7 @@ object LDA {
           var docTuple = results(di)
           if (docTuple == null) {
             if (marks.getAndDecrement(di) == 0) {
-              docTuple = (l2g(di), HashVector.zeros[Count](numTopics))
+              docTuple = (l2g(di), BSV.zeros[Count](numTopics))
               results(di) = docTuple
               marks.set(di, Int.MaxValue)
             } else {

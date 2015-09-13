@@ -24,8 +24,9 @@ import scala.concurrent._
 import scala.concurrent.duration.Duration
 
 import LDADefines._
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
 import com.github.cloudml.zen.ml.util._
+
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.GraphImpl
 import org.apache.spark.util.collection.AppendOnlyMap
