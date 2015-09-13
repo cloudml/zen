@@ -144,8 +144,8 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
 
     val (llh, wllh, dllh) = sumPart.collect().unzip3
     pplx = math.exp(-1 * llh.sum / numTokens)
-    wpplx = math.exp(-1 / wllh.sum / numTokens)
-    dpplx = math.exp(-1 / dllh.sum / numTokens)
+    wpplx = math.exp(-1 * wllh.sum / numTokens)
+    dpplx = math.exp(-1 * dllh.sum / numTokens)
   }
 
   def getPerplexity: Double = pplx
