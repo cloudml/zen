@@ -27,7 +27,15 @@ import breeze.linalg.sum
 import org.apache.spark.graphx2.impl.GraphImpl
 
 
-object LDAMetrics {
+trait LDAMetrics {
+  def measure(): Unit
+}
+
+class LDAPerplexity(lda: LDA) extends LDAMetrics {
+  var pplx = 0D
+  var wpplx = 0D
+  var dpplx = 0D
+
   /**
    * the multiplcation between word distribution among all topics and the corresponding doc
    * distribution among all topics:
@@ -39,7 +47,7 @@ object LDAMetrics {
    * \exp^{-(\sum{\log(p(w))})/N}
    * N is the number of tokens in corpus
    */
-  def perplexity(lda: LDA): Double = {
+  def measure(): Unit = {
     val tCounter = lda.totalTopicCounter
     val numTopics = lda.numTopics
     val numTokens = lda.numTokens
@@ -118,6 +126,21 @@ object LDAMetrics {
     }))
 
     val termProb = sumPart.sum()
-    math.exp(-1 * termProb / numTokens)
+    pplx = math.exp(-1 * termProb / numTokens)
+  }
+
+  def getPerplexity: Double = pplx
+
+  def getWordPerplexity: Double = wpplx
+
+  def getDocPerplexity: Double = dpplx
+}
+
+object LDAPerplexity {
+  def output(lda: LDA, writer: String => Unit): Unit = {
+    val pplx = new LDAPerplexity(lda)
+    pplx.measure()
+    val o = s"perplexity=${pplx.getPerplexity}, word pplx=${pplx.getWordPerplexity}, doc pplx=${pplx.getDocPerplexity}"
+    writer(o)
   }
 }

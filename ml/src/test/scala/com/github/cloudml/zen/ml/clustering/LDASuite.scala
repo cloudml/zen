@@ -44,11 +44,13 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, storageLevel)
     val pps = new Array[Double](incrementalLearning)
     val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new FastLDA, storageLevel)
+    val pplx = new LDAPerplexity(lda)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
       lda.runGibbsSampling(totalIterations)
-      pps(i) = LDAMetrics.perplexity(lda)
+      pplx.measure()
+      pps(i) = pplx.getPerplexity
       i += 1
     }
 
@@ -92,11 +94,13 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, storageLevel)
     val pps = new Array[Double](incrementalLearning)
     val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new LightLDA, storageLevel)
+    val pplx = new LDAPerplexity(lda)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
       lda.runGibbsSampling(totalIterations)
-      pps(i) = LDAMetrics.perplexity(lda)
+      pplx.measure()
+      pps(i) = pplx.getPerplexity
       i += 1
     }
 

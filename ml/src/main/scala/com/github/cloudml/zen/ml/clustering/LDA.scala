@@ -96,16 +96,15 @@ class LDA(@transient var corpus: Graph[TC, TA],
     val pplx = scConf.getBoolean(cs_calcPerplexity, false)
     val saveIntv = scConf.getInt(cs_saveInterval, 0)
     if (pplx) {
-      val perplexity = LDAMetrics.perplexity(this)
-      println(s"Before Gibbs sampling: perplexity=$perplexity")
+      println("Before Gibbs sampling:")
+      LDAPerplexity.output(this, println)
     }
     for (iter <- 1 to totalIter) {
       println(s"Start Gibbs sampling (Iteration $iter/$totalIter)")
       val startedAt = System.nanoTime()
       gibbsSampling(iter)
       if (pplx) {
-        val perplexity = LDAMetrics.perplexity(this)
-        println(s"Gibbs sampling (Iteration $iter/$totalIter): perplexity=$perplexity")
+        LDAPerplexity.output(this, println)
       }
       if (saveIntv > 0 && iter % saveIntv == 0) {
         val model = toLDAModel()
