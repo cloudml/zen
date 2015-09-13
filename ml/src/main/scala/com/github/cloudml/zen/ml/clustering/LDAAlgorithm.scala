@@ -20,6 +20,7 @@ package com.github.cloudml.zen.ml.clustering
 import java.lang.ref.SoftReference
 import java.util.Random
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent._
 import scala.concurrent.duration.Duration
 
@@ -98,17 +99,18 @@ class FastLDA extends LDAAlgorithm {
       }
       tDense(globalSampler, itemRatio, beta, numTopics)
       val totalSize = ep.size
+      val termSize = ep.indexSize
       val lcSrcIds = ep.localSrcIds
       val lcDstIds = ep.localDstIds
       val vattrs = ep.vertexAttrs
       val data = ep.data
-      var indicator = 0
+      val indicator = new AtomicInteger
 
       implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
       val all = Future.traverse(ep.index.iterator)(t => Future {
+        val termId = indicator.getAndIncrement()
         val offset = t._2
-        indicator += 1
-        val gen = new XORShiftRandom((seed * numPartitions + pid) * numThreads + indicator % numThreads)
+        val gen = new XORShiftRandom((seed * numPartitions + pid) * termSize + termId)
         val lastSampler: DiscreteSampler[Double] = sampl match {
           case "alias" => new AliasTable[Double](numTopics)
           case "ftree" | "hybrid" => new FTree(numTopics, isSparse = true)

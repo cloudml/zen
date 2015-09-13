@@ -18,6 +18,7 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent._
 import scala.concurrent.duration.Duration
 
@@ -100,33 +101,51 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
       val lcDstIds = ep.localDstIds
       val vattrs = ep.vertexAttrs
       val data = ep.data
+      val sums = new Array[Double](numThreads)
+      val wSums = new Array[Double](numThreads)
+      val dSums = new Array[Double](numThreads)
+      val indicator = new AtomicInteger
+
       implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
       val all = Future.traverse(ep.index.iterator)(t => Future {
+        val thid = indicator.getAndIncrement() % numThreads
         var pos = t._2
         val lcVid = lcSrcIds(pos)
         val (termTopicCounter, wSparseSum, _) = vattrs(lcVid)
         var lcSum = 0D
+        var lcWSum = 0D
+        var lcDSum = 0D
         while (pos < totalSize && lcSrcIds(pos) == lcVid) {
           val (docTopicCounter, dSparseSum, docSize) = vattrs(lcDstIds(pos))
-          val occurs = data(pos).length
+          val topics = data(pos)
           // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
           val dwSparseSum = docTopicCounter.activeIterator.map {
             case (topic, cnt) => cnt * termTopicCounter(topic) / (tCounter(topic) + betaSum)
           }.sum
           val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alphaSum)
-          lcSum += Math.log(prob) * occurs
+          lcSum += Math.log(prob) * topics.length
+          for (topic <- topics) {
+            val wProb = (termTopicCounter(topic) + beta) / (tCounter(topic) + betaSum)
+            val dProb = (docTopicCounter(topic) + alphaRatio * (tCounter(topic) + alphaAS)) /
+              (docSize + alphaSum)
+            lcWSum += Math.log(wProb)
+            lcDSum += Math.log(dProb)
+          }
           pos += 1
         }
-        lcSum
+        sums(thid) += lcSum
+        wSums(thid) += lcWSum
+        dSums(thid) += lcDSum
       })
-      val sums = all.map(_.sum)
-      val result = Await.result(sums, Duration.Inf)
+      Await.ready(all, Duration.Inf)
       ec.shutdown()
-      result
+      (sums.sum, wSums.sum, dSums.sum)
     }))
 
-    val termProb = sumPart.sum()
-    pplx = math.exp(-1 * termProb / numTokens)
+    val (llh, wllh, dllh) = sumPart.collect().unzip3
+    pplx = math.exp(-1 * llh.sum / numTokens)
+    wpplx = math.exp(-1 / wllh.sum / numTokens)
+    dpplx = math.exp(-1 / dllh.sum / numTokens)
   }
 
   def getPerplexity: Double = pplx
