@@ -78,7 +78,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
 
   def getCorpus: Graph[TC, TA] = corpus
 
-  def termVertices: VertexRDD[TC] = corpus.vertices.filter(t => !isDocId(t._1))
+  def termVertices: VertexRDD[TC] = corpus.vertices.filter(t => isTermId(t._1))
 
   def docVertices: VertexRDD[TC] = corpus.vertices.filter(t => isDocId(t._1))
 
@@ -142,28 +142,20 @@ class LDA(@transient var corpus: Graph[TC, TA],
   def runSum(filter: VertexId => Boolean,
     runIter: Int = 0,
     inferenceOnly: Boolean = false): RDD[(VertexId, BSV[Double])] = {
-    @inline def vertices = corpus.vertices.filter(t => filter(t._1))
-    var countersSum: RDD[(VertexId, BSV[Double])] = vertices.map(t => (t._1, t._2.mapValues(_.toDouble)))
-    countersSum.persist(storageLevel).count()
+    def vertices = corpus.vertices.filter(t => filter(t._1))
+    var countersSum = vertices.mapValues(_.mapValues(_.toDouble))
+    countersSum.persist(storageLevel)
     for (iter <- 1 to runIter) {
       println(s"Save TopicModel (Iteration $iter/$runIter)")
       gibbsSampling(iter, inferenceOnly)
-      val newCounterSum = countersSum.join(vertices).map {
-        case (term, (a, b)) => (term, a :+= b.mapValues(_.toDouble))
-      }
-      newCounterSum.persist(storageLevel).count()
-      countersSum.unpersist(blocking=false)
-      countersSum = newCounterSum
+      countersSum = countersSum.innerZipJoin(vertices)((_, a, b) => a :+= b.mapValues(_.toDouble))
+      countersSum.persist(storageLevel)
     }
-    val counters = if (runIter == 0) {
+    if (runIter == 0) {
       countersSum
     } else {
-      val aver = countersSum.mapValues(_.mapValues(_ / (runIter + 1)))
-      aver.persist(storageLevel).count()
-      countersSum.unpersist(blocking=false)
-      aver
+      countersSum.mapValues(_.mapValues(_ / (runIter + 1)))
     }
-    counters
   }
 
   def toLDAModel(runIter: Int = 0): DistributedLDAModel = {
@@ -172,6 +164,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
       val l = math.floor(v)
       if (gen.nextDouble() > v - l) l else l + 1
     }.toInt))
+    ttcs.persist(storageLevel)
     new DistributedLDAModel(ttcs, numTopics, numTerms, numTokens, alpha, beta, alphaAS, storageLevel)
   }
 
@@ -216,9 +209,9 @@ object LDA {
     val corpus = updateVertexCounters(initCorpus, numTopics)
     val vertices = corpus.vertices
     vertices.persist(storageLevel).setName("vertices-0")
-    val numTerms = vertices.filter(t => isTermId(t._1)).count().toInt
+    val numTerms = vertices.map(_._1).filter(isTermId).count().toInt
     println(s"terms in the corpus: $numTerms")
-    val numDocs = vertices.filter(t => isDocId(t._1)).count()
+    val numDocs = vertices.map(_._1).filter(isDocId).count()
     println(s"docs in the corpus: $numDocs")
     docs.unpersist(blocking=false)
     new LDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, algo, storageLevel)
@@ -243,7 +236,7 @@ object LDA {
       .joinVertices(computedModel.termTopicCounters)((_, _, computedCounter) => computedCounter)
     val vertices = corpus.vertices
     vertices.setName("vertices-0").persist(storageLevel)
-    val numDocs = vertices.filter(t => isDocId(t._1)).count()
+    val numDocs = vertices.map(_._1).filter(isDocId).count()
     println(s"docs in the corpus: $numDocs")
     docs.unpersist(blocking=false)
     new LDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, algo, storageLevel)

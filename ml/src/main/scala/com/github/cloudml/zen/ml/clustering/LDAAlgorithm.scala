@@ -128,8 +128,7 @@ class FastLDA extends LDAAlgorithm {
             dSparse(cdfSampler, totalTopicCounter, termTopicCounter, docTopicCounter, beta, betaSum)
             globalSampler.update(currentTopic, itemRatio(currentTopic) * beta)
             lastSampler.update(currentTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
-            val newTopic = tokenSampling(gen, globalSampler, lastSampler, cdfSampler, termTopicCounter,
-              docTopicCounter, currentTopic)
+            val newTopic = tokenSampling(gen, globalSampler, lastSampler, cdfSampler, termTopicCounter, currentTopic)
             topics(i) = newTopic
             globalSampler.update(newTopic, itemRatio(currentTopic) * beta)
             lastSampler.update(newTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
@@ -150,7 +149,6 @@ class FastLDA extends LDAAlgorithm {
     w: DiscreteSampler[Double],
     d: DiscreteSampler[Double],
     termTopicCounter: TC,
-    docTopicCounter: TC,
     currentTopic: Int): Int = {
     val dSum = d.norm
     val dwSum = dSum + w.norm

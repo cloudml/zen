@@ -29,6 +29,7 @@ import com.google.common.base.Charsets
 import com.google.common.io.Files
 import org.apache.hadoop.io.{NullWritable, Text}
 import org.apache.hadoop.mapred.TextOutputFormat
+import org.apache.spark.Partitioner._
 import org.apache.spark.graphx2._
 import org.apache.spark.mllib.util.{Loader, Saveable}
 import org.apache.spark.rdd.RDD
@@ -119,14 +120,13 @@ class LocalLDAModel(@transient val termTopicCounters: Array[TC],
       val termTopicCounter = termTopicCounters(termId)
       val currentTopic = topics(i)
       docTopicCounter(currentTopic) -= 1
+      docTopicCounter.compact()
       algo.dSparse(docCdf, totalTopicCounter, termTopicCounter, docTopicCounter, beta, betaSum)
       val wSparseTable = wordTable(wordTableCache, totalTopicCounter, termTopicCounter, termId)
-      val newTopic = algo.tokenSampling(gen, tDenseTable, wSparseTable, docCdf, termTopicCounter,
-        docTopicCounter, currentTopic)
+      val newTopic = algo.tokenSampling(gen, tDenseTable, wSparseTable, docCdf, termTopicCounter, currentTopic)
       topics(i) = newTopic
       docTopicCounter(newTopic) += 1
     }
-    // docTopicCounter.compact()
     docTopicCounter
   }
 
@@ -152,9 +152,10 @@ class LocalLDAModel(@transient val termTopicCounters: Array[TC],
     Files.touch(file)
     val fw = Files.newWriter(file, Charsets.UTF_8)
     fw.write(s"$numTopics $numTerms $numTokens $alpha $beta $alphaAS \n")
-    termTopicCounters.zipWithIndex.foreach { case (sv, index) =>
-      val line = s"$index ${sv.activeIterator.filter(_._2 != 0).map(t => s"${t._1}:${t._2}").mkString(" ")}\n"
-      fw.write(line)
+    termTopicCounters.zipWithIndex.foreach {
+      case (sv, index) =>
+        val list = sv.activeIterator.filter(_._2 != 0).map(t => s"${t._1}:${t._2}").mkString(" ")
+        fw.write(s"$index $list\n")
     }
     fw.close()
   }
@@ -219,36 +220,46 @@ class DistributedLDAModel(@transient val termTopicCounters: RDD[(VertexId, TC)],
    *                     in which \grave{termId}= termId + 1
    */
   def save(sc: SparkContext, path: String, isTransposed: Boolean): Unit = {
+    val maxTerms = termTopicCounters.map(_._1).filter(isTermId).max().toInt + 1
     val metadata = compact(render(("class" -> sv_classNameV1_0) ~ ("version" -> sv_formatVersionV1_0) ~
       ("alpha" -> alpha) ~ ("beta" -> beta) ~ ("alphaAS" -> alphaAS) ~
         ("numTopics" -> numTopics) ~ ("numTerms" -> numTerms) ~ ("numTokens" -> numTokens) ~
-        ("isTransposed" -> isTransposed)))
+        ("isTransposed" -> isTransposed) ~ ("maxTerms" -> maxTerms)))
     val rdd = if (isTransposed) {
-      termTopicCounters.flatMap { case (termId, vector) =>
-        vector.activeIterator.map { case (topicId, cn) =>
-          val z = BSV.zeros[Count](numTerms.toInt)
-          z(termId.toInt) = cn
-          (topicId.toLong, z)
+      val partitioner = defaultPartitioner(termTopicCounters)
+      termTopicCounters.flatMap {
+        case (termId, vector) =>
+        val term = termId.toInt
+        vector.activeIterator.map {
+          case (topic, cnt) => (topic.toLong, (term, cnt))
         }
-      }.reduceByKey(_ :+= _)
+      }.aggregateByKey(BSV.zeros[Count](maxTerms), partitioner)((agg, t) => {
+        agg(t._1) += t._2
+        agg
+      }, _ :+= _)
     } else {
       termTopicCounters
     }
+    rdd.persist(storageLevel)
 
     val saveAsSolid = sc.getConf.getBoolean(cs_saveAsSolid, false)
     if (saveAsSolid) {
       val metadata_line = metadata.replaceAll("\n", "")
-      val rdd_txt = rdd.map { case (id, vector) =>
-        val list = vector.activeIterator.toList.sortWith((a, b) => a._2 > b._2)
-        id.toString + "\t" + list.map(item => item._1 + ":" + item._2).mkString("\t")
+      val rdd_txt = rdd.map {
+        case (id, vector) =>
+          val list = vector.activeIterator.toList.sortWith(_._2 > _._2)
+            .map(t => s"${t._1}:${t._2}").mkString("\t")
+          id.toString + "\t" + list
       }
       LoaderUtils.RDD2HDFSFile[String](sc, rdd_txt, path, metadata_line, t => t)
     } else {
       sc.parallelize(Seq(metadata), 1).saveAsTextFile(LoaderUtils.metadataPath(path))
       // save model with the topic or word-term descending order
-      rdd.map { case (id, vector) =>
-        val list = vector.activeIterator.toList.sortWith((a, b) => a._2 > b._2)
-        (NullWritable.get(), new Text(id + "\t" + list.map(item => item._1 + ":" + item._2).mkString("\t")))
+      rdd.map {
+        case (id, vector) =>
+          val list = vector.activeIterator.toList.sortWith(_._2 > _._2)
+            .map(t => s"${t._1}:${t._2}").mkString("\t")
+          (NullWritable.get(), new Text(id + "\t" + list))
       }.saveAsHadoopFile[TextOutputFormat[NullWritable, Text]](LoaderUtils.dataPath(path))
     }
   }
@@ -257,14 +268,18 @@ class DistributedLDAModel(@transient val termTopicCounters: RDD[(VertexId, TC)],
 }
 
 object LDAModel extends Loader[DistributedLDAModel] {
-  type MetaT = (Int, Int, Long, Double, Double, Double, Boolean)
+  type MetaT = (Int, Int, Long, Double, Double, Double, Boolean, Int)
 
   override def load(sc: SparkContext, path: String): DistributedLDAModel = {
     val (loadedClassName, version, metadata) = LoaderUtils.loadMetadata(sc, path)
     val dataPath = LoaderUtils.dataPath(path)
     if (loadedClassName == sv_classNameV1_0 && version == sv_formatVersionV1_0) {
       val metas = parseMeta(metadata)
-      val rdd = sc.textFile(dataPath).map(line => parseLine(metas, line))
+      var rdd = sc.textFile(dataPath).map(line => parseLine(metas, line))
+      rdd = sc.getConf.getOption(cs_numPartitions).map(_.toInt) match {
+        case Some(np) => rdd.coalesce(np, shuffle=true)
+        case None => rdd
+      }
       loadLDAModel(metas, rdd)
     } else {
       throw new Exception(s"LDAModel.load did not recognize model with (className, format version):" +
@@ -286,37 +301,38 @@ object LDAModel extends Loader[DistributedLDAModel] {
     val numTerms = (metadata \ "numTerms").extract[Int]
     val numTokens = (metadata \ "numTokens").extract[Int]
     val isTransposed = (metadata \ "isTransposed").extract[Boolean]
-    (numTopics, numTerms, numTokens, alpha, beta, alphaAS, isTransposed)
+    val maxTerms = (metadata \ "maxTerms").extract[Int]
+    (numTopics, numTerms, numTokens, alpha, beta, alphaAS, isTransposed, maxTerms)
   }
 
   def parseLine(metas: MetaT, line: String): BOW = {
     val numTopics = metas._1
-    val numTerms = metas._2
     val isTransposed = metas._7
-    val numSize = if (isTransposed) numTerms else numTopics
+    val maxTerms = metas._8
+    val numSize = if (isTransposed) maxTerms else numTopics
     val sv = BSV.zeros[Count](numSize)
     val arr = line.split("\t")
-    arr.tail.foreach { sub =>
+    arr.tail.foreach(sub => {
       val Array(index, value) = sub.split(":")
       sv(index.toInt) = value.toInt
-    }
-    sv.compact()
+    })
     (arr.head.toLong, sv)
   }
 
   def loadLDAModel(metas: MetaT, rdd: RDD[BOW]): DistributedLDAModel = {
-    val (numTopics, numTerms, numTokens, alpha, beta, alphaAS, isTransposed) = metas
+    val (numTopics, numTerms, numTokens, alpha, beta, alphaAS, isTransposed, _) = metas
     val termCnts = if (isTransposed) {
+      val partitioner = defaultPartitioner(rdd)
       rdd.flatMap {
-        case (topicId, vector) => vector.activeIterator.map {
-          case (termId, cn) =>
-            val z = BSV.zeros[Count](numTopics)
-            z(topicId.toInt) = cn
-            (termId.toLong, z)
-        }
-      }.reduceByKey(_ :+= _).map {
-        t => t._2.compact(); t
-      }
+        case (topicId, vector) =>
+          val topic = topicId.toInt
+          vector.activeIterator.map {
+            case (term, cnt) => (term.toLong, (topic, cnt))
+          }
+      }.aggregateByKey(BSV.zeros[Count](numTopics), partitioner)((agg, t) => {
+        agg(t._1) += t._2
+        agg
+      }, _ :+= _)
     } else {
       rdd
     }
@@ -341,11 +357,10 @@ object LDAModel extends Loader[DistributedLDAModel] {
         val its = line.split(" ")
         val offset = its.head.toInt
         val sv = termCnts(offset)
-        its.tail.foreach { s =>
+        its.tail.foreach(s => {
           val Array(index, value) = s.split(":")
           sv(index.toInt) = value.toInt
-        }
-        // sv.compact()
+        })
       }
     }
     new LocalLDAModel(termCnts, numTopics, numTerms, sNumTokens.toLong,
