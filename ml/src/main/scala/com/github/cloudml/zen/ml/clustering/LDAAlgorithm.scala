@@ -139,7 +139,7 @@ class FastLDA extends LDAAlgorithm {
       Await.ready(all, Duration.Inf)
       ec.shutdown()
 
-      ep.withoutVertexAttributes().withData(data)
+      ep.withoutVertexAttributes[TC]().withData(data)
     })
     GraphImpl.fromExistingRDDs(vertices, newEdges)
   }
