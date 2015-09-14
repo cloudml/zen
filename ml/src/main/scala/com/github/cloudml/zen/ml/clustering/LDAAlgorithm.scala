@@ -139,9 +139,9 @@ class FastLDA extends LDAAlgorithm {
       Await.ready(all, Duration.Inf)
       ec.shutdown()
 
-      ep.withData(data)
+      ep.withoutVertexAttributes().withData(data)
     })
-    GraphImpl(vertices, newEdges)
+    GraphImpl.fromExistingRDDs(vertices, newEdges)
   }
 
   private[ml] def tokenSampling(gen: Random,
