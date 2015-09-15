@@ -67,7 +67,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val path = tempDir.toURI.toString + File.separator + "lda"
     ldaModel.save(sc, path, isTransposed = true)
     val sameModel = LDAModel.load(sc, path)
-    assert(sameModel.toLocalLDAModel.termTopicCounters === ldaModel.toLocalLDAModel.termTopicCounters)
+    assert(sameModel.toLocalLDAModel.termTopicsArr === ldaModel.toLocalLDAModel.termTopicsArr)
     assert(sameModel.alpha === ldaModel.alpha)
     assert(sameModel.beta === ldaModel.beta)
     assert(sameModel.alphaAS === ldaModel.alphaAS)
@@ -79,7 +79,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     localLdaModel.save(path2)
     val loadLdaModel = LDAModel.loadLocalLDAModel(path2)
 
-    assert(localLdaModel.termTopicCounters === loadLdaModel.termTopicCounters)
+    assert(localLdaModel.termTopicsArr === loadLdaModel.termTopicsArr)
     assert(localLdaModel.alpha === loadLdaModel.alpha)
     assert(localLdaModel.beta === loadLdaModel.beta)
     assert(localLdaModel.alphaAS === loadLdaModel.alphaAS)

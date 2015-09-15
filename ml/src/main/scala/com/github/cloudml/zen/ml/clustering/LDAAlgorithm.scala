@@ -35,7 +35,7 @@ import org.apache.spark.util.collection.AppendOnlyMap
 
 abstract class LDAAlgorithm extends Serializable {
   private[ml] def sampleGraph(corpus: Graph[TC, TA],
-    totalTopicCounter: BDV[Count],
+    topicCounters: BDV[Count],
     seed: Int,
     numTokens: Long,
     numTopics: Int,
@@ -44,31 +44,31 @@ abstract class LDAAlgorithm extends Serializable {
     alphaAS: Double,
     beta: Double): Graph[TC, TA]
 
-  private[ml] def sampleSV(gen: Random,
+  private[ml] def resampleTable(gen: Random,
     table: AliasTable[Double],
-    sv: TC,
-    currentTopic: Int,
-    currentTopicCounter: Int = 0,
+    counters: TC,
+    topic: Int,
+    cnt: Int = 0,
     numSampling: Int = 0): Int = {
-    val docTopic = table.sampleRandom(gen)
-    if (docTopic == currentTopic && numSampling < 16) {
-      val svCounter = if (currentTopicCounter == 0) sv(currentTopic) else currentTopicCounter
+    val newTopic = table.sampleRandom(gen)
+    if (newTopic == topic && numSampling < 16) {
+      val ntx = if (cnt == 0) counters(topic) else cnt
       // TODO: not sure it is correct or not?
       // discard it if the newly sampled topic is current topic
-      if ((svCounter == 1 && table.used > 1) ||
+      if ((ntx == 1 && table.used > 1) ||
         /* the sampled topic that contains current token and other tokens */
-        (svCounter > 1 && gen.nextDouble() < 1.0 / svCounter)
-      /* the sampled topic has 1/svCounter probability that belongs to current token */ ) {
-        return sampleSV(gen, table, sv, currentTopic, svCounter, numSampling + 1)
+        (ntx > 1 && gen.nextDouble() < 1.0 / ntx)
+      /* the sampled topic has 1/ntx probability that belongs to current token */ ) {
+        return resampleTable(gen, table, counters, topic, ntx, numSampling + 1)
       }
     }
-    docTopic
+    newTopic
   }
 }
 
 class FastLDA extends LDAAlgorithm {
   override private[ml] def sampleGraph(corpus: Graph[TC, TA],
-    totalTopicCounter: BDV[Count],
+    topicCounters: BDV[Count],
     seed: Int,
     numTokens: Long,
     numTopics: Int,
@@ -87,17 +87,17 @@ class FastLDA extends LDAAlgorithm {
       val alphaRatio = alpha * numTopics / (numTokens - 1 + alphaAS * numTopics)
       val betaSum = beta * numTerms
       def itemRatio(topic: Int) = {
-        val tCounter = totalTopicCounter(topic)
-        alphaRatio * (tCounter + alphaAS) / (tCounter + betaSum)
+        val nt = topicCounters(topic)
+        alphaRatio * (nt + alphaAS) / (nt + betaSum)
       }
       // table/ftree is a per term data structure
       // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
       // so, use below simple cache to avoid calculating table each time
-      val globalSampler: DiscreteSampler[Double] = sampl match {
+      val global: DiscreteSampler[Double] = sampl match {
         case "ftree" => new FTree[Double](numTopics, isSparse=false)
         case "alias" | "hybrid" => new AliasTable(numTopics)
       }
-      tDense(globalSampler, itemRatio, beta, numTopics)
+      tDense(global, itemRatio, beta, numTopics)
       val totalSize = ep.size
       val termSize = ep.indexSize
       val lcSrcIds = ep.localSrcIds
@@ -109,29 +109,32 @@ class FastLDA extends LDAAlgorithm {
       implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
       val all = Future.traverse(ep.index.iterator)(t => Future {
         val termId = indicator.getAndIncrement()
-        val offset = t._2
         val gen = new XORShiftRandom((seed * numPartitions + pid) * termSize + termId)
-        val lastSampler: DiscreteSampler[Double] = sampl match {
+        val wordDist: DiscreteSampler[Double] = sampl match {
           case "alias" => new AliasTable[Double](numTopics)
           case "ftree" | "hybrid" => new FTree(numTopics, isSparse = true)
         }
-        val cdfSampler = new CumulativeDist[Double](numTopics)
-        var pos = offset
-        val lcVid = lcSrcIds(offset)
-        val termTopicCounter = vattrs(lcVid)
-        wSparse(lastSampler, itemRatio, termTopicCounter)
+        var pos = t._2
+        val lcVid = lcSrcIds(pos)
+        val orgTermTopics = vattrs(lcVid)
+        wSparse(wordDist, itemRatio, orgTermTopics)
+        val termTopics = orgTermTopics match {
+          case v: BDV[Count] => v
+          case v: BSV[Count] => toBDV(v)
+        }
+        val cdfDist = new CumulativeDist[Double](numTopics)
         while (pos < totalSize && lcSrcIds(pos) == lcVid) {
-          val docTopicCounter = vattrs(lcDstIds(pos))
+          val docTopics = vattrs(lcDstIds(pos))
           val topics = data(pos)
           for (i <- topics.indices) {
-            val currentTopic = topics(i)
-            dSparse(cdfSampler, totalTopicCounter, termTopicCounter, docTopicCounter, beta, betaSum)
-            globalSampler.update(currentTopic, itemRatio(currentTopic) * beta)
-            lastSampler.update(currentTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
-            val newTopic = tokenSampling(gen, globalSampler, lastSampler, cdfSampler, termTopicCounter, currentTopic)
+            val topic = topics(i)
+            dSparse(cdfDist, topicCounters, termTopics, docTopics, beta, betaSum)
+            global.update(topic, itemRatio(topic) * beta)
+            wordDist.update(topic, itemRatio(topic) * termTopics(topic))
+            val newTopic = tokenSampling(gen, global, wordDist, cdfDist, termTopics, topic)
             topics(i) = newTopic
-            globalSampler.update(newTopic, itemRatio(currentTopic) * beta)
-            lastSampler.update(newTopic, itemRatio(currentTopic) * termTopicCounter(currentTopic))
+            global.update(newTopic, itemRatio(newTopic) * beta)
+            wordDist.update(newTopic, itemRatio(newTopic) * termTopics(newTopic))
           }
           pos += 1
         }
@@ -147,9 +150,9 @@ class FastLDA extends LDAAlgorithm {
   private[ml] def tokenSampling(gen: Random,
     t: DiscreteSampler[Double],
     w: DiscreteSampler[Double],
-    d: DiscreteSampler[Double],
-    termTopicCounter: TC,
-    currentTopic: Int): Int = {
+    d: CumulativeDist[Double],
+    termTopics: BDV[Count],
+    topic: Int): Int = {
     val dSum = d.norm
     val dwSum = dSum + w.norm
     val distSum = dwSum + t.norm
@@ -158,7 +161,7 @@ class FastLDA extends LDAAlgorithm {
       d.sampleFrom(genSum, gen)
     } else if (genSum < dwSum) {
       w match {
-        case wt: AliasTable[Double] => sampleSV(gen, wt, termTopicCounter, currentTopic)
+        case wt: AliasTable[Double] => resampleTable(gen, wt, termTopics, topic)
         case wf: FTree[Double] => wf.sampleFrom(genSum - dSum, gen)
       }
     } else {
@@ -187,10 +190,15 @@ class FastLDA extends LDAAlgorithm {
   private[ml] def wSparse(w: DiscreteSampler[Double],
     itemRatio: Int => Double,
     termTopicCounter: TC): DiscreteSampler[Double] = {
-    val distIter = termTopicCounter.activeIterator.map {
-      case (t, c) => (t, itemRatio(t) * c)
+    val arr = new Array[(Int, Double)](termTopicCounter.activeSize)
+    var i = 0
+    for ((topic, cnt) <- termTopicCounter.activeIterator) {
+      if (cnt > 0) {
+        arr(i) = (topic, cnt * itemRatio(topic))
+        i += 1
+      }
     }
-    w.resetDist(distIter, termTopicCounter.used)
+    w.resetDist(arr.slice(0, i).iterator, i)
   }
 
   /**
@@ -201,13 +209,14 @@ class FastLDA extends LDAAlgorithm {
    */
   private[ml] def dSparse(d: CumulativeDist[Double],
     totalTopicCounter: BDV[Count],
-    termTopicCounter: TC,
+    termTopicCounter: BDV[Count],
     docTopicCounter: TC,
     beta: Double,
     betaSum: Double): CumulativeDist[Double] = {
-    val used = docTopicCounter.used
-    val index = docTopicCounter.index
-    val data = docTopicCounter.data
+    val dtc = docTopicCounter.asInstanceOf[BSV[Count]]
+    val used = dtc.used
+    val index = dtc.index
+    val data = dtc.data
     d.directReset(i => {
       val topic = index(i)
       val cnt = data(i)
@@ -218,7 +227,7 @@ class FastLDA extends LDAAlgorithm {
 
 class LightLDA extends LDAAlgorithm {
   override private[ml] def sampleGraph(corpus: Graph[TC, TA],
-    totalTopicCounter: BDV[Count],
+    topicCounters: BDV[Count],
     seed: Int,
     numTokens: Long,
     numTopics: Int,
@@ -238,10 +247,10 @@ class LightLDA extends LDAAlgorithm {
       var lastVid: VertexId = -1L
       var lastWSum = 0D
 
-      val p = tokenTopicProb(totalTopicCounter, beta, alpha,
+      val p = tokenTopicProb(topicCounters, beta, alpha,
         alphaAS, numTokens, numTerms) _
-      val dPFun = docProb(totalTopicCounter, alpha, alphaAS, numTokens) _
-      val wPFun = wordProb(totalTopicCounter, numTerms, beta) _
+      val dPFun = docProb(topicCounters, alpha, alphaAS, numTokens) _
+      val wPFun = wordProb(topicCounters, numTerms, beta) _
 
       var dD: AliasTable[Double] = null
       var dDSum = 0D
@@ -256,11 +265,11 @@ class LightLDA extends LDAAlgorithm {
         val topics = triplet.attr
 
         if (dD == null || gen.nextDouble() < 1e-6) {
-          var dv = dDense(totalTopicCounter, alpha, alphaAS, numTokens)
+          var dv = dDense(topicCounters, alpha, alphaAS, numTokens)
           dDSum = dv._1
           dD = AliasTable.generateAlias(dv._2)
 
-          dv = wDense(totalTopicCounter, numTerms, beta)
+          dv = wDense(topicCounters, numTerms, beta)
           wDSum = dv._1
           wD = AliasTable.generateAlias(dv._2)
         }
@@ -270,7 +279,7 @@ class LightLDA extends LDAAlgorithm {
         }
         val (wSum, w) = termTopicCounter.synchronized {
           if (lastVid != termId || gen.nextDouble() < 1e-4) {
-            lastWSum = wordTable(lastTable, totalTopicCounter, termTopicCounter, termId, numTerms, beta)
+            lastWSum = wordTable(lastTable, topicCounters, termTopicCounter, termId, numTerms, beta)
             lastVid = termId
           }
           (lastWSum, lastTable)
@@ -289,7 +298,7 @@ class LightLDA extends LDAAlgorithm {
               }
               else {
                 proposalTopic = docTopicCounter.synchronized {
-                  sampleSV(gen, d, docTopicCounter, currentTopic)
+                  resampleTable(gen, d, docTopicCounter, currentTopic)
                 }
               }
               dPFun
@@ -307,8 +316,8 @@ class LightLDA extends LDAAlgorithm {
               docTopicCounter(newTopic) += 1
               termTopicCounter(currentTopic) -= 1
               termTopicCounter(newTopic) += 1
-              totalTopicCounter(currentTopic) -= 1
-              totalTopicCounter(newTopic) += 1
+              topicCounters(currentTopic) -= 1
+              topicCounters(newTopic) += 1
             }
           }
         }

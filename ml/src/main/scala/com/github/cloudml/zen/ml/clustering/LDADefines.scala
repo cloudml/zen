@@ -19,6 +19,8 @@ package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
 import java.util.concurrent.Executors
+import org.apache.spark.mllib.linalg.DenseVector
+
 import scala.concurrent._
 import scala.concurrent.duration.Duration
 import scala.reflect.ClassTag
@@ -26,7 +28,8 @@ import scala.reflect.ClassTag
 import com.github.cloudml.zen.ml.util._
 
 import breeze.collection.mutable.SparseArray
-import breeze.linalg.{SparseVector => BSV}
+import breeze.linalg.{Vector => BV, SparseVector => BSV, DenseVector => BDV}
+import breeze.storage.Zero
 import org.apache.spark.SparkConf
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl._
@@ -37,7 +40,7 @@ object LDADefines {
   type DocId = VertexId
   type WordId = VertexId
   type Count = Int
-  type TC = BSV[Count]
+  type TC = BV[Count]
   type TA = Array[Int]
   type BOW = (Long, BSV[Count])
 
@@ -71,14 +74,14 @@ object LDADefines {
   def uniformDistSampler(gen: Random,
     tokens: Array[Int],
     topics: Array[Int],
-    numTopics: Int): TC = {
-    val docTopicCounter = BSV.zeros[Count](numTopics)
+    numTopics: Int): BSV[Count] = {
+    val docTopics = BSV.zeros[Count](numTopics)
     for (i <- tokens.indices) {
       val topic = gen.nextInt(numTopics)
       topics(i) = topic
-      docTopicCounter(topic) += 1
+      docTopics(topic) += 1
     }
-    docTopicCounter
+    docTopics
   }
 
   def registerKryoClasses(conf: SparkConf): Unit = {
@@ -87,8 +90,17 @@ object LDADefines {
       classOf[BOW],
       classOf[(TC, Double, Int)],  // for perplexity
       classOf[AliasTable[Object]], classOf[FTree[Object]],  // for some partitioners
+      classOf[BSV[Object]], classOf[BDV[Object]],
       classOf[SparseArray[Object]]  // member of BSV
     ))
+  }
+
+  def toBDV[@specialized(Int, Double, Float) V: ClassTag: Zero](bsv: BSV[V]): BDV[V] = {
+    val bdv = BDV.zeros[V](bsv.length)
+    for ((i, v) <- bsv.activeIterator) {
+      bdv(i) = v
+    }
+    bdv
   }
 
   def refreshEdgeAssociations[VD: ClassTag, ED: ClassTag](graph: Graph[VD, ED]): GraphImpl[VD, ED] = {

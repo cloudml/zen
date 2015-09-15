@@ -28,7 +28,8 @@ import LDADefines._
 import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
+import breeze.linalg.{Vector => BV, DenseVector => BDV, SparseVector => BSV}
+import org.apache.log4j.Logger
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.GraphImpl
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
@@ -49,7 +50,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
   var storageLevel: StorageLevel) extends Serializable {
 
   @transient var seed = new XORShiftRandom().nextInt()
-  @transient var totalTopicCounter = collectTopicCounter()
+  @transient var topicCounters = collectTopicCounters()
 
   def setAlpha(alpha: Double): this.type = {
     this.alpha = alpha
@@ -84,10 +85,10 @@ class LDA(@transient var corpus: Graph[TC, TA],
 
   private def scConf = corpus.edges.context.getConf
 
-  private def collectTopicCounter(): BDV[Count] = {
+  private def collectTopicCounters(): BDV[Count] = {
     val gtc = termVertices.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
     val count = gtc.activeValuesIterator.map(_.toLong).sum
-    assert(count == numTokens)
+    assert(count == numTokens, s"numTokens=$numTokens, count=$count")
     gtc
   }
 
@@ -121,7 +122,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
     val sc = corpus.edges.context
     val chkptIntv = scConf.getInt(cs_chkptInterval, 0)
     val prevCorpus = corpus
-    val sampledCorpus = algo.sampleGraph(corpus, totalTopicCounter, sampIter + seed,
+    val sampledCorpus = algo.sampleGraph(corpus, topicCounters, sampIter + seed,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
     corpus = updateVertexCounters(sampledCorpus, numTopics, inferenceOnly)
     if (chkptIntv > 0 && sampIter % chkptIntv == 1 && sc.getCheckpointDir.isDefined) {
@@ -130,7 +131,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
     corpus.persist(storageLevel)
     corpus.edges.setName(s"edges-$sampIter").count()
     corpus.vertices.setName(s"vertices-$sampIter")
-    totalTopicCounter = collectTopicCounter()
+    topicCounters = collectTopicCounters()
     prevCorpus.unpersist(blocking=false)
   }
 
@@ -141,7 +142,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
    */
   def runSum(filter: VertexId => Boolean,
     runIter: Int = 0,
-    inferenceOnly: Boolean = false): RDD[(VertexId, BSV[Double])] = {
+    inferenceOnly: Boolean = false): RDD[(VertexId, BV[Double])] = {
     def vertices = corpus.vertices.filter(t => filter(t._1))
     var countersSum = vertices.mapValues(_.mapValues(_.toDouble))
     countersSum.persist(storageLevel)
@@ -172,8 +173,8 @@ class LDA(@transient var corpus: Graph[TC, TA],
     val rows = termVertices.map(t => t._2).map(v => {
       val length = v.length
       val used = v.activeSize
-      val index = v.index.slice(0, used)
-      val data = v.data.slice(0, used).map(_.toDouble)
+      val index = v.activeKeysIterator.toArray
+      val data = v.activeValuesIterator.toArray.map(_.toDouble)
       new SSV(length, index, data).asInstanceOf[SV]
     })
     val simMatrix = new RowMatrix(rows).columnSimilarities()
@@ -233,7 +234,7 @@ object LDA {
     val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdgeRDD(docs, storageLevel)
     initCorpus.edges.setName("edges-0").persist(storageLevel)
     val corpus = updateVertexCounters(initCorpus, numTopics)
-      .joinVertices(computedModel.termTopicCounters)((_, _, computedCounter) => computedCounter)
+      .joinVertices(computedModel.termTopicsRDD)((_, _, computedCounter) => computedCounter)
     val vertices = corpus.vertices
     vertices.setName("vertices-0").persist(storageLevel)
     val numDocs = vertices.map(_._1).filter(isDocId).count()
@@ -382,6 +383,7 @@ object LDA {
     val edges = graph.edges
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
     val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap(t => {
+      val logger = Logger.getLogger("asdfadff")
       val ep = t._2
       val totalSize = ep.size
       val lcSrcIds = ep.localSrcIds
@@ -393,35 +395,40 @@ object LDA {
       val results = new Array[(VertexId, TC)](vertSize)
       val marks = new AtomicIntegerArray(vertSize)
 
-      implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+      implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads),
+        e => logger.error(e.getLocalizedMessage, e))
       val all = Future.traverse(ep.index.iterator)(t => Future {
         var pos = t._2
         val lcVid = lcSrcIds(pos)
-        var termTuple = results(lcVid)
-        if (termTuple == null && !inferenceOnly) {
+        var termTuple: (VertexId, TC) = null
+        if (!inferenceOnly) {
           termTuple = (l2g(lcVid), BSV.zeros[Count](numTopics))
           results(lcVid) = termTuple
         }
-        val termTopicCounter = termTuple._2
         while (pos < totalSize && lcSrcIds(pos) == lcVid) {
           val di = lcDstIds(pos)
           var docTuple = results(di)
           if (docTuple == null) {
-            if (marks.getAndDecrement(di) == 0) {
+            if (marks.getAndSet(di, -1) == 0) {
               docTuple = (l2g(di), BSV.zeros[Count](numTopics))
               results(di) = docTuple
-              marks.set(di, Int.MaxValue)
+              marks.set(di, 1)
             } else {
-              while (marks.get(di) < 0) {}
+              while (marks.get(di) <= 0) {}
               docTuple = results(di)
             }
           }
-          val docTopicCounter = docTuple._2
           val topics = data(pos)
           for (t <- topics) {
-            if (!inferenceOnly) {
-              termTopicCounter(t) += 1
+            if (!inferenceOnly) termTuple._2 match {
+              case v: BDV[Count] => v(t) += 1
+              case v: BSV[Count] =>
+                v(t) += 1
+                if (v.activeSize > (numTopics >> 2)) {
+                  termTuple = (l2g(lcVid), toBDV(v))
+                }
             }
+            val docTopicCounter = docTuple._2
             docTopicCounter.synchronized {
               docTopicCounter(t) += 1
             }
@@ -432,25 +439,38 @@ object LDA {
       Await.ready(all, Duration.Inf)
       ec.shutdown()
 
+      assert(results.contains(null))
       results.filter(_ != null)
     })).partitionBy(vertices.partitioner.get)
 
     val partRDD = vertices.partitionsRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
       (svpIter, cntsIter) => svpIter.map(svp => {
+        val logger = Logger.getLogger(this.getClass.getName)
         val results = svp.values
         val index = svp.index
         val marks = new AtomicIntegerArray(results.length)
-        implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-        val all = cntsIter.grouped(numThreads * 10).map(cntGrp => Future {
+        implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads),
+          e => logger.error(e.getLocalizedMessage, e))
+        val all = cntsIter.grouped(numThreads * 5).map(cntGrp => Future {
           for ((vid, counter) <- cntGrp) {
             val i = index.getPos(vid)
             if (marks.getAndDecrement(i) == 0) {
               results(i) = counter
             } else {
-              while (marks.get(i) < 0) {}
+              while (marks.getAndSet(i, -1) <= 0) {}
               val agg = results(i)
-              agg.synchronized {
-                agg :+= counter
+              results(i) = agg match {
+                case u: BDV[Count] => u :+= counter
+                case u: BSV[Count] => counter match {
+                  case v: BDV[Count] => v :+= u
+                  case v: BSV[Count] =>
+                    u :+= v
+                    if (u.activeSize > (numTopics >> 2)) {
+                      toBDV(u)
+                    } else {
+                      u
+                    }
+                }
               }
             }
             marks.set(i, Int.MaxValue)

@@ -24,7 +24,7 @@ import scala.concurrent.duration.Duration
 
 import LDADefines._
 
-import breeze.linalg.sum
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum}
 import org.apache.spark.graphx2.impl.GraphImpl
 
 
@@ -49,7 +49,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
    * N is the number of tokens in corpus
    */
   def measure(): Unit = {
-    val tCounter = lda.totalTopicCounter
+    val topicCounters = lda.topicCounters
     val numTopics = lda.numTopics
     val numTokens = lda.numTokens
     val alphaAS = lda.alphaAS
@@ -64,7 +64,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
 
     // \frac{{\alpha }_{k}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
-    val tDenseSum = tCounter.valuesIterator.map(cnt =>
+    val tDenseSum = topicCounters.valuesIterator.map(cnt =>
       beta * alphaRatio * (cnt + alphaAS) / (cnt + betaSum)
     ).sum
 
@@ -79,9 +79,9 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
         val pSum = counter.activeIterator.map {
           case (topic, cnt) =>
             if (isDocId(vid)) {
-              cnt * beta / (tCounter(topic) + betaSum)
+              cnt * beta / (topicCounters(topic) + betaSum)
             } else {
-              cnt * alphaRatio * (tCounter(topic) + alphaAS) / (tCounter(topic) + betaSum)
+              cnt * alphaRatio * (topicCounters(topic) + alphaAS) / (topicCounters(topic) + betaSum)
             }
         }.sum
         val cSum = if (isDocId(vid)) sum(counter) else 0
@@ -111,22 +111,26 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
         val thid = indicator.getAndIncrement() % numThreads
         var pos = t._2
         val lcVid = lcSrcIds(pos)
-        val (termTopicCounter, wSparseSum, _) = vattrs(lcVid)
+        val (orgTermTopics, wSparseSum, _) = vattrs(lcVid)
+        val termTopics = orgTermTopics match {
+          case v: BDV[Count] => v
+          case v: BSV[Count] => toBDV(v)
+        }
         var lcSum = 0D
         var lcWSum = 0D
         var lcDSum = 0D
         while (pos < totalSize && lcSrcIds(pos) == lcVid) {
-          val (docTopicCounter, dSparseSum, docSize) = vattrs(lcDstIds(pos))
+          val (docTopics, dSparseSum, docSize) = vattrs(lcDstIds(pos))
           val topics = data(pos)
           // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
-          val dwSparseSum = docTopicCounter.activeIterator.map {
-            case (topic, cnt) => cnt * termTopicCounter(topic) / (tCounter(topic) + betaSum)
+          val dwSparseSum = docTopics.activeIterator.map {
+            case (topic, cnt) => cnt * termTopics(topic) / (topicCounters(topic) + betaSum)
           }.sum
           val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alphaSum)
           lcSum += Math.log(prob) * topics.length
           for (topic <- topics) {
-            val wProb = (termTopicCounter(topic) + beta) / (tCounter(topic) + betaSum)
-            val dProb = (docTopicCounter(topic) + alphaRatio * (tCounter(topic) + alphaAS)) /
+            val wProb = (termTopics(topic) + beta) / (topicCounters(topic) + betaSum)
+            val dProb = (docTopics(topic) + alphaRatio * (topicCounters(topic) + alphaAS)) /
               (docSize + alphaSum)
             lcWSum += Math.log(wProb)
             lcDSum += Math.log(dProb)
@@ -143,9 +147,9 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
     }))
 
     val (llh, wllh, dllh) = sumPart.collect().unzip3
-    pplx = math.exp(-1 * llh.sum / numTokens)
-    wpplx = math.exp(-1 * wllh.sum / numTokens)
-    dpplx = math.exp(-1 * dllh.sum / numTokens)
+    pplx = math.exp(-llh.sum / numTokens)
+    wpplx = math.exp(-wllh.sum / numTokens)
+    dpplx = math.exp(-dllh.sum / numTokens)
   }
 
   def getPerplexity: Double = pplx
