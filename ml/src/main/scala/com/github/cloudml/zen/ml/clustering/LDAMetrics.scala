@@ -110,8 +110,8 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
       val all = Future.traverse(ep.index.iterator)(t => Future {
         val thid = indicator.getAndIncrement() % numThreads
         var pos = t._2
-        val lcVid = lcSrcIds(pos)
-        val (orgTermTopics, wSparseSum, _) = vattrs(lcVid)
+        val si = lcSrcIds(pos)
+        val (orgTermTopics, wSparseSum, _) = vattrs(si)
         val termTopics = orgTermTopics match {
           case v: BDV[Count] => v
           case v: BSV[Count] => toBDV(v)
@@ -119,7 +119,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
         var lcSum = 0D
         var lcWSum = 0D
         var lcDSum = 0D
-        while (pos < totalSize && lcSrcIds(pos) == lcVid) {
+        while (pos < totalSize && lcSrcIds(pos) == si) {
           val (docTopics, dSparseSum, docSize) = vattrs(lcDstIds(pos))
           val topics = data(pos)
           // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}

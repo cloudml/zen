@@ -115,15 +115,15 @@ class FastLDA extends LDAAlgorithm {
           case "ftree" | "hybrid" => new FTree(numTopics, isSparse = true)
         }
         var pos = t._2
-        val lcVid = lcSrcIds(pos)
-        val orgTermTopics = vattrs(lcVid)
+        val si = lcSrcIds(pos)
+        val orgTermTopics = vattrs(si)
         wSparse(wordDist, itemRatio, orgTermTopics)
         val termTopics = orgTermTopics match {
           case v: BDV[Count] => v
           case v: BSV[Count] => toBDV(v)
         }
         val cdfDist = new CumulativeDist[Double](numTopics)
-        while (pos < totalSize && lcSrcIds(pos) == lcVid) {
+        while (pos < totalSize && lcSrcIds(pos) == si) {
           val docTopics = vattrs(lcDstIds(pos))
           val topics = data(pos)
           for (i <- topics.indices) {

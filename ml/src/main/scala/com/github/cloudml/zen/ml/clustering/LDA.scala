@@ -172,7 +172,6 @@ class LDA(@transient var corpus: Graph[TC, TA],
   def mergeDuplicateTopic(threshold: Double = 0.95D): Map[Int, Int] = {
     val rows = termVertices.map(t => t._2).map(v => {
       val length = v.length
-      val used = v.activeSize
       val index = v.activeKeysIterator.toArray
       val data = v.activeValuesIterator.toArray.map(_.toDouble)
       new SSV(length, index, data).asInstanceOf[SV]
@@ -189,6 +188,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
       val mergingCorpus = corpus.mapEdges(_.attr.map(topic =>
         minMap.getOrElse(topic, topic))
       )
+      corpus = updateVertexCounters(mergingCorpus, numTopics)
     }
     minMap
   }
@@ -383,7 +383,6 @@ object LDA {
     val edges = graph.edges
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
     val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap(t => {
-      val logger = Logger.getLogger("asdfadff")
       val ep = t._2
       val totalSize = ep.size
       val lcSrcIds = ep.localSrcIds
@@ -395,42 +394,46 @@ object LDA {
       val results = new Array[(VertexId, TC)](vertSize)
       val marks = new AtomicIntegerArray(vertSize)
 
-      implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads),
-        e => logger.error(e.getLocalizedMessage, e))
+      implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
       val all = Future.traverse(ep.index.iterator)(t => Future {
         var pos = t._2
-        val lcVid = lcSrcIds(pos)
-        var termTuple: (VertexId, TC) = null
-        if (!inferenceOnly) {
-          termTuple = (l2g(lcVid), BSV.zeros[Count](numTopics))
-          results(lcVid) = termTuple
+        val si = lcSrcIds(pos)
+        var termTuple = results(si)
+        if (termTuple == null && !inferenceOnly) {
+          termTuple = (l2g(si), BSV.zeros[Count](numTopics))
+          results(si) = termTuple
         }
-        while (pos < totalSize && lcSrcIds(pos) == lcVid) {
+        var termTopics = if (!inferenceOnly) termTuple._2 else null
+        while (pos < totalSize && lcSrcIds(pos) == si) {
           val di = lcDstIds(pos)
           var docTuple = results(di)
           if (docTuple == null) {
-            if (marks.getAndSet(di, -1) == 0) {
+            if (marks.getAndDecrement(di) == 0) {
               docTuple = (l2g(di), BSV.zeros[Count](numTopics))
               results(di) = docTuple
-              marks.set(di, 1)
+              marks.set(di, Int.MaxValue)
             } else {
               while (marks.get(di) <= 0) {}
               docTuple = results(di)
             }
           }
+          val docTopics = docTuple._2
           val topics = data(pos)
-          for (t <- topics) {
-            if (!inferenceOnly) termTuple._2 match {
-              case v: BDV[Count] => v(t) += 1
-              case v: BSV[Count] =>
-                v(t) += 1
-                if (v.activeSize > (numTopics >> 2)) {
-                  termTuple = (l2g(lcVid), toBDV(v))
-                }
+          for (topic <- topics) {
+            if (!inferenceOnly) {
+              termTopics match {
+                case v: BDV[Count] => v(topic) += 1
+                case v: BSV[Count] =>
+                  v(topic) += 1
+                  if (v.activeSize > (numTopics >> 2)) {
+                    termTuple = (l2g(si), toBDV(v))
+                    results(si) = termTuple
+                    termTopics = termTuple._2
+                  }
+              }
             }
-            val docTopicCounter = docTuple._2
-            docTopicCounter.synchronized {
-              docTopicCounter(t) += 1
+            docTopics.synchronized {
+              docTopics(topic) += 1
             }
           }
           pos += 1
@@ -439,18 +442,15 @@ object LDA {
       Await.ready(all, Duration.Inf)
       ec.shutdown()
 
-      assert(results.contains(null))
       results.filter(_ != null)
     })).partitionBy(vertices.partitioner.get)
 
     val partRDD = vertices.partitionsRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
       (svpIter, cntsIter) => svpIter.map(svp => {
-        val logger = Logger.getLogger(this.getClass.getName)
         val results = svp.values
         val index = svp.index
         val marks = new AtomicIntegerArray(results.length)
-        implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads),
-          e => logger.error(e.getLocalizedMessage, e))
+        implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
         val all = cntsIter.grouped(numThreads * 5).map(cntGrp => Future {
           for ((vid, counter) <- cntGrp) {
             val i = index.getPos(vid)
