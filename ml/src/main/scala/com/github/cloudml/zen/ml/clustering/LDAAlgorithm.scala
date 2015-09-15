@@ -115,7 +115,7 @@ class FastLDA extends LDAAlgorithm {
           case "alias" => new AliasTable[Double](numTopics)
           case "ftree" | "hybrid" => new FTree(numTopics, isSparse = true)
         }
-        val cdfSampler: CumulativeDist[Double] = new CumulativeDist[Double](numTopics)
+        val cdfSampler = new CumulativeDist[Double](numTopics)
         var pos = offset
         val lcVid = lcSrcIds(offset)
         val termTopicCounter = vattrs(lcVid)
@@ -199,16 +199,20 @@ class FastLDA extends LDAAlgorithm {
    * {({n}_{k}^{-di}+\bar{\beta})({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
    * =  \frac{{n}_{kd} ^{-di}({n}_{kw}^{-di}+{\beta}_{w})}{({n}_{k}^{-di}+\bar{\beta}) }
    */
-  private[ml] def dSparse(d: DiscreteSampler[Double],
+  private[ml] def dSparse(d: CumulativeDist[Double],
     totalTopicCounter: BDV[Count],
     termTopicCounter: TC,
     docTopicCounter: TC,
     beta: Double,
-    betaSum: Double): DiscreteSampler[Double] = {
-    val distIter = docTopicCounter.activeIterator.map {
-      case (t, c) => (t, c * (termTopicCounter(t) + beta) / (totalTopicCounter(t) + betaSum))
-    }
-    d.resetDist(distIter, docTopicCounter.used)
+    betaSum: Double): CumulativeDist[Double] = {
+    val used = docTopicCounter.used
+    val index = docTopicCounter.index
+    val data = docTopicCounter.data
+    d.directReset(i => {
+      val topic = index(i)
+      val cnt = data(i)
+      cnt * (termTopicCounter(topic) + beta) / (totalTopicCounter(topic) + betaSum)
+    }, used, index)
   }
 }
 

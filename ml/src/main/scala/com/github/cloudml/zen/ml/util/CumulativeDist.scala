@@ -79,6 +79,18 @@ private[zen] class CumulativeDist[@specialized(Double, Int, Float, Long) T: Clas
     this
   }
 
+  // don't use this method unless you know what you are doing
+  def directReset(vf: Int => T, used: Int, space: Array[Int]): this.type = synchronized {
+    _used = used
+    var sum = num.zero
+    for (i <- 0 until used) {
+      sum = num.plus(sum, vf(i))
+      _cdf(i) = sum
+    }
+    _space = space
+    this
+  }
+
   private def reset(newSize: Int): this.type = {
     if (_cdf.length < newSize) {
       _cdf = new Array[T](newSize)
