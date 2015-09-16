@@ -144,29 +144,32 @@ class LDA(@transient var corpus: Graph[TC, TA],
    */
   def runSum(filter: VertexId => Boolean,
     runIter: Int = 0,
-    inferenceOnly: Boolean = false): RDD[(VertexId, BV[Double])] = {
+    inferenceOnly: Boolean = false): RDD[(VertexId, TC)] = {
     def vertices = corpus.vertices.filter(t => filter(t._1))
-    var countersSum = vertices.mapValues(_.mapValues(_.toDouble))
+    var countersSum = vertices
     countersSum.persist(storageLevel)
     for (iter <- 1 to runIter) {
       println(s"Save TopicModel (Iteration $iter/$runIter)")
       gibbsSampling(iter, inferenceOnly)
-      countersSum = countersSum.innerZipJoin(vertices)((_, a, b) => a :+= b.mapValues(_.toDouble))
+      countersSum = countersSum.innerZipJoin(vertices)((_, a, b) => a :+= b)
       countersSum.persist(storageLevel)
     }
-    if (runIter == 0) {
-      countersSum
-    } else {
-      countersSum.mapValues(_.mapValues(_ / (runIter + 1)))
-    }
+    countersSum
   }
 
   def toLDAModel(runIter: Int = 0): DistributedLDAModel = {
-    val gen = new XORShiftRandom()
-    val ttcs = runSum(isTermId, runIter).mapValues(_.mapValues(v => {
-      val l = math.floor(v)
-      if (gen.nextDouble() > v - l) l else l + 1
-    }.toInt))
+    val ttcsSum = runSum(isTermId, runIter)
+    val ttcs = if (runIter == 0) {
+      ttcsSum
+    } else {
+      val turn = (runIter + 1).toDouble
+      ttcsSum.mapValues(_.mapValues(v => {
+        val gen = new XORShiftRandom()
+        val aver = v / turn
+        val intPart = math.floor(aver)
+        if (gen.nextDouble() > aver - intPart) intPart else intPart + 1
+      }.toInt))
+    }
     ttcs.persist(storageLevel)
     new DistributedLDAModel(ttcs, numTopics, numTerms, numTokens, alpha, beta, alphaAS, storageLevel)
   }

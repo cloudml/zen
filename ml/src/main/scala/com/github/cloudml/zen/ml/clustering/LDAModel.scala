@@ -71,23 +71,22 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
   /**
    * inference interface
    * @param doc the doc to be inferred
-   * @param totalIter overall iterations
+   * @param runIter overall iterations
    * @param burnIn burn-in iterations
    */
   def inference(
     doc: BSV[Count],
-    totalIter: Int = 10,
-    burnIn: Int = 5): BSV[Double] = {
-    require(totalIter > burnIn, "totalIter is less than burnInIter")
-    require(totalIter > 0, "totalIter is less than 0")
-    require(burnIn > 0, "burnInIter is less than 0")
+    burnIn: Int = 5,
+    runIter: Int = 5): BSV[Double] = {
+    require(runIter > 0, "totalIter is less than 1")
+    require(burnIn > 0, "burnInIter is less than 1")
     val gen = new XORShiftRandom()
     val topicDist = BSV.zeros[Int](numTopics)
     val tokens = vector2Array(doc)
     val topics = new Array[Int](tokens.length)
     var docTopics = uniformDistSampler(gen, tokens, topics, numTopics)
     val docCdf = new CumulativeDist[Double](numTopics)
-    for (i <- 1 to totalIter) {
+    for (i <- 1 to burnIn + runIter) {
       docTopics = sampleDoc(gen, docTopics, tokens, topics, docCdf)
       if (i > burnIn) topicDist :+= docTopics
     }
@@ -95,7 +94,7 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
     topicDist.mapValues(_ / pSum)
   }
 
-  private[ml] def vector2Array(bow: BV[Int]): Array[Int] = {
+  private[ml] def vector2Array(bow: BSV[Count]): Array[Int] = {
     val docLen = sum(bow)
     val sent = new Array[Int](docLen)
     var offset = 0
@@ -180,21 +179,25 @@ class DistributedLDAModel(@transient val termTopicsRDD: RDD[(VertexId, TC)],
    * inference interface
    * @param bowDocs   tuple pair: (dicId, Vector), in which 'docId' is unique
    *                  recommended storage level: StorageLevel.MEMORY_AND_DISK
-   * @param totalIter overall iterations
+   * @param runIter   overall iterations
    * @param burnIn    previous burnIn iters results will discard
    */
   def inference(bowDocs: RDD[BOW],
-    totalIter: Int = 25,
-    burnIn: Int = 22): RDD[(VertexId, BV[Double])] = {
-    require(totalIter > burnIn, "totalIter is less than burnInIter")
-    require(totalIter > 0, "totalIter is less than 0")
-    require(burnIn > 0, "burnIn is less than 0")
+    runIter: Int = 25,
+    burnIn: Int = 22): RDD[(VertexId, BSV[Double])] = {
+    require(burnIn > 0, "burnIn is less than 1")
+    require(runIter > 0, "runIter is less than 1")
     val docs = LDA.initializeCorpusEdges(bowDocs, "bow", numTopics, storageLevel)
     val lda = LDA(this, docs, algo)
     for (i <- 1 to burnIn) {
       lda.gibbsSampling(i, inferenceOnly=true)
     }
-    lda.runSum(isDocId, totalIter - burnIn, inferenceOnly=true)
+    val topicDist = lda.runSum(isDocId, runIter, inferenceOnly=true)
+    topicDist.mapValues(v => {
+      val dist = v.asInstanceOf[BSV[Count]]
+      val pSum = sum(dist).toDouble
+      dist.mapValues(_ / pSum)
+    })
   }
 
   def toLocalLDAModel: LocalLDAModel = {
