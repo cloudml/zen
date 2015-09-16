@@ -534,31 +534,13 @@ object LogisticRegression {
       }
     }.persist(storageLevel)
 
-    // degree-based hashing
-    val degrees = edges.flatMap(t => Seq((t.dstId, 1), (t.srcId, 1))).
-      reduceByKey(_ + _).persist(storageLevel)
-    val dataSet = GraphImpl(degrees, edges, 0, storageLevel, storageLevel)
-    dataSet.vertices.setName("init-vertices")
-    dataSet.edges.setName("init-edges")
-    dataSet.persist(storageLevel)
-    val numPartitions = edges.partitions.size
-    val partitionStrategy = new DBHPartitioner(numPartitions, 0)
-    val newEdges = dataSet.triplets.mapPartitions { itr =>
-      itr.map { e =>
-        (partitionStrategy.getPartition(e), Edge(e.srcId, e.dstId, e.attr))
-      }
-    }.partitionBy(new HashPartitioner(numPartitions)).map(_._2)
-    // end degree-based hashing
-
-    // dataSet = dataSet.partitionBy(PartitionStrategy.EdgePartition2D)
-    val newDataSet = GraphImpl(vertices, newEdges, 0.0, storageLevel, storageLevel)
+    val dataSet = GraphImpl(vertices, edges, 0D, storageLevel, storageLevel)
+    val newDataSet = DBHPartitioner.partitionByDBH(dataSet, storageLevel)
     newDataSet.persist(storageLevel)
     newDataSet.vertices.count()
     newDataSet.edges.count()
-    degrees.unpersist(blocking = false)
     dataSet.edges.unpersist(blocking = false)
     dataSet.vertices.unpersist(blocking = false)
-    newEdges.unpersist(blocking = false)
     edges.unpersist(blocking = false)
     vertices.unpersist(blocking = false)
     newDataSet
