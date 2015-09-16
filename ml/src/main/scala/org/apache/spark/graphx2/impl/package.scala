@@ -15,17 +15,10 @@
  * limitations under the License.
  */
 
-package com.github.cloudml.zen.ml.util
+package org.apache.spark.graphx2
 
-import java.util.Random
+import org.apache.spark.util.collection.OpenHashSet
 
-trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
-  def length: Int
-  def used: Int
-  def norm: T
-  def sampleRandom(gen: Random): Int
-  def sampleFrom(base: T, gen: Random): Int
-  def update(state: Int, value: T): Unit
-  def deltaUpdate(state: Int, delta: T): Unit
-  def resetDist(distIter: Iterator[(Int, T)], used: Int): DiscreteSampler[T]
+package object impl {
+  type VertexIdToIndexMap = OpenHashSet[VertexId]
 }

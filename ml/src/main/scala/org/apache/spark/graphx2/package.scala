@@ -15,17 +15,24 @@
  * limitations under the License.
  */
 
-package com.github.cloudml.zen.ml.util
+package org.apache.spark
 
-import java.util.Random
+import org.apache.spark.util.collection.OpenHashSet
 
-trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
-  def length: Int
-  def used: Int
-  def norm: T
-  def sampleRandom(gen: Random): Int
-  def sampleFrom(base: T, gen: Random): Int
-  def update(state: Int, value: T): Unit
-  def deltaUpdate(state: Int, delta: T): Unit
-  def resetDist(distIter: Iterator[(Int, T)], used: Int): DiscreteSampler[T]
+/**
+ * <span class="badge" style="float: right;">ALPHA COMPONENT</span>
+ * GraphX is a graph processing framework built on top of Spark.
+ */
+package object graphx2 {
+  /**
+   * A 64-bit vertex identifier that uniquely identifies a vertex within a graph. It does not need
+   * to follow any ordering or any constraints other than uniqueness.
+   */
+  type VertexId = Long
+
+  /** Integer identifer of a graph partition. Must be less than 2^30. */
+  // TODO: Consider using Char.
+  type PartitionID = Int
+
+  type VertexSet = OpenHashSet[VertexId]
 }

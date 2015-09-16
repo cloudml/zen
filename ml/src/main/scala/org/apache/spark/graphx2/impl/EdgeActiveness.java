@@ -15,17 +15,20 @@
  * limitations under the License.
  */
 
-package com.github.cloudml.zen.ml.util
+package org.apache.spark.graphx2.impl;
 
-import java.util.Random
-
-trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
-  def length: Int
-  def used: Int
-  def norm: T
-  def sampleRandom(gen: Random): Int
-  def sampleFrom(base: T, gen: Random): Int
-  def update(state: Int, value: T): Unit
-  def deltaUpdate(state: Int, delta: T): Unit
-  def resetDist(distIter: Iterator[(Int, T)], used: Int): DiscreteSampler[T]
+/**
+ * Criteria for filtering edges based on activeness. For internal use only.
+ */
+public enum EdgeActiveness {
+  /** Neither the source vertex nor the destination vertex need be active. */
+  Neither,
+  /** The source vertex must be active. */
+  SrcOnly,
+  /** The destination vertex must be active. */
+  DstOnly,
+  /** Both vertices must be active. */
+  Both,
+  /** At least one vertex must be active. */
+  Either
 }

@@ -92,7 +92,7 @@ private[ml] object LoaderUtils {
     val fs = FileSystem.get(hdpconf)
     val outPath = new Path(outPathStr)
     if (fs.exists(outPath)) {
-      throw new InvalidPathException("Output path %s already exists.".format(outPathStr))
+      throw new InvalidPathException(s"Output path $outPathStr already exists.")
     }
     val fout = fs.create(outPath)
     fout.write(header.getBytes)

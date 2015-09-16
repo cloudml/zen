@@ -20,31 +20,37 @@ package com.github.cloudml.zen.ml.clustering
 import java.io.File
 import java.util.Random
 
-import breeze.linalg.functions.euclideanDistance
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
-import breeze.stats.distributions.Poisson
+import LDADefines._
 import com.github.cloudml.zen.ml.util.SharedSparkContext
+
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
+import breeze.linalg.functions.euclideanDistance
+import breeze.stats.distributions.Poisson
 import com.google.common.io.Files
 import org.apache.spark.storage.StorageLevel
 import org.scalatest.FunSuite
 
-class LDASuite extends FunSuite with SharedSparkContext {
 
+class LDASuite extends FunSuite with SharedSparkContext {
   import LDASuite._
 
   test("FastLDA || Gibbs sampling") {
     val model = generateRandomLDAModel(numTopics, numTerms)
     val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
+    sc.getConf.set(cs_numThreads, "4")
 
     val data = sc.parallelize(corpus, 2)
     data.cache()
+    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, storageLevel)
     val pps = new Array[Double](incrementalLearning)
-    val lda = LDA(data, numTopics, alpha, beta, alphaAS, new FastLDA, storageLevel)
+    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new FastLDA, storageLevel)
+    val pplx = new LDAPerplexity(lda)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
       lda.runGibbsSampling(totalIterations)
-      pps(i) = lda.perplexity()
+      pplx.measure()
+      pps(i) = pplx.getPerplexity
       i += 1
     }
 
@@ -61,7 +67,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val path = tempDir.toURI.toString + File.separator + "lda"
     ldaModel.save(sc, path, isTransposed = true)
     val sameModel = LDAModel.load(sc, path)
-    assert(sameModel.toLocalLDAModel.termTopicCounters === ldaModel.toLocalLDAModel.termTopicCounters)
+    assert(sameModel.toLocalLDAModel.termTopicsArr === ldaModel.toLocalLDAModel.termTopicsArr)
     assert(sameModel.alpha === ldaModel.alpha)
     assert(sameModel.beta === ldaModel.beta)
     assert(sameModel.alphaAS === ldaModel.alphaAS)
@@ -73,11 +79,10 @@ class LDASuite extends FunSuite with SharedSparkContext {
     localLdaModel.save(path2)
     val loadLdaModel = LDAModel.loadLocalLDAModel(path2)
 
-    assert(localLdaModel.termTopicCounters === loadLdaModel.termTopicCounters)
+    assert(localLdaModel.termTopicsArr === loadLdaModel.termTopicsArr)
     assert(localLdaModel.alpha === loadLdaModel.alpha)
     assert(localLdaModel.beta === loadLdaModel.beta)
     assert(localLdaModel.alphaAS === loadLdaModel.alphaAS)
-
   }
 
   test("LightLDA || Metropolis Hasting sampling") {
@@ -86,13 +91,16 @@ class LDASuite extends FunSuite with SharedSparkContext {
 
     val data = sc.parallelize(corpus, 2)
     data.cache()
+    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, storageLevel)
     val pps = new Array[Double](incrementalLearning)
-    val lda = LDA(data, numTopics, alpha, beta, alphaAS, new LightLDA, storageLevel)
+    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new LightLDA, storageLevel)
+    val pplx = new LDAPerplexity(lda)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
       lda.runGibbsSampling(totalIterations)
-      pps(i) = lda.perplexity()
+      pplx.measure()
+      pps(i) = pplx.getPerplexity
       i += 1
     }
 
@@ -176,7 +184,7 @@ object LDASuite {
     model: Array[BDV[Double]],
     numDocs: Int,
     numTerms: Int,
-    numTopics: Int): Array[(Long, BSV[Int])] = {
+    numTopics: Int): Array[BOW] = {
     (0 until numDocs).map { i =>
       val rand = new Random()
       val numTermsPerDoc = Poisson.distribution(expectedDocLength).sample()

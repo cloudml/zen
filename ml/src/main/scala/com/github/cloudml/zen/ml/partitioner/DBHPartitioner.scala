@@ -15,15 +15,16 @@
  * limitations under the License.
  */
 
-package com.github.cloudml.zen.ml
-
-import org.apache.spark.Partitioner
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.impl.GraphImpl
-import org.apache.spark.storage.StorageLevel
+package com.github.cloudml.zen.ml.partitioner
 
 import scala.math._
 import scala.reflect.ClassTag
+
+import com.github.cloudml.zen.ml.clustering.LDADefines._
+import org.apache.spark.Partitioner
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.impl.GraphImpl
+import org.apache.spark.storage.StorageLevel
 
 /**
  * Degree-Based Hashing, the paper:
@@ -73,13 +74,13 @@ object DBHPartitioner {
     input: Graph[VD, ED],
     storageLevel: StorageLevel): Graph[VD, ED] = {
     val edges = input.edges
-    val vertices = input.vertices
-    val numPartitions = edges.partitions.length
+    val conf = edges.context.getConf
+    val numPartitions = conf.getInt(cs_numPartitions, edges.partitions.length)
     val dbh = new DBHPartitioner(numPartitions, 0)
     val degGraph = GraphImpl(input.degrees, edges)
-    val newEdges = degGraph.triplets.mapPartitions { iter =>
-      iter.map(e => (dbh.getKey(e), Edge(e.srcId, e.dstId, e.attr)))
-    }.partitionBy(dbh).map(_._2)
-    GraphImpl(vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
+    val newEdges = degGraph.triplets.mapPartitions(_.map(et =>
+      (dbh.getKey(et), Edge(et.srcId, et.dstId, et.attr))
+    )).partitionBy(dbh).map(_._2)
+    GraphImpl(input.vertices, newEdges, null.asInstanceOf[VD], storageLevel, storageLevel)
   }
 }

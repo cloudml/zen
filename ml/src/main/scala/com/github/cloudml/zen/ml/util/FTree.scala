@@ -19,7 +19,7 @@ package com.github.cloudml.zen.ml.util
 
 import java.util.Random
 import scala.reflect.ClassTag
-import com.github.cloudml.zen.ml.util.FTree._
+import FTree._
 import breeze.linalg.{Vector=>BV, SparseVector=>BSV, DenseVector=>BDV}
 
 
@@ -30,7 +30,7 @@ private[zen] class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](
 
   private var _regLen: Int = regularLen(dataSize)
   private var _tree: Array[T] = new Array[T](_regLen << 1)
-  private var _space: Array[Int] = if (isSparse) null else new Array[Int](_regLen)
+  private var _space: Array[Int] = if (!isSparse) null else new Array[Int](_regLen)
   private var _used: Int = dataSize
 
   def length: Int = _tree.length
@@ -54,7 +54,7 @@ private[zen] class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](
    */
   private def toState(pos: Int): Int = {
     val i = pos - leafOffset
-    if (isSparse) {
+    if (!isSparse) {
       i
     } else {
       _space(i)
@@ -65,7 +65,7 @@ private[zen] class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](
    * map distribution state to pos in FTree
    */
   private def toTreePos(state: Int): Int = {
-    val i = if (isSparse) {
+    val i = if (!isSparse) {
       state
     } else {
       binarySearch(_space, state, 0, _used)
@@ -74,39 +74,63 @@ private[zen] class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](
   }
 
   def sampleRandom(gen: Random): Int = {
-    var u = gen.nextDouble() * num.toDouble(_tree(1))
-    var cur = 1
-    while (cur < leafOffset) {
-      val lc = cur << 1
-      val lcp = num.toDouble(_tree(lc))
-      if (u < lcp) {
-        cur = lc
-      } else {
-        u -= lcp
-        cur = lc + 1
+    if (_used == 1) {
+      toState(1)
+    } else {
+      var u = gen.nextDouble() * num.toDouble(_tree(1))
+      var cur = 1
+      while (cur < leafOffset) {
+        val lc = cur << 1
+        val lcp = num.toDouble(_tree(lc))
+        if (u < lcp) {
+          cur = lc
+        } else {
+          u -= lcp
+          cur = lc + 1
+        }
       }
+      toState(cur)
     }
-    toState(cur)
   }
 
   def sampleFrom(base: T, gen: Random): Int = {
     assert(num.lt(base, _tree(1)))
-    var u = base
-    var cur = 1
-    while (cur < leafOffset) {
-      val lc = cur << 1
-      val lcp = _tree(lc)
-      if (num.lt(u, lcp)) {
-        cur = lc
-      } else {
-        u = num.minus(u, lcp)
-        cur = lc + 1
+    if (_used == 1) {
+      toState(1)
+    } else {
+      var u = base
+      var cur = 1
+      while (cur < leafOffset) {
+        val lc = cur << 1
+        val lcp = _tree(lc)
+        if (num.lt(u, lcp)) {
+          cur = lc
+        } else {
+          u = num.minus(u, lcp)
+          cur = lc + 1
+        }
       }
+      toState(cur)
     }
-    toState(cur)
   }
 
-  def update(state: Int, delta: T): Unit = {
+  def update(state: Int, value: T): Unit = synchronized {
+    assert(num.lteq(value, num.zero))
+    var pos = toTreePos(state)
+    if (pos < leafOffset) {
+      pos = addState()
+    }
+    if (num.lteq(value, num.zero)) {
+      delState(pos)
+    } else {
+      val p = _tree(pos)
+      val delta = num.minus(value, p)
+      _tree(pos) = value
+      updateAncestors(pos, delta)
+    }
+  }
+
+  def deltaUpdate(state: Int, delta: T): Unit = synchronized {
     var pos = toTreePos(state)
     if (pos < leafOffset) {
       pos = addState()
@@ -153,21 +177,17 @@ private[zen] class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](
     updateAncestors(pos, num.negate(p))
   }
 
-  def resetDist(dist: BV[T], sum: T): this.type = {
-    val used = dist.activeSize
+  def resetDist(distIter: Iterator[(Int, T)], used: Int): this.type = synchronized {
     reset(used)
-    dist match {
-      case v: BDV[T] =>
-        assert(!isSparse)
-        for ((i, prob) <- v.activeIterator) {
-          setLeaf(i, prob)
-        }
-      case v: BSV[T] =>
-        assert(isSparse)
-        for (((state, prob), i) <- v.activeIterator.zipWithIndex) {
-          setLeaf(i, prob)
-          _space(i) = state
-        }
+    if (!isSparse) {
+      for ((i, prob) <- distIter) {
+        setLeaf(i, prob)
+      }
+    } else {
+      for (((state, prob), i) <- distIter.zipWithIndex) {
+        setLeaf(i, prob)
+        _space(i) = state
+      }
     }
     buildFTree()
     this
@@ -175,7 +195,7 @@ private[zen] class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](
 
   private def buildFTree(): this.type = {
     for (i <- leafOffset - 1 to 1 by -1) {
-      _tree(i) = num.plus(_tree(i << 1), _tree(i << 1 + 1))
+      _tree(i) = num.plus(_tree(i << 1), _tree((i << 1) + 1))
     }
     this
   }
@@ -184,7 +204,7 @@ private[zen] class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](
     val regLen = regularLen(newDataSize)
     if (regLen > (_tree.length >> 1)) {
       _tree = new Array[T](regLen << 1)
-      _space = if (isSparse) null else new Array[Int](regLen)
+      _space = if (!isSparse) null else new Array[Int](regLen)
     }
     _regLen = regLen
     _used = newDataSize
@@ -203,7 +223,7 @@ private[zen] object FTree {
       case v: BDV[T] => new FTree[T](used, isSparse=false)
       case v: BSV[T] => new FTree[T](used, isSparse=true)
     }
-    ftree.resetDist(sv, sv(0))
+    ftree.resetDist(sv.activeIterator, used)
   }
 
   private def regularLen(len: Int): Int = {

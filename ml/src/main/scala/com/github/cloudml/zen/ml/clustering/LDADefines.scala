@@ -18,22 +18,36 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
-import breeze.linalg.{SparseVector => BSV, DenseVector => BDV}
-import com.github.cloudml.zen.ml.{VSDLPPartitioner, DBHPartitioner}
-import com.github.cloudml.zen.ml.util.{FTree, AliasTable, XORShiftRandom}
+import java.util.concurrent.Executors
+import org.apache.spark.mllib.linalg.DenseVector
+
+import scala.concurrent._
+import scala.concurrent.duration.Duration
+import scala.reflect.ClassTag
+
+import com.github.cloudml.zen.ml.util._
+
+import breeze.collection.mutable.SparseArray
+import breeze.linalg.{Vector => BV, SparseVector => BSV, DenseVector => BDV}
+import breeze.storage.Zero
 import org.apache.spark.SparkConf
-import org.apache.spark.graphx._
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.impl._
+import org.apache.spark.graphx2.util.collection.GraphXPrimitiveVector
+
 
 object LDADefines {
   type DocId = VertexId
   type WordId = VertexId
   type Count = Int
-  type ED = Array[Int]
-  type VD = BSV[Count]
+  type TC = BV[Count]
+  type TA = Array[Int]
   type BOW = (Long, BSV[Count])
 
   val sv_formatVersionV1_0 = "1.0"
   val sv_classNameV1_0 = "com.github.cloudml.zen.ml.clustering.DistributedLDAModel"
+  val cs_numTopics = "zen.lda.numTopics"
+  val cs_numPartitions = "zen.lda.numPartitions"
   val cs_sampleRate = "zen.lda.sampleRate"
   val cs_LDAAlgorithm = "zen.lda.LDAAlgorithm"
   val cs_accelMethod = "zen.lda.accelMethod"
@@ -46,74 +60,95 @@ object LDADefines {
   val cs_inputPath = "zen.lda.inputPath"
   val cs_outputpath = "zen.lda.outputPath"
   val cs_saveAsSolid = "zen.lda.saveAsSolid"
+  val cs_numThreads = "zen.lda.numThreads"
+
+  // make docId always be negative, so that the doc vertex always be the dest vertex
+  @inline def genNewDocId(docId: Long): VertexId = {
+    assert(docId >= 0)
+    -(docId + 1L)
+  }
+
+  @inline def isDocId(vid: VertexId): Boolean = vid < 0L
+
+  @inline def isTermId(vid: VertexId): Boolean = vid >= 0L
 
   def uniformDistSampler(gen: Random,
     tokens: Array[Int],
     topics: Array[Int],
     numTopics: Int): BSV[Count] = {
-    val docTopicCounter = BSV.zeros[Count](numTopics)
+    val docTopics = BSV.zeros[Count](numTopics)
     for (i <- tokens.indices) {
       val topic = gen.nextInt(numTopics)
       topics(i) = topic
-      docTopicCounter(topic) += 1
+      docTopics(topic) += 1
     }
-    docTopicCounter
-  }
-
-  def binarySearchInterval[T](index: Array[T],
-    key: T,
-    begin: Int,
-    end: Int,
-    greater: Boolean)(implicit num: Numeric[T]): Int = {
-    if (begin == end) {
-      return if (greater) end else begin - 1
-    }
-    var b = begin
-    var e = end - 1
-
-    var mid: Int = (e + b) >> 1
-    while (b <= e) {
-      mid = (e + b) >> 1
-      val v = index(mid)
-      if (num.lt(v, key)) {
-        b = mid + 1
-      }
-      else if (num.gt(v, key)) {
-        e = mid - 1
-      }
-      else {
-        return mid
-      }
-    }
-    val v = index(mid)
-    mid = if ((greater && num.gteq(v, key)) || (!greater && num.lteq(v, key))) {
-      mid
-    }
-    else if (greater) {
-      mid + 1
-    }
-    else {
-      mid - 1
-    }
-
-    if (greater) {
-      if (mid < end) assert(num.gteq(index(mid), key))
-      if (mid > 0) assert(num.lteq(index(mid - 1), key))
-    } else {
-      if (mid > 0) assert(num.lteq(index(mid), key))
-      if (mid < end - 1) assert(num.gteq(index(mid + 1), key))
-    }
-    mid
+    docTopics
   }
 
   def registerKryoClasses(conf: SparkConf): Unit = {
-    conf.registerKryoClasses(Array(classOf[VD], classOf[ED],
-      classOf[BSV[Double]], classOf[BDV[Count]], classOf[BDV[Double]],
-      classOf[BOW], classOf[Random], classOf[XORShiftRandom],
-      classOf[LDA], classOf[LocalLDAModel], classOf[DistributedLDAModel],
-      classOf[LDAAlgorithm], classOf[FastLDA], classOf[LightLDA],
-      classOf[DBHPartitioner], classOf[VSDLPPartitioner],
-      classOf[AliasTable[Double]], classOf[AliasTable[Int]], classOf[FTree[Double]]
+    conf.registerKryoClasses(Array(
+      classOf[TC], classOf[TA],
+      classOf[BOW],
+      classOf[(TC, Double, Int)],  // for perplexity
+      classOf[AliasTable[Object]], classOf[FTree[Object]],  // for some partitioners
+      classOf[BSV[Object]], classOf[BDV[Object]],
+      classOf[SparseArray[Object]]  // member of BSV
     ))
+  }
+
+  def toBDV[@specialized(Int, Double, Float) V: ClassTag: Zero](bsv: BSV[V]): BDV[V] = {
+    val bdv = BDV.zeros[V](bsv.length)
+    for ((i, v) <- bsv.activeIterator) {
+      bdv(i) = v
+    }
+    bdv
+  }
+
+  def refreshEdgeAssociations[VD: ClassTag, ED: ClassTag](graph: Graph[VD, ED]): GraphImpl[VD, ED] = {
+    val gimpl = graph.asInstanceOf[GraphImpl[VD, ED]]
+    val vertices = gimpl.vertices
+    val edges = gimpl.edges.asInstanceOf[EdgeRDDImpl[ED, _]]
+    val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
+    val shippedVerts = vertices.partitionsRDD.mapPartitions(_.flatMap(svp => {
+      val rt = svp.routingTable
+      implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+      Range(0, rt.numEdgePartitions).grouped(numThreads).flatMap(batch => {
+        val all = Future.traverse(batch)(pid => Future {
+          val totalSize = rt.partitionSize(pid)
+          val vids = new GraphXPrimitiveVector[VertexId](totalSize)
+          val attrs = new GraphXPrimitiveVector[VD](totalSize)
+          rt.foreachWithinEdgePartition(pid, includeSrc = true, includeDst = true)(vid => {
+            if (svp.isDefined(vid)) {
+              vids += vid
+              attrs += svp(vid)
+            }
+          })
+          (pid, new VertexAttributeBlock(vids.trim().array, attrs.trim().array))
+        })
+        Await.result(all, Duration.Inf)
+      }) ++ {
+        ec.shutdown()
+        Iterator.empty
+      }
+    })).partitionBy(edges.partitioner.get)
+
+    val partRDD = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
+      (epIter, vabsIter) => epIter.map {
+        case (pid, ep) =>
+          val g2l = ep.global2local
+          val results = new Array[VD](ep.vertexAttrs.length)
+          implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+          val all = Future.traverse(vabsIter)(t => Future {
+            val vab = t._2
+            for ((vid, vdata) <- vab.iterator) {
+              results(g2l(vid)) = vdata
+            }
+          })
+          Await.ready(all, Duration.Inf)
+          ec.shutdown()
+          (pid, ep.withVertexAttributes(results))
+      }
+    )
+    GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
   }
 }

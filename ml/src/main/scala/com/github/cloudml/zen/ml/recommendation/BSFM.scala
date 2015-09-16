@@ -17,14 +17,14 @@
 
 package com.github.cloudml.zen.ml.recommendation
 
-import com.github.cloudml.zen.ml.DBHPartitioner
+import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.recommendation.BSFM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import com.github.cloudml.zen.ml.util.Utils
 import org.apache.commons.math3.primes.Primes
 import org.apache.spark.{SparkContext, Logging}
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.impl.{EdgeRDDImpl, GraphImpl}
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.impl.{EdgeRDDImpl, GraphImpl}
 import org.apache.spark.mllib.linalg.{Vector => SV}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
@@ -113,10 +113,10 @@ private[ml] abstract class BSFM extends Serializable with Logging {
       primes = Primes.nextPrime(primes + 1)
       val startedAt = System.nanoTime()
       val previousVertices = vertices
-      val margin = forward(iter)
-      var gradient = backward(margin, iter)
-      gradient = updateGradientSum(gradient, iter)
-      vertices = updateWeight(gradient, iter)
+      val margin = forward(innerIter)
+      var gradient = backward(margin, innerIter)
+      gradient = updateGradientSum(gradient, innerIter)
+      vertices = updateWeight(gradient, innerIter)
       checkpointVertices()
       vertices.count()
       dataSet = GraphImpl.fromExistingRDDs(vertices, edges)
