@@ -459,18 +459,22 @@ object LDA {
             } else {
               while (marks.getAndSet(i, -1) <= 0) {}
               val agg = results(i)
-              results(i) = agg match {
-                case u: BDV[Count] => u :+= counter
-                case u: BSV[Count] => counter match {
-                  case v: BDV[Count] => v :+= u
-                  case v: BSV[Count] =>
-                    u :+= v
-                    if (u.activeSize > (numTopics >> 2)) {
-                      toBDV(u)
-                    } else {
-                      u
-                    }
+              results(i) = if (isTermId(vid)) {
+                agg match {
+                  case u: BDV[Count] => u :+= counter
+                  case u: BSV[Count] => counter match {
+                    case v: BDV[Count] => v :+= u
+                    case v: BSV[Count] =>
+                      u :+= v
+                      if (u.activeSize > (numTopics >> 2)) {
+                        toBDV(u)
+                      } else {
+                        u
+                      }
+                  }
                 }
+              } else {
+                agg :+= counter
               }
             }
             marks.set(i, Int.MaxValue)

@@ -125,10 +125,10 @@ class FastLDA extends LDAAlgorithm {
         val cdfDist = new CumulativeDist[Double](numTopics)
         while (pos < totalSize && lcSrcIds(pos) == si) {
           val docTopics = vattrs(lcDstIds(pos))
+          dSparse(cdfDist, topicCounters, termTopics, docTopics, beta, betaSum)
           val topics = data(pos)
           for (i <- topics.indices) {
             val topic = topics(i)
-            dSparse(cdfDist, topicCounters, termTopics, docTopics, beta, betaSum)
             global.update(topic, itemRatio(topic) * beta)
             wordDist.update(topic, itemRatio(topic) * termTopics(topic))
             val newTopic = tokenSampling(gen, global, wordDist, cdfDist, termTopics, topic)
@@ -189,10 +189,10 @@ class FastLDA extends LDAAlgorithm {
    */
   private[ml] def wSparse(w: DiscreteSampler[Double],
     itemRatio: Int => Double,
-    termTopicCounter: TC): DiscreteSampler[Double] = {
-    val arr = new Array[(Int, Double)](termTopicCounter.activeSize)
+    termTopics: TC): DiscreteSampler[Double] = {
+    val arr = new Array[(Int, Double)](termTopics.activeSize)
     var i = 0
-    for ((topic, cnt) <- termTopicCounter.activeIterator) {
+    for ((topic, cnt) <- termTopics.activeIterator) {
       if (cnt > 0) {
         arr(i) = (topic, cnt * itemRatio(topic))
         i += 1
@@ -208,19 +208,19 @@ class FastLDA extends LDAAlgorithm {
    * =  \frac{{n}_{kd} ^{-di}({n}_{kw}^{-di}+{\beta}_{w})}{({n}_{k}^{-di}+\bar{\beta}) }
    */
   private[ml] def dSparse(d: CumulativeDist[Double],
-    totalTopicCounter: BDV[Count],
-    termTopicCounter: BDV[Count],
-    docTopicCounter: TC,
+    topicCounters: BDV[Count],
+    termTopics: BDV[Count],
+    docTopics: TC,
     beta: Double,
     betaSum: Double): CumulativeDist[Double] = {
-    val dtc = docTopicCounter.asInstanceOf[BSV[Count]]
+    val dtc = docTopics.asInstanceOf[BSV[Count]]
     val used = dtc.used
     val index = dtc.index
     val data = dtc.data
     d.directReset(i => {
       val topic = index(i)
       val cnt = data(i)
-      cnt * (termTopicCounter(topic) + beta) / (totalTopicCounter(topic) + betaSum)
+      cnt * (termTopics(topic) + beta) / (topicCounters(topic) + betaSum)
     }, used, index)
   }
 }
