@@ -26,9 +26,10 @@ import scala.concurrent.duration.Duration
 import LDA._
 import LDADefines._
 import com.github.cloudml.zen.ml.partitioner._
-import com.github.cloudml.zen.ml.util.XORShiftRandom
+import com.github.cloudml.zen.ml.util.{SparkUtils, XORShiftRandom}
 
 import breeze.linalg.{Vector => BV, DenseVector => BDV, SparseVector => BSV}
+import org.apache.hadoop.fs.Path
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.GraphImpl
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
@@ -92,7 +93,6 @@ class LDA(@transient var corpus: Graph[TC, TA],
   }
 
   def runGibbsSampling(totalIter: Int): Unit = {
-    val sc = corpus.edges.context
     val pplx = scConf.getBoolean(cs_calcPerplexity, false)
     val saveIntv = scConf.getInt(cs_saveInterval, 0)
     if (pplx) {
@@ -107,9 +107,12 @@ class LDA(@transient var corpus: Graph[TC, TA],
         LDAPerplexity.output(this, println)
       }
       if (saveIntv > 0 && iter % saveIntv == 0) {
+        val sc = corpus.edges.context
         val model = toLDAModel()
-        val outputPath = scConf.get(cs_outputpath)
-        model.save(sc, s"$outputPath-iter$iter", isTransposed=true)
+        val savPath = new Path(scConf.get(cs_outputpath) + s"-iter$iter")
+        val fs = SparkUtils.getFileSystem(scConf, savPath)
+        fs.delete(savPath, true)
+        model.save(sc, savPath.toString, isTransposed=true)
         println(s"Model saved after Iteration $iter")
       }
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
@@ -333,39 +336,44 @@ object LDA {
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     partCorpus.persist(storageLevel)
-    val reCorpus = if (conf.get(cs_initStrategy, "random") == "sparse") {
-      val gen = new XORShiftRandom()
-      val mint = math.min(1000, numTopics / 100)
-      val degGraph = GraphImpl(partCorpus.degrees, partCorpus.edges)
-      val reSampledGraph = degGraph.mapVertices((_, deg) => {
-        if (deg <= mint) {
-          null.asInstanceOf[Array[Int]]
-        } else {
-          val wc = new Array[Int](mint)
-          for (i <- wc.indices) {
-            wc(i) = gen.nextInt(numTopics)
-          }
-          wc
-        }
-      }).mapTriplets(triplet => {
-        val wc = triplet.srcAttr
-        val topics = triplet.attr
-        if (wc == null) {
-          topics
-        } else {
-          val tlen = wc.length
-          topics.map(_ => wc(gen.nextInt(tlen)))
-        }
-      })
-      GraphImpl(partCorpus.vertices, reSampledGraph.edges)
-    } else {
-      partCorpus
-    }
+    val reCorpus = resampleCorpus(partCorpus, numTopics)
     val edges = reCorpus.edges
     val numEdges = edges.persist(storageLevel).count()
     println(s"edges in the corpus: $numEdges")
     initCorpus.unpersist(blocking=false)
     edges
+  }
+
+  def resampleCorpus(corpus: Graph[TC, TA], numTopics: Int): Graph[TC, TA] = {
+    val conf = corpus.edges.context.getConf
+    conf.get(cs_initStrategy, "random") match {
+      case "sparse" =>
+        val gen = new XORShiftRandom()
+        val tMin = math.min(1000, numTopics / 100)
+        val degGraph = GraphImpl(corpus.degrees, corpus.edges)
+        val reSampledGraph = degGraph.mapVertices((_, deg) => {
+          if (deg > tMin) {
+            Array.fill(tMin)(gen.nextInt(numTopics))
+          } else {
+            null
+          }
+        }).mapTriplets((pid, iter) => {
+          val gen = new XORShiftRandom(pid + 223)
+          iter.map(triplet => {
+            val wc = triplet.srcAttr
+            val topics = triplet.attr
+            if (wc == null) {
+              topics
+            } else {
+              val tSize = wc.length
+              topics.map(_ => wc(gen.nextInt(tSize)))
+            }
+          })
+        }, TripletFields.Src)
+        GraphImpl(corpus.vertices, reSampledGraph.edges)
+      case _ =>
+        corpus
+    }
   }
 
   def convertRawDocs(rawDocs: RDD[String], numTopics: Int): RDD[Edge[TA]] = {

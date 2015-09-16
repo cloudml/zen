@@ -24,7 +24,7 @@ import scala.concurrent.duration.Duration
 
 import LDADefines._
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import org.apache.spark.graphx2.impl.GraphImpl
 
 
@@ -84,7 +84,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
               cnt * alphaRatio * (topicCounters(topic) + alphaAS) / (topicCounters(topic) + betaSum)
             }
         }.sum
-        val cSum = if (isDocId(vid)) sum(counter) else 0
+        val cSum = if (isDocId(vid)) counter.activeValuesIterator.sum else 0
         results(i) = (counter, pSum, cSum)
       })
       Await.ready(all, Duration.Inf)
@@ -124,7 +124,13 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
           val topics = data(pos)
           // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
           val dwSparseSum = docTopics.activeIterator.map {
-            case (topic, cnt) => cnt * termTopics(topic) / (topicCounters(topic) + betaSum)
+            case (topic, cnt) =>
+              val ntw = termTopics(topic)
+              if (ntw > 0 ) {
+                cnt * ntw / (topicCounters(topic) + betaSum)
+              } else {
+                0D
+              }
           }.sum
           val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alphaSum)
           lcSum += Math.log(prob) * topics.length

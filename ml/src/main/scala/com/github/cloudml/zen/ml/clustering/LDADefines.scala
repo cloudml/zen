@@ -19,8 +19,6 @@ package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
 import java.util.concurrent.Executors
-import org.apache.spark.mllib.linalg.DenseVector
-
 import scala.concurrent._
 import scala.concurrent.duration.Duration
 import scala.reflect.ClassTag

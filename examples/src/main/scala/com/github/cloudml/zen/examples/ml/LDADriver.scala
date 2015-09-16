@@ -20,8 +20,9 @@ package com.github.cloudml.zen.examples.ml
 import com.github.cloudml.zen.ml.clustering.LDA
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.util.SparkHacker
+import com.github.cloudml.zen.ml.util.SparkUtils
+
 import org.apache.hadoop.fs.Path
-import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.graphx2._
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{SparkContext, SparkConf}
@@ -86,17 +87,8 @@ object LDADriver {
       conf.set("spark.executor.cores", s"$paraParts")
     }
 
-    val hadoopConf = SparkHadoopUtil.get.newConfiguration(conf)
-    if (sys.env.contains("HADOOP_CONF_DIR") || sys.env.contains("YARN_CONF_DIR")) {
-      val hdfsConfPath = if (sys.env.get("HADOOP_CONF_DIR").isDefined) {
-        sys.env.get("HADOOP_CONF_DIR").get + "/core-site.xml"
-      } else {
-        sys.env.get("YARN_CONF_DIR").get + "/core-site.xml"
-      }
-      hadoopConf.addResource(new Path(hdfsConfPath))
-    }
     val outPath = new Path(outputPath)
-    val fs = outPath.getFileSystem(hadoopConf)
+    val fs = SparkUtils.getFileSystem(conf, outPath)
     if (fs.exists(outPath)) {
       println(s"Error: output path $outputPath already exists.")
       System.exit(2)
