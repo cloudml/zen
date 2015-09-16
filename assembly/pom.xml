@@ -67,6 +67,8 @@
               <exclude>com.esotericsoftware.*:*</exclude>
               <exclude>com.codahale.*:*</exclude>
               <exclude>javax.*:*</exclude>
+              <exclude>com.sun.xml.*:*</exclude>
+              <exclude>org.codehaus.janino:*</exclude>
               <exclude>org.objectweb.*:*</exclude>
               <exclude>org.apache.zookeeper:*</exclude>
               <exclude>com.google.guava:*</exclude>
@@ -76,6 +78,7 @@
               <exclude>com.google.protobuf:*</exclude>
               <exclude>org.apache.ant:*</exclude>
               <exclude>org.apache.avro:*</exclude>
+              <exclude>org.apache.parquet:*</exclude>
               <exclude>org.apache.ivy:*</exclude>
               <exclude>org.mortbay.jetty:*</exclude>
               <exclude>io.dropwizard.metrics:*</exclude>
