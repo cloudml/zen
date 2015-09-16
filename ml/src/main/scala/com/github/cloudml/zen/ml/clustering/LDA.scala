@@ -29,7 +29,6 @@ import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
 
 import breeze.linalg.{Vector => BV, DenseVector => BDV, SparseVector => BSV}
-import org.apache.log4j.Logger
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.GraphImpl
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
@@ -334,10 +333,36 @@ object LDA {
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     partCorpus.persist(storageLevel)
-    val corpus = updateCounter(partCorpus, numTopics)
-    corpus.persist(storageLevel)
-    corpus.vertices.setName("vertices-0").count()
-    val numEdges = corpus.edges.setName("edges-0").count()
+    val reCorpus = if (conf.get(cs_initStrategy, "random") == "sparse") {
+      val gen = new XORShiftRandom()
+      val mint = math.min(1000, numTopics / 100)
+      val degGraph = GraphImpl(partCorpus.degrees, partCorpus.edges)
+      val reSampledGraph = degGraph.mapVertices((_, deg) => {
+        if (deg <= mint) {
+          null.asInstanceOf[Array[Int]]
+        } else {
+          val wc = new Array[Int](mint)
+          for (i <- wc.indices) {
+            wc(i) = gen.nextInt(numTopics)
+          }
+          wc
+        }
+      }).mapTriplets(triplet => {
+        val wc = triplet.srcAttr
+        val topics = triplet.attr
+        if (wc == null) {
+          topics
+        } else {
+          val tlen = wc.length
+          topics.map(_ => wc(gen.nextInt(tlen)))
+        }
+      })
+      GraphImpl(partCorpus.vertices, reSampledGraph.edges)
+    } else {
+      partCorpus
+    }
+    val edges = reCorpus.edges
+    val numEdges = edges.persist(storageLevel).count()
     println(s"edges in the corpus: $numEdges")
     initCorpus.unpersist(blocking=false)
     edges
