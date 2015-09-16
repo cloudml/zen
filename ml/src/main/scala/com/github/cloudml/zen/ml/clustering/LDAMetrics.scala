@@ -76,7 +76,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
       val all = Future.traverse(svp.mask.iterator)(i => Future {
         val vid = index.getValue(i)
         val counter = values(i)
-        val pSum = counter.activeIterator.map {
+        val pSum = counter.activeIterator.filter(_._2 > 0).map {
           case (topic, cnt) =>
             if (isDocId(vid)) {
               cnt * beta / (topicCounters(topic) + betaSum)
