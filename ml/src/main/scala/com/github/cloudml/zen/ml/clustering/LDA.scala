@@ -351,8 +351,8 @@ object LDA {
         val gen = new XORShiftRandom()
         val tMin = math.min(1000, numTopics / 100)
         val degGraph = GraphImpl(corpus.degrees, corpus.edges)
-        val reSampledGraph = degGraph.mapVertices((_, deg) => {
-          if (deg > tMin) {
+        val reSampledGraph = degGraph.mapVertices((vid, deg) => {
+          if (isTermId(vid) && deg > tMin) {
             Array.fill(tMin)(gen.nextInt(numTopics))
           } else {
             null
