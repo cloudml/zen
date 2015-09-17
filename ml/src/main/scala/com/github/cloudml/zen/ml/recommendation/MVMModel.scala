@@ -106,7 +106,7 @@ object MVMModel extends Loader[MVMModel] {
       val k = (metadata \ "k").extract[Int]
       val dataPath = LoaderUtils.dataPath(path)
       val sqlContext = new SQLContext(sc)
-      val dataRDD = sqlContext.parquetFile(dataPath)
+      val dataRDD = sqlContext.read.parquet(dataPath)
       val dataArray = dataRDD.select("featureId", "factors").take(1)
       assert(dataArray.size == 1, s"Unable to load $loadedClassName data from: $dataPath")
       val data = dataArray(0)
@@ -144,7 +144,7 @@ object MVMModel extends Loader[MVMModel] {
       val sqlContext = new SQLContext(sc)
       import sqlContext.implicits._
       // Create Parquet data.
-      factors.toDF("featureId", "factors").saveAsParquetFile(LoaderUtils.dataPath(path))
+      factors.toDF("featureId", "factors").write.parquet(LoaderUtils.dataPath(path))
     }
   }
 
