@@ -125,12 +125,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
           // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
           val dwSparseSum = docTopics.activeIterator.map {
             case (topic, cnt) =>
-              val ntw = termTopics(topic)
-              if (ntw > 0 ) {
-                cnt * ntw / (topicCounters(topic) + betaSum)
-              } else {
-                0D
-              }
+              cnt * termTopics(topic) / (topicCounters(topic) + betaSum)
           }.sum
           val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alphaSum)
           lcSum += Math.log(prob) * topics.length
