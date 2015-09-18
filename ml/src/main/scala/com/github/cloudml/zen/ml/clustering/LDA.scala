@@ -28,7 +28,7 @@ import LDADefines._
 import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.{SparkUtils, XORShiftRandom}
 
-import breeze.linalg.{Vector => BV, DenseVector => BDV, SparseVector => BSV}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import org.apache.hadoop.fs.Path
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.GraphImpl

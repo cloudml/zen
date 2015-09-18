@@ -70,25 +70,24 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
 
     val partRDD = vertices.partitionsRDD.mapPartitions(_.map(svp => {
       val index = svp.index
-      val values= svp.values
-      val results = new Array[(TC, Double, Int)](svp.capacity)
-      implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-      val all = Future.traverse(svp.mask.iterator)(i => Future {
-        val vid = index.getValue(i)
-        val counter = values(i)
-        val pSum = counter.activeIterator.filter(_._2 > 0).map {
-          case (topic, cnt) =>
-            if (isDocId(vid)) {
-              cnt * beta / (topicCounters(topic) + betaSum)
-            } else {
-              cnt * alphaRatio * (topicCounters(topic) + alphaAS) / (topicCounters(topic) + betaSum)
-            }
-        }.sum
-        val cSum = if (isDocId(vid)) counter.activeValuesIterator.sum else 0
-        results(i) = (counter, pSum, cSum)
-      })
-      Await.ready(all, Duration.Inf)
-      ec.shutdown()
+      val results = svp.values.par.zipWithIndex.map {
+        case (counter, i) =>
+          if (counter == null) {
+            null
+          } else {
+            val vid = index.getValue(i)
+            val pSum = counter.activeIterator.filter(_._2 > 0).map {
+              case (topic, cnt) =>
+                if (isDocId(vid)) {
+                  cnt * beta / (topicCounters(topic) + betaSum)
+                } else {
+                  cnt * alphaRatio * (topicCounters(topic) + alphaAS) / (topicCounters(topic) + betaSum)
+                }
+            }.sum
+            val cSum = if (isDocId(vid)) counter.activeValuesIterator.sum else 0
+            (counter, pSum, cSum)
+          }
+      }.toArray
       svp.withValues(results)
     }), preservesPartitioning=true)
     val cachedGraph = GraphImpl.fromExistingRDDs(vertices.withPartitionsRDD(partRDD), edges)
