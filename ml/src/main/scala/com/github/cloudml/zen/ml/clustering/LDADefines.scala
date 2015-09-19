@@ -18,9 +18,11 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
-import java.util.concurrent.Executors
+import scala.collection.parallel.ForkJoinTaskSupport
+import scala.collection.parallel.mutable.ParArray
 import scala.concurrent._
 import scala.concurrent.duration.Duration
+import scala.concurrent.forkjoin.ForkJoinPool
 import scala.reflect.ClassTag
 
 import com.github.cloudml.zen.ml.util._
@@ -109,7 +111,7 @@ object LDADefines {
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
     val shippedVerts = vertices.partitionsRDD.mapPartitions(_.flatMap(svp => {
       val rt = svp.routingTable
-      implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+      implicit val es = ExecutionContext.fromExecutorService(new ForkJoinPool(numThreads))
       Range(0, rt.numEdgePartitions).grouped(numThreads).flatMap(batch => {
         val all = Future.traverse(batch)(pid => Future {
           val totalSize = rt.partitionSize(pid)
@@ -125,7 +127,7 @@ object LDADefines {
         })
         Await.result(all, Duration.Inf)
       }) ++ {
-        ec.shutdown()
+        es.shutdown()
         Iterator.empty
       }
     })).partitionBy(edges.partitioner.get)
@@ -135,15 +137,16 @@ object LDADefines {
         case (pid, ep) =>
           val g2l = ep.global2local
           val results = new Array[VD](ep.vertexAttrs.length)
-          implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-          val all = Future.traverse(vabsIter)(t => Future {
+          val es = new ForkJoinPool(numThreads)
+          val parVabs = vabsIter.to[ParArray]
+          parVabs.tasksupport = new ForkJoinTaskSupport(es)
+          parVabs.foreach(t => {
             val vab = t._2
             for ((vid, vdata) <- vab.iterator) {
               results(g2l(vid)) = vdata
             }
           })
-          Await.ready(all, Duration.Inf)
-          ec.shutdown()
+          es.shutdown()
           (pid, ep.withVertexAttributes(results))
       }
     )

@@ -99,6 +99,7 @@ object LDADriver {
     try {
       sc.setCheckpointDir(checkpointPath)
       println("start LDA on user profile")
+      println(s"appId: ${sc.applicationId}")
       println(s"numTopics = $numTopics, totalIteration = $totalIter")
       println(s"alpha = $alpha, beta = $beta, alphaAS = $alphaAS")
       println(s"inputDataPath = $inputPath")

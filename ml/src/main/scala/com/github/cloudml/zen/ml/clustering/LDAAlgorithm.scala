@@ -19,10 +19,10 @@ package com.github.cloudml.zen.ml.clustering
 
 import java.lang.ref.SoftReference
 import java.util.Random
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent._
 import scala.concurrent.duration.Duration
+import scala.concurrent.forkjoin.ForkJoinPool
 
 import LDADefines._
 import com.github.cloudml.zen.ml.util._
@@ -106,7 +106,7 @@ class FastLDA extends LDAAlgorithm {
       val data = ep.data
       val indicator = new AtomicInteger
 
-      implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+      implicit val es = ExecutionContext.fromExecutorService(new ForkJoinPool(numThreads))
       val all = Future.traverse(ep.index.iterator)(t => Future {
         val termId = indicator.getAndIncrement()
         val gen = new XORShiftRandom((seed * numPartitions + pid) * termSize + termId)
@@ -140,7 +140,7 @@ class FastLDA extends LDAAlgorithm {
         }
       })
       Await.ready(all, Duration.Inf)
-      ec.shutdown()
+      es.shutdown()
 
       ep.withoutVertexAttributes[TC]().withData(data)
     })

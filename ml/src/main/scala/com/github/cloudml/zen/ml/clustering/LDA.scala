@@ -18,12 +18,13 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicIntegerArray
+import scala.collection.parallel.ForkJoinTaskSupport
+import scala.collection.parallel.mutable.ParArray
 import scala.concurrent._
 import scala.concurrent.duration.Duration
+import scala.concurrent.forkjoin.ForkJoinPool
 
-import LDA._
 import LDADefines._
 import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util.{SparkUtils, XORShiftRandom}
@@ -49,8 +50,8 @@ class LDA(@transient var corpus: Graph[TC, TA],
   val algo: LDAAlgorithm,
   var storageLevel: StorageLevel) extends Serializable {
 
-  @transient var seed = new XORShiftRandom().nextInt()
-  @transient var topicCounters = collectTopicCounters()
+  @transient var topicCounters: BDV[Count] = null
+  @transient lazy val seed = new XORShiftRandom().nextInt()
 
   def setAlpha(alpha: Double): this.type = {
     this.alpha = alpha
@@ -72,11 +73,6 @@ class LDA(@transient var corpus: Graph[TC, TA],
     this
   }
 
-  def setSeed(newSeed: Int): this.type = {
-    this.seed = newSeed
-    this
-  }
-
   def getCorpus: Graph[TC, TA] = corpus
 
   def termVertices: VertexRDD[TC] = corpus.vertices.filter(t => isTermId(t._1))
@@ -85,11 +81,123 @@ class LDA(@transient var corpus: Graph[TC, TA],
 
   private def scConf = corpus.edges.context.getConf
 
-  private def collectTopicCounters(): BDV[Count] = {
+  def updateVertexCounters(newCorpus: Graph[TC, TA],
+    inferenceOnly: Boolean = false): Unit = {
+    val numThreads = scConf.getInt(cs_numThreads, 1)
+    val graph = newCorpus.asInstanceOf[GraphImpl[TC, TA]]
+    val vertices = graph.vertices
+    val edges = graph.edges
+    val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap(t => {
+      val ep = t._2
+      val totalSize = ep.size
+      val lcSrcIds = ep.localSrcIds
+      val lcDstIds = ep.localDstIds
+      val l2g = ep.local2global
+      val vattrs = ep.vertexAttrs
+      val data = ep.data
+      val vertSize = vattrs.length
+      val results = new Array[(VertexId, TC)](vertSize)
+      val marks = new AtomicIntegerArray(vertSize)
+
+      implicit val es = ExecutionContext.fromExecutorService(new ForkJoinPool(numThreads))
+      val all = Future.traverse(ep.index.iterator)(t => Future {
+        var pos = t._2
+        val si = lcSrcIds(pos)
+        var termTuple = results(si)
+        if (termTuple == null && !inferenceOnly) {
+          termTuple = (l2g(si), BSV.zeros[Count](numTopics))
+          results(si) = termTuple
+        }
+        var termTopics = if (!inferenceOnly) termTuple._2 else null
+        while (pos < totalSize && lcSrcIds(pos) == si) {
+          val di = lcDstIds(pos)
+          var docTuple = results(di)
+          if (docTuple == null) {
+            if (marks.getAndDecrement(di) == 0) {
+              docTuple = (l2g(di), BSV.zeros[Count](numTopics))
+              results(di) = docTuple
+              marks.set(di, Int.MaxValue)
+            } else {
+              while (marks.get(di) <= 0) {}
+              docTuple = results(di)
+            }
+          }
+          val docTopics = docTuple._2
+          val topics = data(pos)
+          for (topic <- topics) {
+            if (!inferenceOnly) {
+              termTopics match {
+                case v: BDV[Count] => v(topic) += 1
+                case v: BSV[Count] =>
+                  v(topic) += 1
+                  if (v.activeSize > (numTopics >> 2)) {
+                    termTuple = (l2g(si), toBDV(v))
+                    results(si) = termTuple
+                    termTopics = termTuple._2
+                  }
+              }
+            }
+            docTopics.synchronized {
+              docTopics(topic) += 1
+            }
+          }
+          pos += 1
+        }
+      })
+      Await.ready(all, Duration.Inf)
+      es.shutdown()
+
+      results.par.filter(_ != null)
+    })).partitionBy(vertices.partitioner.get)
+
+    val partRDD = vertices.partitionsRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
+      (svpIter, cntsIter) => svpIter.map(svp => {
+        val results = svp.values
+        val index = svp.index
+        val marks = new AtomicIntegerArray(results.length)
+        val es = new ForkJoinPool(numThreads)
+        val parCnts = cntsIter.to[ParArray]
+        parCnts.tasksupport = new ForkJoinTaskSupport(es)
+        parCnts.foreach {
+          case (vid, counter) =>
+            val i = index.getPos(vid)
+            if (marks.getAndDecrement(i) == 0) {
+              results(i) = counter
+            } else {
+              while (marks.getAndSet(i, -1) <= 0) {}
+              val agg = results(i)
+              results(i) = if (isTermId(vid)) {
+                agg match {
+                  case u: BDV[Count] => u :+= counter
+                  case u: BSV[Count] => counter match {
+                    case v: BDV[Count] => v :+= u
+                    case v: BSV[Count] =>
+                      u :+= v
+                      if (u.activeSize > (numTopics >> 2)) {
+                        toBDV(u)
+                      } else {
+                        u
+                      }
+                  }
+                }
+              } else {
+                agg :+= counter
+              }
+            }
+            marks.set(i, Int.MaxValue)
+        }
+        es.shutdown()
+        svp.withValues(results)
+      })
+    )
+    corpus = GraphImpl.fromExistingRDDs(vertices.withPartitionsRDD(partRDD), edges)
+  }
+
+  def collectTopicCounters(): Unit = {
     val gtc = termVertices.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
     val count = gtc.activeValuesIterator.map(_.toLong).sum
     assert(count == numTokens, s"numTokens=$numTokens, count=$count")
-    gtc
+    topicCounters = gtc
   }
 
   def runGibbsSampling(totalIter: Int): Unit = {
@@ -121,19 +229,20 @@ class LDA(@transient var corpus: Graph[TC, TA],
   }
 
   def gibbsSampling(sampIter: Int, inferenceOnly: Boolean = false): Unit = {
-    val sc = corpus.edges.context
     val chkptIntv = scConf.getInt(cs_chkptInterval, 0)
     val prevCorpus = corpus
     val sampledCorpus = algo.sampleGraph(corpus, topicCounters, sampIter + seed,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
-    corpus = updateVertexCounters(sampledCorpus, numTopics, inferenceOnly)
-    if (chkptIntv > 0 && sampIter % chkptIntv == 1 && sc.getCheckpointDir.isDefined) {
-      corpus.checkpoint()
+    updateVertexCounters(sampledCorpus, inferenceOnly)
+    if (chkptIntv > 0 && sampIter % chkptIntv == 1) {
+      if (corpus.edges.context.getCheckpointDir.isDefined) {
+        corpus.checkpoint()
+      }
     }
     corpus.persist(storageLevel)
     corpus.edges.setName(s"edges-$sampIter").count()
     corpus.vertices.setName(s"vertices-$sampIter")
-    topicCounters = collectTopicCounters()
+    collectTopicCounters()
     prevCorpus.unpersist(blocking=false)
   }
 
@@ -193,7 +302,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
       val mergingCorpus = corpus.mapEdges(_.attr.map(topic =>
         minMap.getOrElse(topic, topic))
       )
-      corpus = updateVertexCounters(mergingCorpus, numTopics)
+      updateVertexCounters(mergingCorpus)
     }
     minMap
   }
@@ -208,19 +317,23 @@ object LDA {
     algo: LDAAlgorithm,
     storageLevel: StorageLevel): LDA = {
     val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdgeRDD(docs, storageLevel)
-    val edges = initCorpus.edges
-    edges.persist(storageLevel).setName("edges-0")
+    initCorpus.persist(storageLevel)
+    val edges = initCorpus.edges.setName("edges-0")
+    val vertices = initCorpus.vertices
     val numTokens = edges.map(_.attr.length.toLong).reduce(_ + _)
     println(s"tokens in the corpus: $numTokens")
-    val corpus = updateVertexCounters(initCorpus, numTopics)
-    val vertices = corpus.vertices
-    vertices.persist(storageLevel).setName("vertices-0")
     val numTerms = vertices.map(_._1).filter(isTermId).count().toInt
     println(s"terms in the corpus: $numTerms")
     val numDocs = vertices.map(_._1).filter(isDocId).count()
     println(s"docs in the corpus: $numDocs")
     docs.unpersist(blocking=false)
-    new LDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, algo, storageLevel)
+    val lda = new LDA(initCorpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS,
+      algo, storageLevel)
+    lda.updateVertexCounters(initCorpus)
+    lda.getCorpus.vertices.persist(storageLevel).setName("vertices-0")
+    lda.collectTopicCounters()
+    vertices.unpersist(blocking=false)
+    lda
   }
 
   // initialize LDA for inference or incremental training
@@ -237,15 +350,20 @@ object LDA {
     println(s"tokens in the corpus: $numTokens")
     println(s"terms in the corpus: $numTerms")
     val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdgeRDD(docs, storageLevel)
-    initCorpus.edges.setName("edges-0").persist(storageLevel)
-    val corpus = updateVertexCounters(initCorpus, numTopics)
-      .joinVertices(computedModel.termTopicsRDD)((_, _, computedCounter) => computedCounter)
-    val vertices = corpus.vertices
-    vertices.setName("vertices-0").persist(storageLevel)
+    initCorpus.persist(storageLevel)
+    initCorpus.edges.setName("edges-0")
+    val vertices = initCorpus.vertices
     val numDocs = vertices.map(_._1).filter(isDocId).count()
     println(s"docs in the corpus: $numDocs")
     docs.unpersist(blocking=false)
-    new LDA(corpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS, algo, storageLevel)
+    val lda = new LDA(initCorpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS,
+      algo, storageLevel)
+    lda.updateVertexCounters(initCorpus)
+    lda.getCorpus.joinVertices(computedModel.termTopicsRDD)((_, _, computedCounter) => computedCounter)
+    lda.getCorpus.vertices.persist(storageLevel).setName("vertices-0")
+    lda.collectTopicCounters()
+    vertices.unpersist(blocking=false)
+    lda
   }
 
   /**
@@ -412,118 +530,5 @@ object LDA {
     val (termId, termCnt) = termPair
     val topics = Array.fill(termCnt)(gen.nextInt(numTopics))
     Edge(termId, genNewDocId(docId), topics)
-  }
-
-  private def updateVertexCounters(corpus: Graph[TC, TA],
-    numTopics: Int,
-    inferenceOnly: Boolean = false): GraphImpl[TC, TA] = {
-    val graph = corpus.asInstanceOf[GraphImpl[TC, TA]]
-    val vertices = graph.vertices
-    val edges = graph.edges
-    val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
-    val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap(t => {
-      val ep = t._2
-      val totalSize = ep.size
-      val lcSrcIds = ep.localSrcIds
-      val lcDstIds = ep.localDstIds
-      val l2g = ep.local2global
-      val vattrs = ep.vertexAttrs
-      val data = ep.data
-      val vertSize = vattrs.length
-      val results = new Array[(VertexId, TC)](vertSize)
-      val marks = new AtomicIntegerArray(vertSize)
-
-      implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-      val all = Future.traverse(ep.index.iterator)(t => Future {
-        var pos = t._2
-        val si = lcSrcIds(pos)
-        var termTuple = results(si)
-        if (termTuple == null && !inferenceOnly) {
-          termTuple = (l2g(si), BSV.zeros[Count](numTopics))
-          results(si) = termTuple
-        }
-        var termTopics = if (!inferenceOnly) termTuple._2 else null
-        while (pos < totalSize && lcSrcIds(pos) == si) {
-          val di = lcDstIds(pos)
-          var docTuple = results(di)
-          if (docTuple == null) {
-            if (marks.getAndDecrement(di) == 0) {
-              docTuple = (l2g(di), BSV.zeros[Count](numTopics))
-              results(di) = docTuple
-              marks.set(di, Int.MaxValue)
-            } else {
-              while (marks.get(di) <= 0) {}
-              docTuple = results(di)
-            }
-          }
-          val docTopics = docTuple._2
-          val topics = data(pos)
-          for (topic <- topics) {
-            if (!inferenceOnly) {
-              termTopics match {
-                case v: BDV[Count] => v(topic) += 1
-                case v: BSV[Count] =>
-                  v(topic) += 1
-                  if (v.activeSize > (numTopics >> 2)) {
-                    termTuple = (l2g(si), toBDV(v))
-                    results(si) = termTuple
-                    termTopics = termTuple._2
-                  }
-              }
-            }
-            docTopics.synchronized {
-              docTopics(topic) += 1
-            }
-          }
-          pos += 1
-        }
-      })
-      Await.ready(all, Duration.Inf)
-      ec.shutdown()
-
-      results.filter(_ != null)
-    })).partitionBy(vertices.partitioner.get)
-
-    val partRDD = vertices.partitionsRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
-      (svpIter, cntsIter) => svpIter.map(svp => {
-        val results = svp.values
-        val index = svp.index
-        val marks = new AtomicIntegerArray(results.length)
-        implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-        val all = cntsIter.grouped(numThreads * 5).map(cntGrp => Future {
-          for ((vid, counter) <- cntGrp) {
-            val i = index.getPos(vid)
-            if (marks.getAndDecrement(i) == 0) {
-              results(i) = counter
-            } else {
-              while (marks.getAndSet(i, -1) <= 0) {}
-              val agg = results(i)
-              results(i) = if (isTermId(vid)) {
-                agg match {
-                  case u: BDV[Count] => u :+= counter
-                  case u: BSV[Count] => counter match {
-                    case v: BDV[Count] => v :+= u
-                    case v: BSV[Count] =>
-                      u :+= v
-                      if (u.activeSize > (numTopics >> 2)) {
-                        toBDV(u)
-                      } else {
-                        u
-                      }
-                  }
-                }
-              } else {
-                agg :+= counter
-              }
-            }
-            marks.set(i, Int.MaxValue)
-          }
-        })
-        Await.ready(Future.sequence(all), Duration.Inf)
-        ec.shutdown()
-        svp.withValues(results)
-      })
-    )
-    GraphImpl.fromExistingRDDs(vertices.withPartitionsRDD(partRDD), edges)
   }
 }

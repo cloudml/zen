@@ -17,9 +17,10 @@
 
 package com.github.cloudml.zen.ml.clustering
 
-import java.util.concurrent.Executors
+import scala.collection.parallel.ForkJoinTaskSupport
 import scala.concurrent._
 import scala.concurrent.duration.Duration
+import scala.concurrent.forkjoin.ForkJoinPool
 
 import LDADefines._
 
@@ -69,7 +70,10 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
 
     val partRDD = vertices.partitionsRDD.mapPartitions(_.map(svp => {
       val index = svp.index
-      val results = svp.values.par.zipWithIndex.map {
+      val es = new ForkJoinPool(numThreads)
+      val parValues = svp.values.par
+      parValues.tasksupport = new ForkJoinTaskSupport(es)
+      val results = parValues.zipWithIndex.map {
         case (counter, i) =>
           if (counter == null) {
             null
@@ -86,7 +90,8 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
             val cSum = if (isDocId(vid)) counter.activeValuesIterator.sum else 0
             (counter, pSum, cSum)
           }
-      }.toArray
+      }.seq.array
+      es.shutdown()
       svp.withValues(results)
     }), preservesPartitioning=true)
     val cachedGraph = GraphImpl.fromExistingRDDs(vertices.withPartitionsRDD(partRDD), edges)
@@ -103,11 +108,11 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
       @volatile var wllhs = 0D
       @volatile var dllhs = 0D
 
-      implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+      implicit val es = ExecutionContext.fromExecutorService(new ForkJoinPool(numThreads))
       val all = Future.traverse(ep.index.iterator)(t => Future {
         var pos = t._2
         val si = lcSrcIds(pos)
-        val (orgTermTopics, wSparseSum, _) = vattrs(si)
+        val (orgTermTopics, wSparseSum, _) = vattrs(si).asInstanceOf[(TC, Double, Int)]
         val termTopics = orgTermTopics match {
           case v: BDV[Count] => v
           case v: BSV[Count] => toBDV(v)
@@ -116,7 +121,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
         var wllhs_th = 0D
         var dllhs_th = 0D
         while (pos < totalSize && lcSrcIds(pos) == si) {
-          val (docTopics, dSparseSum, docSize) = vattrs(lcDstIds(pos))
+          val (docTopics, dSparseSum, docSize) = vattrs(lcDstIds(pos)).asInstanceOf[(TC, Double, Int)]
           val topics = data(pos)
           // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
           val dwSparseSum = docTopics.activeIterator.map {
@@ -139,7 +144,8 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
         dllhs += dllhs_th
       })
       Await.ready(all, Duration.Inf)
-      ec.shutdown()
+      es.shutdown()
+
       (llhs, wllhs, dllhs)
     }))
 
