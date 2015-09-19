@@ -194,7 +194,37 @@ class LDA(@transient var corpus: Graph[TC, TA],
   }
 
   def collectTopicCounters(): Unit = {
-    val gtc = termVertices.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
+    val numThreads = scConf.getInt(cs_numThreads, 1)
+    val graph = corpus.asInstanceOf[GraphImpl[TC, TA]]
+    val a = graph.vertices.partitionsRDD.mapPartitions(_.map(svp => {
+      val totalSize = svp.capacity
+      val index = svp.index
+      val mask = svp.mask
+      val values = svp.values
+      val sizePerthrd = {
+        val npt = totalSize / numThreads
+        if (npt * numThreads == totalSize) npt else npt + 1
+      }
+      val es = new ForkJoinPool(numThreads)
+      val parRange = Range(0, numThreads).par
+      parRange.tasksupport = new ForkJoinTaskSupport(es)
+      val aggs = parRange.map(i => {
+        val startPos = sizePerthrd * i
+        val endPos = math.min(sizePerthrd * (i + 1), totalSize)
+        val agg = BDV.zeros[Count](numTopics)
+        var pos = mask.nextSetBit(startPos)
+        while (pos < endPos && pos >= 0) {
+          if (isTermId(index.getValue(pos))) {
+            agg :+= values(pos)
+          }
+          pos = mask.nextSetBit(pos + 1)
+        }
+        agg
+      })
+      es.shutdown()
+      aggs.par.reduce(_ :+= _)
+    }))
+    val gtc = a.collect().par.reduce(_ :+= _)
     val count = gtc.activeValuesIterator.map(_.toLong).sum
     assert(count == numTokens, s"numTokens=$numTokens, count=$count")
     topicCounters = gtc
