@@ -18,7 +18,6 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent._
 import scala.concurrent.duration.Duration
 
@@ -100,14 +99,12 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
       val lcDstIds = ep.localDstIds
       val vattrs = ep.vertexAttrs
       val data = ep.data
-      val sums = new Array[Double](numThreads)
-      val wSums = new Array[Double](numThreads)
-      val dSums = new Array[Double](numThreads)
-      val indicator = new AtomicInteger
+      @volatile var llhs = 0D
+      @volatile var wllhs = 0D
+      @volatile var dllhs = 0D
 
       implicit val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
       val all = Future.traverse(ep.index.iterator)(t => Future {
-        val thid = indicator.getAndIncrement() % numThreads
         var pos = t._2
         val si = lcSrcIds(pos)
         val (orgTermTopics, wSparseSum, _) = vattrs(si)
@@ -115,9 +112,9 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
           case v: BDV[Count] => v
           case v: BSV[Count] => toBDV(v)
         }
-        var lcSum = 0D
-        var lcWSum = 0D
-        var lcDSum = 0D
+        var llhs_th = 0D
+        var wllhs_th = 0D
+        var dllhs_th = 0D
         while (pos < totalSize && lcSrcIds(pos) == si) {
           val (docTopics, dSparseSum, docSize) = vattrs(lcDstIds(pos))
           val topics = data(pos)
@@ -127,29 +124,29 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
               cnt * termTopics(topic) / (topicCounters(topic) + betaSum)
           }.sum
           val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alphaSum)
-          lcSum += Math.log(prob) * topics.length
+          llhs_th += Math.log(prob) * topics.length
           for (topic <- topics) {
             val wProb = (termTopics(topic) + beta) / (topicCounters(topic) + betaSum)
             val dProb = (docTopics(topic) + alphaRatio * (topicCounters(topic) + alphaAS)) /
               (docSize + alphaSum)
-            lcWSum += Math.log(wProb)
-            lcDSum += Math.log(dProb)
+            wllhs_th += Math.log(wProb)
+            dllhs_th += Math.log(dProb)
           }
           pos += 1
         }
-        sums(thid) += lcSum
-        wSums(thid) += lcWSum
-        dSums(thid) += lcDSum
+        llhs += llhs_th
+        wllhs += wllhs_th
+        dllhs += dllhs_th
       })
       Await.ready(all, Duration.Inf)
       ec.shutdown()
-      (sums.sum, wSums.sum, dSums.sum)
+      (llhs, wllhs, dllhs)
     }))
 
-    val (llh, wllh, dllh) = sumPart.collect().unzip3
-    pplx = math.exp(-llh.sum / numTokens)
-    wpplx = math.exp(-wllh.sum / numTokens)
-    dpplx = math.exp(-dllh.sum / numTokens)
+    val (llht, wllht, dllht) = sumPart.collect().unzip3
+    pplx = math.exp(-llht.par.sum / numTokens)
+    wpplx = math.exp(-wllht.par.sum / numTokens)
+    dpplx = math.exp(-dllht.par.sum / numTokens)
   }
 
   def getPerplexity: Double = pplx
