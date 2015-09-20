@@ -87,8 +87,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
     val graph = newCorpus.asInstanceOf[GraphImpl[TC, TA]]
     val vertices = graph.vertices
     val edges = graph.edges
-    val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap(t => {
-      val ep = t._2
+    val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap(Function.tupled((_, ep) => {
       val totalSize = ep.size
       val lcSrcIds = ep.localSrcIds
       val lcDstIds = ep.localDstIds
@@ -100,15 +99,15 @@ class LDA(@transient var corpus: Graph[TC, TA],
       val marks = new AtomicIntegerArray(vertSize)
 
       implicit val es = ExecutionContext.fromExecutorService(new ForkJoinPool(numThreads))
-      val all = Future.traverse(ep.index.iterator)(t => Future {
-        var pos = t._2
-        val si = lcSrcIds(pos)
+      val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+        val si = lcSrcIds(offset)
         var termTuple = results(si)
         if (termTuple == null && !inferenceOnly) {
           termTuple = (l2g(si), BSV.zeros[Count](numTopics))
           results(si) = termTuple
         }
         var termTopics = if (!inferenceOnly) termTuple._2 else null
+        var pos = offset
         while (pos < totalSize && lcSrcIds(pos) == si) {
           val di = lcDstIds(pos)
           var docTuple = results(di)
@@ -126,15 +125,13 @@ class LDA(@transient var corpus: Graph[TC, TA],
           val topics = data(pos)
           for (topic <- topics) {
             if (!inferenceOnly) {
+              termTopics(topic) += 1
               termTopics match {
-                case v: BDV[Count] => v(topic) += 1
-                case v: BSV[Count] =>
-                  v(topic) += 1
-                  if (v.activeSize > (numTopics >> 2)) {
-                    termTuple = (l2g(si), toBDV(v))
-                    results(si) = termTuple
-                    termTopics = termTuple._2
-                  }
+                case v: BSV[Count] if v.activeSize > (numTopics >> 2) =>
+                  termTuple = (l2g(si), toBDV(v))
+                  results(si) = termTuple
+                  termTopics = termTuple._2
+                case _ =>
               }
             }
             docTopics.synchronized {
@@ -143,12 +140,12 @@ class LDA(@transient var corpus: Graph[TC, TA],
           }
           pos += 1
         }
-      })
+      }))
       Await.ready(all, Duration.Inf)
       es.shutdown()
 
       results.par.filter(_ != null)
-    })).partitionBy(vertices.partitioner.get)
+    }))).partitionBy(vertices.partitioner.get)
 
     val partRDD = vertices.partitionsRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
       (svpIter, cntsIter) => svpIter.map(svp => {
@@ -158,34 +155,27 @@ class LDA(@transient var corpus: Graph[TC, TA],
         val es = new ForkJoinPool(numThreads)
         val parCnts = cntsIter.to[ParArray]
         parCnts.tasksupport = new ForkJoinTaskSupport(es)
-        parCnts.foreach {
-          case (vid, counter) =>
-            val i = index.getPos(vid)
-            if (marks.getAndDecrement(i) == 0) {
-              results(i) = counter
-            } else {
-              while (marks.getAndSet(i, -1) <= 0) {}
-              val agg = results(i)
-              results(i) = if (isTermId(vid)) {
-                agg match {
-                  case u: BDV[Count] => u :+= counter
-                  case u: BSV[Count] => counter match {
-                    case v: BDV[Count] => v :+= u
-                    case v: BSV[Count] =>
-                      u :+= v
-                      if (u.activeSize > (numTopics >> 2)) {
-                        toBDV(u)
-                      } else {
-                        u
-                      }
-                  }
-                }
-              } else {
-                agg :+= counter
+        parCnts.foreach(Function.tupled((vid, counter) => {
+          val i = index.getPos(vid)
+          if (marks.getAndDecrement(i) == 0) {
+            results(i) = counter
+          } else {
+            while (marks.getAndSet(i, -1) <= 0) {}
+            val agg = results(i)
+            results(i) = if (isTermId(vid)) agg match {
+              case u: BDV[Count] => u :+= counter
+              case u: BSV[Count] => counter match {
+                case v: BDV[Count] => v :+= u
+                case v: BSV[Count] =>
+                  u :+= v
+                  if (u.activeSize > (numTopics >> 2)) toBDV(u) else u
               }
+            } else {
+              agg :+= counter
             }
-            marks.set(i, Int.MaxValue)
-        }
+          }
+          marks.set(i, Int.MaxValue)
+        }))
         es.shutdown()
         svp.withValues(results)
       })
@@ -196,7 +186,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
   def collectTopicCounters(): Unit = {
     val numThreads = scConf.getInt(cs_numThreads, 1)
     val graph = corpus.asInstanceOf[GraphImpl[TC, TA]]
-    val a = graph.vertices.partitionsRDD.mapPartitions(_.map(svp => {
+    val aggRdd = graph.vertices.partitionsRDD.mapPartitions(_.map(svp => {
       val totalSize = svp.capacity
       val index = svp.index
       val mask = svp.mask
@@ -208,9 +198,9 @@ class LDA(@transient var corpus: Graph[TC, TA],
       val es = new ForkJoinPool(numThreads)
       val parRange = Range(0, numThreads).par
       parRange.tasksupport = new ForkJoinTaskSupport(es)
-      val aggs = parRange.map(i => {
-        val startPos = sizePerthrd * i
-        val endPos = math.min(sizePerthrd * (i + 1), totalSize)
+      val aggs = parRange.map(thid => {
+        val startPos = sizePerthrd * thid
+        val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
         val agg = BDV.zeros[Count](numTopics)
         var pos = mask.nextSetBit(startPos)
         while (pos < endPos && pos >= 0) {
@@ -224,7 +214,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
       es.shutdown()
       aggs.par.reduce(_ :+= _)
     }))
-    val gtc = a.collect().par.reduce(_ :+= _)
+    val gtc = aggRdd.collect().par.reduce(_ :+= _)
     val count = gtc.activeValuesIterator.map(_.toLong).sum
     assert(count == numTokens, s"numTokens=$numTokens, count=$count")
     topicCounters = gtc
@@ -529,12 +519,12 @@ object LDA {
 
   def convertRawDocs(rawDocs: RDD[String], numTopics: Int): RDD[Edge[TA]] = {
     rawDocs.mapPartitionsWithIndex((pid, iter) => {
-      val gen = new XORShiftRandom(pid + 117)
+      val gen = new Random(pid + 117)
       iter.flatMap(line => {
         val tokens = line.split("\\t|\\s+")
         val docId = tokens.head.toLong
         val edger = toEdge(gen, docId, numTopics) _
-        tokens.tail.map(field => {
+        tokens.tail.par.map(field => {
           val pairs = field.split(":")
           val termId = pairs(0).toInt
           val termCnt = if (pairs.length > 1) pairs(1).toInt else 1

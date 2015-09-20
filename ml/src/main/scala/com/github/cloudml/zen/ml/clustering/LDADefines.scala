@@ -33,7 +33,6 @@ import breeze.storage.Zero
 import org.apache.spark.SparkConf
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl._
-import org.apache.spark.graphx2.util.collection.GraphXPrimitiveVector
 
 
 object LDADefines {
@@ -111,19 +110,14 @@ object LDADefines {
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
     val shippedVerts = vertices.partitionsRDD.mapPartitions(_.flatMap(svp => {
       val rt = svp.routingTable
+      val index = svp.index
+      val values = svp.values
       implicit val es = ExecutionContext.fromExecutorService(new ForkJoinPool(numThreads))
       Range(0, rt.numEdgePartitions).grouped(numThreads).flatMap(batch => {
         val all = Future.traverse(batch)(pid => Future {
-          val totalSize = rt.partitionSize(pid)
-          val vids = new GraphXPrimitiveVector[VertexId](totalSize)
-          val attrs = new GraphXPrimitiveVector[VD](totalSize)
-          rt.foreachWithinEdgePartition(pid, includeSrc = true, includeDst = true)(vid => {
-            if (svp.isDefined(vid)) {
-              vids += vid
-              attrs += svp(vid)
-            }
-          })
-          (pid, new VertexAttributeBlock(vids.trim().array, attrs.trim().array))
+          val vids = rt.routingTable(pid)._1
+          val attrs = vids.map(vid => values(index.getPos(vid)))
+          (pid, new VertexAttributeBlock(vids, attrs))
         })
         Await.result(all, Duration.Inf)
       }) ++ {
@@ -133,22 +127,18 @@ object LDADefines {
     })).partitionBy(edges.partitioner.get)
 
     val partRDD = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
-      (epIter, vabsIter) => epIter.map {
-        case (pid, ep) =>
-          val g2l = ep.global2local
-          val results = new Array[VD](ep.vertexAttrs.length)
-          val es = new ForkJoinPool(numThreads)
-          val parVabs = vabsIter.to[ParArray]
-          parVabs.tasksupport = new ForkJoinTaskSupport(es)
-          parVabs.foreach(t => {
-            val vab = t._2
-            for ((vid, vdata) <- vab.iterator) {
-              results(g2l(vid)) = vdata
-            }
-          })
-          es.shutdown()
-          (pid, ep.withVertexAttributes(results))
-      }
+      (epIter, vabsIter) => epIter.map(Function.tupled((pid, ep) => {
+        val g2l = ep.global2local
+        val results = new Array[VD](ep.vertexAttrs.length)
+        val es = new ForkJoinPool(numThreads)
+        val parVabs = vabsIter.to[ParArray]
+        parVabs.tasksupport = new ForkJoinTaskSupport(es)
+        parVabs.foreach(_._2.iterator.foreach(Function.tupled((vid, vdata) =>
+          results(g2l(vid)) = vdata
+        )))
+        es.shutdown()
+        (pid, ep.withVertexAttributes(results))
+      }))
     )
     GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
   }
