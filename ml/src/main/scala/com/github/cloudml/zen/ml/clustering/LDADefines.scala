@@ -18,11 +18,9 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
-import scala.collection.parallel.ForkJoinTaskSupport
-import scala.collection.parallel.mutable.ParArray
+import java.util.concurrent.Executors
 import scala.concurrent._
-import scala.concurrent.duration.Duration
-import scala.concurrent.forkjoin.ForkJoinPool
+import scala.concurrent.duration._
 import scala.reflect.ClassTag
 
 import com.github.cloudml.zen.ml.util._
@@ -112,14 +110,14 @@ object LDADefines {
       val rt = svp.routingTable
       val index = svp.index
       val values = svp.values
-      implicit val es = ExecutionContext.fromExecutorService(new ForkJoinPool(numThreads))
+      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
       Range(0, rt.numEdgePartitions).grouped(numThreads).flatMap(batch => {
         val all = Future.traverse(batch)(pid => Future {
           val vids = rt.routingTable(pid)._1
           val attrs = vids.map(vid => values(index.getPos(vid)))
           (pid, new VertexAttributeBlock(vids, attrs))
         })
-        Await.result(all, Duration.Inf)
+        Await.result(all, 1.hour)
       }) ++ {
         es.shutdown()
         Iterator.empty
@@ -130,12 +128,13 @@ object LDADefines {
       (epIter, vabsIter) => epIter.map(Function.tupled((pid, ep) => {
         val g2l = ep.global2local
         val results = new Array[VD](ep.vertexAttrs.length)
-        val es = new ForkJoinPool(numThreads)
-        val parVabs = vabsIter.to[ParArray]
-        parVabs.tasksupport = new ForkJoinTaskSupport(es)
-        parVabs.foreach(_._2.iterator.foreach(Function.tupled((vid, vdata) =>
-          results(g2l(vid)) = vdata
-        )))
+        implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+        val all = Future.traverse(vabsIter)(Function.tupled((_, vab) => Future {
+          vab.iterator.foreach(Function.tupled((vid, vdata) =>
+            results(g2l(vid)) = vdata
+          ))
+        }))
+        Await.ready(all, 1.hour)
         es.shutdown()
         (pid, ep.withVertexAttributes(results))
       }))

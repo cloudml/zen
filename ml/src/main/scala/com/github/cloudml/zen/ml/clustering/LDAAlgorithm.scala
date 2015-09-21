@@ -19,10 +19,10 @@ package com.github.cloudml.zen.ml.clustering
 
 import java.lang.ref.SoftReference
 import java.util.Random
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent._
-import scala.concurrent.duration.Duration
-import scala.concurrent.forkjoin.ForkJoinPool
+import scala.concurrent.duration._
 
 import LDADefines._
 import com.github.cloudml.zen.ml.util._
@@ -106,7 +106,7 @@ class FastLDA extends LDAAlgorithm {
       val data = ep.data
       val indicator = new AtomicInteger
 
-      implicit val es = ExecutionContext.fromExecutorService(new ForkJoinPool(numThreads))
+      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
       val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
         val termOrd = indicator.getAndIncrement()
         val gen = new XORShiftRandom((seed * numPartitions + pid) * termSize + termOrd)
@@ -140,7 +140,7 @@ class FastLDA extends LDAAlgorithm {
           pos += 1
         }
       }))
-      Await.ready(all, Duration.Inf)
+      Await.ready(all, 2.hour)
       es.shutdown()
 
       (pid, ep.withoutVertexAttributes[TC]().withData(data))
@@ -265,7 +265,7 @@ class LightLDA extends LDAAlgorithm {
       val dPFun = docProb(topicCounters, alpha, alphaAS, numTokens) _
       val wPFun = wordProb(topicCounters, numTerms, beta) _
 
-      implicit val es = ExecutionContext.fromExecutorService(new ForkJoinPool(numThreads))
+      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
       val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
         val termOrd = indicator.getAndIncrement()
         val gen = new XORShiftRandom((seed * numPartitions + pid) * termSize + termOrd)
@@ -327,7 +327,7 @@ class LightLDA extends LDAAlgorithm {
           pos += 1
         }
       }))
-      Await.ready(all, Duration.Inf)
+      Await.ready(all, 2.hour)
       es.shutdown()
 
       (pid, ep.withoutVertexAttributes[TC]().withData(data))

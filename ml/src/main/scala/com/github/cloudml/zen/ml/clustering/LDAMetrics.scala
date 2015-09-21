@@ -17,10 +17,9 @@
 
 package com.github.cloudml.zen.ml.clustering
 
-import scala.collection.parallel.ForkJoinTaskSupport
+import java.util.concurrent.Executors
 import scala.concurrent._
-import scala.concurrent.duration.Duration
-import scala.concurrent.forkjoin.ForkJoinPool
+import scala.concurrent.duration._
 
 import LDADefines._
 
@@ -69,28 +68,35 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
     ).sum
 
     val partRDD = vertices.partitionsRDD.mapPartitions(_.map(svp => {
+      val totalSize = svp.capacity
       val index = svp.index
-      val es = new ForkJoinPool(numThreads)
-      val parValues = svp.values.par
-      parValues.tasksupport = new ForkJoinTaskSupport(es)
-      val results = parValues.zipWithIndex.map {
-        case (counter, i) =>
-          if (counter == null) {
-            null
+      val mask = svp.mask
+      val values = svp.values
+      val results = new Array[(TC, Double, Int)](totalSize)
+      val sizePerthrd = {
+        val npt = totalSize / numThreads
+        if (npt * numThreads == totalSize) npt else npt + 1
+      }
+      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+      val all = Range(0, numThreads).map(thid => Future {
+        val startPos = sizePerthrd * thid
+        val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
+        var pos = mask.nextSetBit(startPos)
+        while (pos < endPos && pos >= 0) {
+          val vid = index.getValue(pos)
+          val counter = values(pos)
+          def itemProb(topic: Int, cnt: Count) = if (isDocId(vid)) {
+            cnt * beta / (topicCounters(topic) + betaSum)
           } else {
-            val vid = index.getValue(i)
-            val pSum = counter.activeIterator.filter(_._2 > 0).map {
-              case (topic, cnt) =>
-                if (isDocId(vid)) {
-                  cnt * beta / (topicCounters(topic) + betaSum)
-                } else {
-                  cnt * alphaRatio * (topicCounters(topic) + alphaAS) / (topicCounters(topic) + betaSum)
-                }
-            }.sum
-            val cSum = if (isDocId(vid)) counter.activeValuesIterator.sum else 0
-            (counter, pSum, cSum)
+            cnt * alphaRatio * (topicCounters(topic) + alphaAS) / (topicCounters(topic) + betaSum)
           }
-      }.seq.array
+          val pSum = counter.activeIterator.filter(_._2 > 0).map(Function.tupled(itemProb)).sum
+          val cSum = if (isDocId(vid)) counter.activeValuesIterator.sum else 0
+          results(pos) = (counter, pSum, cSum)
+          pos = mask.nextSetBit(pos + 1)
+        }
+      })
+      Await.ready(Future.sequence(all), 1.hour)
       es.shutdown()
       svp.withValues(results)
     }), preservesPartitioning=true)
@@ -108,7 +114,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
       @volatile var wllhs = 0D
       @volatile var dllhs = 0D
 
-      implicit val es = ExecutionContext.fromExecutorService(new ForkJoinPool(numThreads))
+      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
       val all = Future.traverse(ep.index.iterator)(t => Future {
         var pos = t._2
         val si = lcSrcIds(pos)
@@ -121,13 +127,12 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
         var wllhs_th = 0D
         var dllhs_th = 0D
         while (pos < totalSize && lcSrcIds(pos) == si) {
-          val (docTopics, dSparseSum, docSize) = vattrs(lcDstIds(pos)).asInstanceOf[(TC, Double, Int)]
+          val (docTopics, dSparseSum, docSize) = vattrs(lcDstIds(pos)).asInstanceOf[(BSV[Count], Double, Int)]
           val topics = data(pos)
           // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
-          val dwSparseSum = docTopics.activeIterator.map {
-            case (topic, cnt) =>
-              cnt * termTopics(topic) / (topicCounters(topic) + betaSum)
-          }.sum
+          val dwSparseSum = docTopics.activeIterator.map(Function.tupled((topic, cnt) =>
+            cnt * termTopics(topic) / (topicCounters(topic) + betaSum)
+          )).sum
           val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alphaSum)
           llhs_th += Math.log(prob) * topics.length
           for (topic <- topics) {

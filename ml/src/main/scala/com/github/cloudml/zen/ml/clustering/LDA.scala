@@ -18,12 +18,10 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicIntegerArray
-import scala.collection.parallel.ForkJoinTaskSupport
-import scala.collection.parallel.mutable.ParArray
 import scala.concurrent._
-import scala.concurrent.duration.Duration
-import scala.concurrent.forkjoin.ForkJoinPool
+import scala.concurrent.duration._
 
 import LDADefines._
 import com.github.cloudml.zen.ml.partitioner._
@@ -98,7 +96,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
       val results = new Array[(VertexId, TC)](vertSize)
       val marks = new AtomicIntegerArray(vertSize)
 
-      implicit val es = ExecutionContext.fromExecutorService(new ForkJoinPool(numThreads))
+      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
       val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
         val si = lcSrcIds(offset)
         var termTuple = results(si)
@@ -124,15 +122,15 @@ class LDA(@transient var corpus: Graph[TC, TA],
           val docTopics = docTuple._2
           val topics = data(pos)
           for (topic <- topics) {
-            if (!inferenceOnly) {
-              termTopics(topic) += 1
-              termTopics match {
-                case v: BSV[Count] if v.activeSize > (numTopics >> 2) =>
+            if (!inferenceOnly) termTopics match {
+              case v: BDV[Count] => v(topic) += 1
+              case v: BSV[Count] =>
+                v(topic) += 1
+                if (v.activeSize > (numTopics >> 2)) {
                   termTuple = (l2g(si), toBDV(v))
                   results(si) = termTuple
                   termTopics = termTuple._2
-                case _ =>
-              }
+                }
             }
             docTopics.synchronized {
               docTopics(topic) += 1
@@ -141,7 +139,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
           pos += 1
         }
       }))
-      Await.ready(all, Duration.Inf)
+      Await.ready(all, 1.hour)
       es.shutdown()
 
       results.par.filter(_ != null)
@@ -152,30 +150,36 @@ class LDA(@transient var corpus: Graph[TC, TA],
         val results = svp.values
         val index = svp.index
         val marks = new AtomicIntegerArray(results.length)
-        val es = new ForkJoinPool(numThreads)
-        val parCnts = cntsIter.to[ParArray]
-        parCnts.tasksupport = new ForkJoinTaskSupport(es)
-        parCnts.foreach(Function.tupled((vid, counter) => {
-          val i = index.getPos(vid)
-          if (marks.getAndDecrement(i) == 0) {
-            results(i) = counter
-          } else {
-            while (marks.getAndSet(i, -1) <= 0) {}
-            val agg = results(i)
-            results(i) = if (isTermId(vid)) agg match {
-              case u: BDV[Count] => u :+= counter
-              case u: BSV[Count] => counter match {
-                case v: BDV[Count] => v :+= u
-                case v: BSV[Count] =>
-                  u :+= v
-                  if (u.activeSize > (numTopics >> 2)) toBDV(u) else u
-              }
+        implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+        val all = cntsIter.grouped(numThreads * 5).map(batch => Future {
+          batch.foreach(Function.tupled((vid, counter) => {
+            val i = index.getPos(vid)
+            if (marks.getAndDecrement(i) == 0) {
+              results(i) = counter
             } else {
-              agg :+= counter
+              while (marks.getAndSet(i, -1) <= 0) {}
+              val agg = results(i)
+              results(i) = if (isTermId(vid)) agg match {
+                case u: BDV[Count] => counter match {
+                  case v: BDV[Count] => u :+= v
+                  case v: BSV[Count] => u :+= v
+                }
+                case u: BSV[Count] => counter match {
+                  case v: BDV[Count] => v :+= u
+                  case v: BSV[Count] =>
+                    u :+= v
+                    if (u.activeSize > (numTopics >> 2)) toBDV(u) else u
+                }
+              } else agg match {
+                case u: BSV[Count] => counter match {
+                  case v: BSV[Count] => u :+= v
+                }
+              }
             }
-          }
-          marks.set(i, Int.MaxValue)
-        }))
+            marks.set(i, Int.MaxValue)
+          }))
+        })
+        Await.ready(Future.sequence(all), 1.hour)
         es.shutdown()
         svp.withValues(results)
       })
@@ -195,24 +199,24 @@ class LDA(@transient var corpus: Graph[TC, TA],
         val npt = totalSize / numThreads
         if (npt * numThreads == totalSize) npt else npt + 1
       }
-      val es = new ForkJoinPool(numThreads)
-      val parRange = Range(0, numThreads).par
-      parRange.tasksupport = new ForkJoinTaskSupport(es)
-      val aggs = parRange.map(thid => {
+      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+      val all = Range(0, numThreads).map(thid => Future {
         val startPos = sizePerthrd * thid
         val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
         val agg = BDV.zeros[Count](numTopics)
         var pos = mask.nextSetBit(startPos)
         while (pos < endPos && pos >= 0) {
-          if (isTermId(index.getValue(pos))) {
-            agg :+= values(pos)
+          if (isTermId(index.getValue(pos))) values(pos) match {
+            case u: BDV[Count] => agg :+= u
+            case u: BSV[Count] => agg :+= u
           }
           pos = mask.nextSetBit(pos + 1)
         }
         agg
       })
+      val aggs = Await.result(Future.sequence(all), 1.hour)
       es.shutdown()
-      aggs.par.reduce(_ :+= _)
+      aggs.reduce(_ :+= _)
     }))
     val gtc = aggRdd.collect().par.reduce(_ :+= _)
     val count = gtc.activeValuesIterator.map(_.toLong).sum
