@@ -131,9 +131,15 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
           val docTopics = orgDocTopics.asInstanceOf[BSV[Count]]
           val topics = data(pos)
           // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
-          val dwSparseSum = docTopics.activeIterator.map(Function.tupled((topic, cnt) =>
-            cnt * termTopics(topic) / (topicCounters(topic) + betaSum)
-          )).sum
+          val docUsed = docTopics.used
+          val docIndex = docTopics.index
+          val docData = docTopics.data
+          var dwSparseSum = 0D
+          for (i <- 0 until docUsed) {
+            val topic = docIndex(i)
+            val cnt = docData(i)
+            dwSparseSum += cnt * termTopics(topic) / (topicCounters(topic) + betaSum)
+          }
           val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alphaSum)
           llhs_th += Math.log(prob) * topics.length
           for (topic <- topics) {
