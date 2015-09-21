@@ -122,15 +122,15 @@ class LDA(@transient var corpus: Graph[TC, TA],
           val docTopics = docTuple._2
           val topics = data(pos)
           for (topic <- topics) {
-            if (!inferenceOnly) termTopics match {
-              case v: BDV[Count] => v(topic) += 1
-              case v: BSV[Count] =>
-                v(topic) += 1
-                if (v.activeSize > (numTopics >> 2)) {
+            if (!inferenceOnly) {
+              termTopics(topic) += 1
+              termTopics match {
+                case v: BSV[Count] if v.activeSize > (numTopics >> 2) =>
                   termTuple = (l2g(si), toBDV(v))
                   results(si) = termTuple
                   termTopics = termTuple._2
-                }
+                case _ =>
+              }
             }
             docTopics.synchronized {
               docTopics(topic) += 1
@@ -219,7 +219,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
       aggs.reduce(_ :+= _)
     }))
     val gtc = aggRdd.collect().par.reduce(_ :+= _)
-    val count = gtc.activeValuesIterator.map(_.toLong).sum
+    val count = gtc.data.par.map(_.toLong).sum
     assert(count == numTokens, s"numTokens=$numTokens, count=$count")
     topicCounters = gtc
   }

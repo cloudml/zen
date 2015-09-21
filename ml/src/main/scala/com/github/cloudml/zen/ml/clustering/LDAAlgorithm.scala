@@ -125,7 +125,7 @@ class FastLDA extends LDAAlgorithm {
         var pos = offset
         while (pos < totalSize && lcSrcIds(pos) == si) {
           val di = lcDstIds(pos)
-          val docTopics = vattrs(di)
+          val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
           dSparse(cdfDist, topicCounters, termTopics, docTopics, beta, betaSum)
           val topics = data(pos)
           for (i <- topics.indices) {
@@ -211,13 +211,12 @@ class FastLDA extends LDAAlgorithm {
   private[ml] def dSparse(d: CumulativeDist[Double],
     topicCounters: BDV[Count],
     termTopics: BDV[Count],
-    docTopics: TC,
+    docTopics: BSV[Count],
     beta: Double,
     betaSum: Double): CumulativeDist[Double] = {
-    val dtc = docTopics.asInstanceOf[BSV[Count]]
-    val used = dtc.used
-    val index = dtc.index
-    val data = dtc.data
+    val used = docTopics.used
+    val index = docTopics.index
+    val data = docTopics.data
     d.directReset(i => {
       val topic = index(i)
       val cnt = data(i)
