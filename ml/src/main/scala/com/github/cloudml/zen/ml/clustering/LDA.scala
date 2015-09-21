@@ -519,12 +519,12 @@ object LDA {
 
   def convertRawDocs(rawDocs: RDD[String], numTopics: Int): RDD[Edge[TA]] = {
     rawDocs.mapPartitionsWithIndex((pid, iter) => {
-      val gen = new Random(pid + 117)
+      val gen = new XORShiftRandom(pid + 117)
       iter.flatMap(line => {
-        val tokens = line.split("\\t|\\s+")
+        val tokens = line.split(raw"\t|\s+")
         val docId = tokens.head.toLong
         val edger = toEdge(gen, docId, numTopics) _
-        tokens.tail.par.map(field => {
+        tokens.tail.map(field => {
           val pairs = field.split(":")
           val termId = pairs(0).toInt
           val termCnt = if (pairs.length > 1) pairs(1).toInt else 1

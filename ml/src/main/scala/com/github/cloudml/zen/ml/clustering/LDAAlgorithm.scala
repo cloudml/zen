@@ -84,7 +84,7 @@ class FastLDA extends LDAAlgorithm {
     val numPartitions = edges.partitions.length
     val partRDD = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) => {
       val alphaSum = alpha * numTopics
-      val alphaRatio = alphaSum / (numTokens - 1 + alphaAS * numTopics)
+      val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
       val betaSum = beta * numTerms
       def itemRatio(topic: Int) = {
         val nt = topicCounters(topic)
@@ -244,7 +244,7 @@ class LightLDA extends LDAAlgorithm {
     val numPartitions = edges.partitions.length
     val partRDD = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) => {
       val alphaSum = alpha * numTopics
-      val alphaRatio = alphaSum / (numTokens - 1 + alphaAS * numTopics)
+      val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
       val betaSum = beta * numTerms
       val totalSize = ep.size
       val termSize = ep.indexSize
@@ -260,7 +260,6 @@ class LightLDA extends LDAAlgorithm {
       val docCache = new Array[SoftReference[AliasTable[Count]]](vertSize)
       dDense(alphaDist, topicCounters, numTopics, alphaRatio, alphaAS)
       wDense(betaDist, topicCounters, numTopics, beta, betaSum)
-
       val p = tokenTopicProb(topicCounters, beta, alpha,
         alphaAS, numTokens, numTerms) _
       val dPFun = docProb(topicCounters, alpha, alphaAS, numTokens) _
@@ -296,12 +295,11 @@ class LightLDA extends LDAAlgorithm {
               val topic = topics(i)
               var proposalTopic = -1
               val q = if (docProposal) {
-                val sNorm = docDist.norm
-                val norm = sNorm + alphaDist.norm
+                val sNorm = alphaDist.norm
+                val norm = sNorm + docDist.norm
                 if (gen.nextDouble() * norm < sNorm) {
                   proposalTopic = alphaDist.sampleRandom(gen)
-                }
-                else {
+                } else {
                   proposalTopic = resampleTable(gen, docDist, docTopics, topic)
                 }
                 dPFun
