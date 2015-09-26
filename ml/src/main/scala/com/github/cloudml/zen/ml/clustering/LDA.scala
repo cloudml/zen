@@ -255,7 +255,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
   def gibbsSampling(sampIter: Int, inferenceOnly: Boolean = false): Unit = {
     val chkptIntv = scConf.getInt(cs_chkptInterval, 0)
     val prevCorpus = corpus
-    val sampledCorpus = algo.sampleGraph(corpus, topicCounters, sampIter + seed,
+    val sampledCorpus = algo.sampleGraph(corpus, topicCounters, seed, sampIter,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
     updateVertexCounters(sampledCorpus, inferenceOnly)
     if (chkptIntv > 0 && sampIter % chkptIntv == 1) {

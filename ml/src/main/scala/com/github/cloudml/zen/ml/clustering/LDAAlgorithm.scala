@@ -36,6 +36,7 @@ abstract class LDAAlgorithm extends Serializable {
   private[ml] def sampleGraph(corpus: Graph[TC, TA],
     topicCounters: BDV[Count],
     seed: Int,
+    sampIter: Int,
     numTokens: Long,
     numTopics: Int,
     numTerms: Int,
@@ -69,6 +70,7 @@ class FastLDA extends LDAAlgorithm {
   override private[ml] def sampleGraph(corpus: Graph[TC, TA],
     topicCounters: BDV[Count],
     seed: Int,
+    sampIter: Int,
     numTokens: Long,
     numTopics: Int,
     numTerms: Int,
@@ -109,7 +111,7 @@ class FastLDA extends LDAAlgorithm {
       implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
       val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
         val termOrd = indicator.getAndIncrement()
-        val gen = new XORShiftRandom((seed * numPartitions + pid) * termSize + termOrd)
+        val gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * termSize + termOrd)
         val termDist: DiscreteSampler[Double] = sampl match {
           case "alias" => new AliasTable[Double](numTopics)
           case "ftree" | "hybrid" => new FTree(numTopics, isSparse = true)
@@ -229,6 +231,7 @@ class LightLDA extends LDAAlgorithm {
   override private[ml] def sampleGraph(corpus: Graph[TC, TA],
     topicCounters: BDV[Count],
     seed: Int,
+    sampIter: Int,
     numTokens: Long,
     numTopics: Int,
     numTerms: Int,
@@ -267,7 +270,7 @@ class LightLDA extends LDAAlgorithm {
       implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
       val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
         val termOrd = indicator.getAndIncrement()
-        val gen = new XORShiftRandom((seed * numPartitions + pid) * termSize + termOrd)
+        val gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * termSize + termOrd)
         val termDist = new AliasTable[Double](numTopics)
         val si = lcSrcIds(offset)
         val termTopics = vattrs(si)
