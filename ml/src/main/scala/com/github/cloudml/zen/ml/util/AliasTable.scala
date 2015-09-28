@@ -18,11 +18,13 @@
 package com.github.cloudml.zen.ml.util
 
 import java.util.Random
+import scala.collection.mutable
 import scala.reflect.ClassTag
+
 import breeze.linalg.{Vector => BV}
 
 
-private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: Int)
+class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: Int)
   (implicit num: Numeric[T])
   extends DiscreteSampler[T] with Serializable {
   type Pair = (Int, T)
@@ -81,43 +83,43 @@ private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag
   def deltaUpdate(state: Int, delta: T): Unit = {}
 
   def resetDist(distIter: Iterator[(Int, T)], used: Int): this.type = synchronized {
-    val dist = distIter.toList
-    val sum = dist.map(_._2).sum
-    reset(used)
-    val (loList, hiList) = dist.map(t => (t._1, num.times(t._2, num.fromInt(used))))
-      .partition(t => num.lt(t._2, sum))
-    var ls = 0
-    var le = 0
-    var end = used
-    // @inline def isClose(a: Double, b: Double): Boolean = abs(a - b) <= (1e-8 + abs(a) * 1e-6)
-    def putAlias(list: List[Pair], rest: List[Pair]): List[Pair] = list match {
-      case Nil => rest
-      case (t, pt) :: rlist if num.lt(pt, sum) =>
-        _l(le) = t
-        _p(le) = pt
-        le += 1
-        putAlias(rlist, rest)
-      case (t, pt) :: rlist if ls < le =>
-        _h(ls) = t
-        val pl = _p(ls)
-        ls += 1
-        val pd = num.minus(pt, num.minus(sum, pl))
-        putAlias(List((t, pd)) ++ rlist, rest)
-      case (t, pt) :: rlist=>
-        putAlias(rlist, rest ++ List((t, pt)))
+    val dist = distIter.filter(Function.tupled((_, prob) => num.gt(prob, num.zero))).toArray
+    reset(dist.length)
+    val norm = dist.iterator.map(_._2).sum
+    var loStart = 0
+    var loEnd = 0
+    var hiEnd = _used
+    val hs = new mutable.ArrayStack[Pair]
+    dist.foreach(Function.tupled((state, prob) => {
+      val scale = num.times(prob, num.fromInt(_used))
+      if (num.lt(scale, norm)) {
+        _l(loEnd) = state
+        _p(loEnd) = scale
+        loEnd += 1
+      } else {
+        hs.push((state, scale))
+      }
+    }))
+    while (hs.nonEmpty) {
+      val (state, scale) = hs.pop()
+      if (num.lt(scale, norm)) {
+        _l(loEnd) = state
+        _p(loEnd) = scale
+        loEnd += 1
+      } else if (loStart < loEnd) {
+        _h(loStart) = state
+        val split = _p(loStart)
+        val scale_left = num.minus(scale, num.minus(norm, split))
+        hs.push((state, scale_left))
+        loStart += 1
+      } else {
+        hiEnd -= 1
+        _l(hiEnd) = state
+        _h(hiEnd) = state
+      }
     }
-    def putRest(rest: List[Pair]): Unit = rest match {
-      case Nil => Unit
-      case (t, pt) :: rrest =>
-        // assert(isClose(pt, sum))
-        end -= 1
-        _l(end) = t
-        _h(end) = t
-        putRest(rrest)
-    }
-    putRest(putAlias(hiList, putAlias(loList, List())))
-    // assert(abs(le - ls) <= 1 && abs(end - le) <= 1 && abs(end - ls) <= 1)
-    setNorm(sum)
+    // assert(loEnd - loStart <= 1 && math.abs(hiEnd - loEnd) <= 1 && math.abs(hiEnd - loStart) <= 1)
+    setNorm(norm)
   }
 
   private def reset(newSize: Int): this.type = {
@@ -137,7 +139,7 @@ private[zen] class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag
   }
 }
 
-private[zen] object AliasTable {
+object AliasTable {
   def generateAlias[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](sv: BV[T]): AliasTable[T] = {
     val used = sv.activeSize
     val table = new AliasTable[T](used)

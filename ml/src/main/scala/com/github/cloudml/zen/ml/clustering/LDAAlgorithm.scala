@@ -193,15 +193,10 @@ class FastLDA extends LDAAlgorithm {
   private[ml] def wSparse(w: DiscreteSampler[Double],
     itemRatio: Int => Double,
     termTopics: TC): DiscreteSampler[Double] = {
-    val arr = new Array[(Int, Double)](termTopics.activeSize)
-    var i = 0
-    for ((topic, cnt) <- termTopics.activeIterator) {
-      if (cnt > 0) {
-        arr(i) = (topic, cnt * itemRatio(topic))
-        i += 1
-      }
-    }
-    w.resetDist(arr.slice(0, i).iterator, i)
+    val distIter = termTopics.activeIterator.map(Function.tupled((topic, cnt) =>
+      (topic, cnt * itemRatio(topic))
+    ))
+    w.resetDist(distIter, termTopics.activeSize)
   }
 
   /**

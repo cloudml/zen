@@ -19,11 +19,13 @@ package com.github.cloudml.zen.ml.util
 
 import java.util.Random
 import scala.reflect.ClassTag
+
 import CumulativeDist._
+
 import breeze.linalg.{Vector => BV}
 
 
-private[zen] class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int)
+class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int)
   (implicit num: Numeric[T]) extends DiscreteSampler[T] with Serializable {
 
   private var _cdf = new Array[T](dataSize)
@@ -103,14 +105,15 @@ private[zen] class CumulativeDist[@specialized(Double, Int, Float, Long) T: Clas
   def data: Array[T] = _cdf
 }
 
-private[zen] object CumulativeDist {
+object CumulativeDist {
   def generateCdf[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](sv: BV[T]): CumulativeDist[T] = {
     val used = sv.activeSize
     val cdf = new CumulativeDist[T](used)
     cdf.resetDist(sv.activeIterator, used)
   }
 
-  def binarySelect[T](arr: Array[T], key: T, begin: Int, end: Int, greater: Boolean)
+  def binarySelect[@specialized(Double, Int, Float, Long) T](arr: Array[T],
+    key: T, begin: Int, end: Int, greater: Boolean)
     (implicit num: Numeric[T]): Int = {
     if (begin == end) {
       return if (greater) end else begin - 1
@@ -124,22 +127,18 @@ private[zen] object CumulativeDist {
       val v = arr(mid)
       if (num.lt(v, key)) {
         b = mid + 1
-      }
-      else if (num.gt(v, key)) {
+      } else if (num.gt(v, key)) {
         e = mid - 1
-      }
-      else {
+      } else {
         return mid
       }
     }
     val v = arr(mid)
     mid = if ((greater && num.gteq(v, key)) || (!greater && num.lteq(v, key))) {
       mid
-    }
-    else if (greater) {
+    } else if (greater) {
       mid + 1
-    }
-    else {
+    } else {
       mid - 1
     }
 

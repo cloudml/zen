@@ -19,14 +19,15 @@ package com.github.cloudml.zen.ml.util
 
 import java.util.Random
 import scala.reflect.ClassTag
+
 import FTree._
+
 import breeze.linalg.{Vector=>BV, SparseVector=>BSV, DenseVector=>BDV}
 
 
-private[zen] class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](
-  dataSize: Int,
-  val isSparse: Boolean)(implicit num: Numeric[T])
-  extends DiscreteSampler[T] with Serializable {
+class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
+  val isSparse: Boolean)
+  (implicit num: Numeric[T]) extends DiscreteSampler[T] with Serializable {
 
   private var _regLen: Int = regularLen(dataSize)
   private var _tree: Array[T] = new Array[T](_regLen << 1)
@@ -216,7 +217,7 @@ private[zen] class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](
   }
 }
 
-private[zen] object FTree {
+object FTree {
   def generateFTree[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](sv: BV[T]): FTree[T] = {
     val used = sv.activeSize
     val ftree = sv match {
@@ -239,7 +240,8 @@ private[zen] object FTree {
     v
   }
 
-  def binarySearch[T](arr: Array[T], key: T, start: Int, end: Int)(implicit num: Numeric[T]): Int = {
+  def binarySearch[@specialized(Double, Int, Float, Long) T](arr: Array[T],
+    key: T, start: Int, end: Int)(implicit num: Numeric[T]): Int = {
     def seg(s: Int, e: Int): Int = {
       if (s > e) return -1
       val mid = (s + e) >> 1
