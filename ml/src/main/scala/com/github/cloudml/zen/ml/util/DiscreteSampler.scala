@@ -27,5 +27,6 @@ trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
   def sampleFrom(base: T, gen: Random): Int
   def update(state: Int, value: T): Unit
   def deltaUpdate(state: Int, delta: T): Unit
+  def resetDist(probs: Array[T], space: Array[Int]): DiscreteSampler[T]
   def resetDist(distIter: Iterator[(Int, T)], used: Int): DiscreteSampler[T]
 }

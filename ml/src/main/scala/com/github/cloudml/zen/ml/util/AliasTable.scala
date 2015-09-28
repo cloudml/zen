@@ -19,6 +19,7 @@ package com.github.cloudml.zen.ml.util
 
 import java.util.Random
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
 import scala.reflect.ClassTag
 
 import breeze.linalg.{Vector => BV}
@@ -82,44 +83,63 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
 
   def deltaUpdate(state: Int, delta: T): Unit = {}
 
-  def resetDist(distIter: Iterator[(Int, T)], used: Int): this.type = synchronized {
-    val dist = distIter.filter(Function.tupled((_, prob) => num.gt(prob, num.zero))).toArray
-    reset(dist.length)
-    val norm = dist.iterator.map(_._2).sum
+  def resetDist(probs: Array[T], space: Array[Int]): this.type = synchronized {
+    val used = probs.length
+    reset(used)
+    val norm = probs.sum
     var loStart = 0
     var loEnd = 0
-    var hiEnd = _used
-    val hs = new mutable.ArrayStack[Pair]
-    dist.foreach(Function.tupled((state, prob) => {
-      val scale = num.times(prob, num.fromInt(_used))
-      if (num.lt(scale, norm)) {
+    var hiEnd = used
+    val hq = new Array[Int](used)
+    var hi = 0
+    val scale = num.fromInt(used)
+    var i = 0
+    while (i < used) {
+      val prob = num.times(probs(i), scale)
+      if (num.lt(prob, norm)) {
+        val state = space(i)
         _l(loEnd) = state
-        _p(loEnd) = scale
-        loEnd += 1
+        _p(loEnd) = prob
+        loEnd +=1
       } else {
-        hs.push((state, scale))
+        probs(i) = prob
+        hq(hi) = i
+        hi += 1
       }
-    }))
-    while (hs.nonEmpty) {
-      val (state, scale) = hs.pop()
-      if (num.lt(scale, norm)) {
+      i += 1
+    }
+    var j = 0
+    while (j < hi) {
+      val i = hq(j)
+      val state = space(i)
+      val prob = probs(i)
+      if (num.lt(prob, norm)) {
         _l(loEnd) = state
         _p(loEnd) = scale
         loEnd += 1
+        j += 1
       } else if (loStart < loEnd) {
         _h(loStart) = state
         val split = _p(loStart)
-        val scale_left = num.minus(scale, num.minus(norm, split))
-        hs.push((state, scale_left))
+        val pleft = num.minus(scale, num.minus(norm, split))
+        probs(i) = pleft
         loStart += 1
       } else {
         hiEnd -= 1
         _l(hiEnd) = state
         _h(hiEnd) = state
+        j += 1
       }
     }
-    // assert(loEnd - loStart <= 1 && math.abs(hiEnd - loEnd) <= 1 && math.abs(hiEnd - loStart) <= 1)
+    assert(loEnd - loStart <= 1 && math.abs(hiEnd - loEnd) <= 1 && math.abs(hiEnd - loStart) <= 1)
     setNorm(norm)
+  }
+
+  def resetDist(distIter: Iterator[(Int, T)], used: Int): this.type = synchronized {
+    val (probsIter, spaceIter) = distIter.duplicate
+    val probs = probsIter.map(_._2).toArray
+    val space = spaceIter.map(_._1).toArray
+    resetDist(probs, space)
   }
 
   private def reset(newSize: Int): this.type = {
