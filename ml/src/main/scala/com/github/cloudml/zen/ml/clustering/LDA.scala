@@ -465,6 +465,9 @@ object LDA {
     val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdges(docs, storageLevel)
     initCorpus.persist(storageLevel)
     val partCorpus = conf.get(cs_partStrategy, "dbh") match {
+      case "bydoc" =>
+        println("partition corpus by docs.")
+        EdgeDstPartitioner.partitionByEDP[TC, TA](initCorpus, storageLevel)
       case "edge2d" =>
         println("using Edge2D partition strategy.")
         initCorpus.partitionBy(PartitionStrategy.EdgePartition2D)
