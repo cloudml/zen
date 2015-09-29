@@ -21,6 +21,8 @@ import java.lang.ref.SoftReference
 import java.util.Random
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
+import org.apache.log4j.Logger
+
 import scala.concurrent._
 import scala.concurrent.duration._
 
@@ -183,8 +185,8 @@ class FastLDA extends LDAAlgorithm {
     itemRatio: Int => Double,
     beta: Double,
     numTopics: Int): DiscreteSampler[Double] = {
-    val probs = Range(0, numTopics).map(topic => itemRatio(topic) * beta)
-    t.resetDist(probs.iterator.zipWithIndex.map(_.swap), numTopics)
+    val probs = Range(0, numTopics).view.map(topic => itemRatio(topic) * beta).toArray
+    t.resetDist(probs, null)
   }
 
   /**
@@ -194,19 +196,18 @@ class FastLDA extends LDAAlgorithm {
    */
   private[ml] def wSparse(w: DiscreteSampler[Double],
     itemRatio: Int => Double,
-    termTopics: TC): DiscreteSampler[Double] = {
-    val used = termTopics.activeSize
-    val index = new Array[Int](used)
-    val data = new Array[Double](used)
-    var i = 0
-    termTopics.activeIterator.foreach(Function.tupled((topic, cnt) =>
-      if (cnt > 0) {
-        index(i) = topic
-        data(i) = cnt * itemRatio(topic)
-        i += 1
-      }
-    ))
-    w.resetDist(data.slice(0, i), index.slice(0, i))
+    termTopics: TC): DiscreteSampler[Double] = termTopics match {
+    case v: BDV[Count] =>
+      val numTopics = v.length
+      val data = v.data
+      val probs = Range(0, numTopics).view.map(topic => itemRatio(topic) * data(topic)).toArray
+      w.resetDist(probs, null)
+    case v: BSV[Count] =>
+      val used = v.used
+      val index = v.index
+      val data = v.data
+      val probs = Range(0, used).view.map(i => itemRatio(index(i)) * data(i)).toArray
+      w.resetDist(probs, index)
   }
 
   /**
@@ -226,8 +227,7 @@ class FastLDA extends LDAAlgorithm {
     val data = docTopics.data
     d.directReset(i => {
       val topic = index(i)
-      val cnt = data(i)
-      cnt * (termTopics(topic) + beta) / (topicCounters(topic) + betaSum)
+      data(i) * (termTopics(topic) + beta) / (topicCounters(topic) + betaSum)
     }, used, index)
   }
 }
@@ -274,69 +274,71 @@ class LightLDA extends LDAAlgorithm {
       val wPFun = wordProb(topicCounters, numTerms, beta) _
 
       implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-      val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
-        val termOrd = indicator.getAndIncrement()
-        val gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * termSize + termOrd)
-        val termDist = new AliasTable[Double](numTopics)
-        val si = lcSrcIds(offset)
-        val termTopics = vattrs(si)
-        wSparse(termDist, topicCounters, termTopics, betaSum)
-        var pos = offset
-        while (pos < totalSize && lcSrcIds(pos) == si) {
-          val di = lcDstIds(pos)
-          val docTopics = vattrs(di)
-          if (gen.nextDouble() < 1e-6) {
-            dDense(alphaDist, topicCounters, numTopics, alphaRatio, alphaAS)
-            wDense(betaDist, topicCounters, numTopics, beta, betaSum)
-          }
-          if (gen.nextDouble() < 1e-4) {
-            wSparse(termDist, topicCounters, termTopics, betaSum)
-          }
-          val docDist = dSparseCached(cache => cache == null || cache.get() == null || gen.nextDouble() < 1e-2,
-            docCache, docTopics, di)
+      // val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+      ep.index.iterator.foreach(Function.tupled((_, offset) => {
+          val termOrd = indicator.getAndIncrement()
+          val gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * termSize + termOrd)
+          val termDist = new AliasTable[Double](numTopics)
+          val si = lcSrcIds(offset)
+          val termTopics = vattrs(si)
+          wSparse(termDist, topicCounters, termTopics, betaSum)
+          var pos = offset
+          while (pos < totalSize && lcSrcIds(pos) == si) {
+            val di = lcDstIds(pos)
+            val docTopics = vattrs(di)
+            if (gen.nextDouble() < 1e-6) {
+              dDense(alphaDist, topicCounters, numTopics, alphaRatio, alphaAS)
+              wDense(betaDist, topicCounters, numTopics, beta, betaSum)
+            }
+            if (gen.nextDouble() < 1e-4) {
+              wSparse(termDist, topicCounters, termTopics, betaSum)
+            }
+            val docDist = dSparseCached(cache => cache == null || cache.get() == null || gen.nextDouble() < 1e-2,
+              docCache, docTopics, di)
 
-          val topics = data(pos)
-          for (i <- topics.indices) {
-            var docProposal = gen.nextDouble() < 0.5
-            for (_ <- 1 to 8) {
-              docProposal = !docProposal
-              val topic = topics(i)
-              var proposalTopic = -1
-              val q = if (docProposal) {
-                val sNorm = alphaDist.norm
-                val norm = sNorm + docDist.norm
-                if (gen.nextDouble() * norm < sNorm) {
-                  proposalTopic = alphaDist.sampleRandom(gen)
+            val topics = data(pos)
+            for (i <- topics.indices) {
+              var docProposal = gen.nextDouble() < 0.5
+              for (_ <- 1 to 8) {
+                docProposal = !docProposal
+                val topic = topics(i)
+                var proposalTopic = -1
+                val q = if (docProposal) {
+                  val sNorm = alphaDist.norm
+                  val norm = sNorm + docDist.norm
+                  if (gen.nextDouble() * norm < sNorm) {
+                    proposalTopic = alphaDist.sampleRandom(gen)
+                  } else {
+                    proposalTopic = resampleTable(gen, docDist, docTopics, topic)
+                  }
+                  dPFun
                 } else {
-                  proposalTopic = resampleTable(gen, docDist, docTopics, topic)
+                  val sNorm = termDist.norm
+                  val norm = sNorm + betaDist.norm
+                  val table = if (gen.nextDouble() * norm < sNorm) termDist else betaDist
+                  proposalTopic = table.sampleRandom(gen)
+                  wPFun
                 }
-                dPFun
-              } else {
-                val sNorm = termDist.norm
-                val norm = sNorm + betaDist.norm
-                val table = if (gen.nextDouble() * norm < sNorm) termDist else betaDist
-                proposalTopic = table.sampleRandom(gen)
-                wPFun
-              }
 
-              val newTopic = tokenSampling(gen, docTopics, termTopics, docProposal,
-                topic, proposalTopic, q, p)
-              if (newTopic != topic) {
-                topics(i) = newTopic
-                docTopics(topic) -= 1
-                docTopics(newTopic) += 1
-                termTopics(topic) -= 1
-                termTopics(newTopic) += 1
-                topicCounters(topic) -= 1
-                topicCounters(newTopic) += 1
+                val newTopic = tokenSampling(gen, docTopics, termTopics, docProposal,
+                  topic, proposalTopic, q, p)
+                if (newTopic != topic) {
+                  topics(i) = newTopic
+                  docTopics(topic) -= 1
+                  docTopics(newTopic) += 1
+                  termTopics(topic) -= 1
+                  termTopics(newTopic) += 1
+                  topicCounters(topic) -= 1
+                  topicCounters(newTopic) += 1
+                }
               }
             }
+            results(pos) = topics
+            pos += 1
           }
-          results(pos) = topics
-          pos += 1
-        }
-      }))
-      Await.ready(all, 2.hour)
+        }))
+      // })))
+      // Await.ready(all, 2.hour)
       es.shutdown()
 
       (pid, ep.withoutVertexAttributes[TC]().withData(results))
@@ -435,8 +437,8 @@ class LightLDA extends LDAAlgorithm {
     numTopics: Int,
     beta: Double,
     betaSum: Double): Unit = topicCounters.synchronized {
-    val probs = Range(0, numTopics).map(topic => beta / (topicCounters(topic) + betaSum))
-    wd.resetDist(probs.iterator.zipWithIndex.map(_.swap), numTopics)
+    val probs = Range(0, numTopics).view.map(topic => beta / (topicCounters(topic) + betaSum)).toArray
+    wd.resetDist(probs, null)
   }
 
   /**
@@ -445,16 +447,18 @@ class LightLDA extends LDAAlgorithm {
   private[ml] def wSparse(ws: AliasTable[Double],
     topicCounters: BDV[Count],
     termTopics: TC,
-    betaSum: Double): Unit = {
-    val arr = new Array[(Int, Double)](termTopics.activeSize)
-    var i = 0
-    for ((topic, cnt) <- termTopics.activeIterator) {
-      if (cnt > 0) {
-        arr(i) = (topic, cnt / (topicCounters(topic) + betaSum))
-        i += 1
-      }
-    }
-    ws.resetDist(arr.slice(0, i).iterator, i)
+    betaSum: Double): Unit = termTopics match {
+    case v: BDV[Count] =>
+      val numTopics = v.length
+      val data = v.data
+      val probs = Range(0, numTopics).view.map(topic => data(topic) / (topicCounters(topic) + betaSum)).toArray
+      ws.resetDist(probs, null)
+    case v: BSV[Count] =>
+      val used = v.used
+      val index = v.index
+      val data = v.data
+      val probs = Range(0, used).view.map(i => data(i) / (topicCounters(index(i)) + betaSum)).toArray
+      ws.resetDist(probs, index)
   }
 
   private[ml] def dDense(dd: AliasTable[Double],
@@ -462,8 +466,8 @@ class LightLDA extends LDAAlgorithm {
     numTopics: Int,
     alphaRatio: Double,
     alphaAS: Double): Unit = topicCounters.synchronized {
-    val probs = Range(0, numTopics).map(topic => alphaRatio * (topicCounters(topic) + alphaAS))
-    dd.resetDist(probs.iterator.zipWithIndex.map(_.swap), numTopics)
+    val probs = Range(0, numTopics).view.map(topic => alphaRatio * (topicCounters(topic) + alphaAS)).toArray
+    dd.resetDist(probs, null)
   }
 
   private[ml] def dSparseCached(updatePred: SoftReference[AliasTable[Count]] => Boolean,

@@ -179,7 +179,7 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
   }
 
   def resetDist(probs: Array[T], space: Array[Int]): this.type = synchronized {
-    resetDist(probs.iterator.zip(space.iterator).map(_.swap), probs.length)
+    resetDist(space.iterator.zip(probs.iterator), probs.length)
   }
 
   def resetDist(distIter: Iterator[(Int, T)], used: Int): this.type = synchronized {

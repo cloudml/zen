@@ -58,6 +58,7 @@ object LDADefines {
   val cs_outputpath = "zen.lda.outputPath"
   val cs_saveAsSolid = "zen.lda.saveAsSolid"
   val cs_numThreads = "zen.lda.numThreads"
+  val cs_ignoreDocId = "zen.lda.ignoreDocId"
 
   // make docId always be negative, so that the doc vertex always be the dest vertex
   @inline def genNewDocId(docId: Long): VertexId = {
@@ -95,8 +96,13 @@ object LDADefines {
 
   def toBDV[@specialized(Int, Double, Float) V: ClassTag: Zero](bsv: BSV[V]): BDV[V] = {
     val bdv = BDV.zeros[V](bsv.length)
-    for ((i, v) <- bsv.activeIterator) {
-      bdv(i) = v
+    val used = bsv.used
+    val index = bsv.index
+    val data = bsv.data
+    var i = 0
+    while (i < used) {
+      bdv(index(i)) = data(i)
+      i += 1
     }
     bdv
   }

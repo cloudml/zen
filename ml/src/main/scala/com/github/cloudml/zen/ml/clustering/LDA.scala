@@ -458,13 +458,17 @@ object LDA {
     numTopics: Int,
     storageLevel: StorageLevel): EdgeRDD[TA] = {
     val conf = orgDocs.context.getConf
+    val ignDid = conf.getBoolean(cs_ignoreDocId, false)
     val docs = docType match {
-      case "raw" => convertRawDocs(orgDocs.asInstanceOf[RDD[String]], numTopics)
-      case "bow" => convertBowDocs(orgDocs.asInstanceOf[RDD[BOW]], numTopics)
+      case "raw" => convertRawDocs(orgDocs.asInstanceOf[RDD[String]], numTopics, ignDid)
+      case "bow" => convertBowDocs(orgDocs.asInstanceOf[RDD[BOW]], numTopics, ignDid)
     }
     val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdges(docs, storageLevel)
     initCorpus.persist(storageLevel)
     val partCorpus = conf.get(cs_partStrategy, "dbh") match {
+      case "byterm" =>
+        println("partition corpus by terms.")
+        initCorpus.partitionBy(PartitionStrategy.EdgePartition1D)
       case "bydoc" =>
         println("partition corpus by docs.")
         EdgeDstPartitioner.partitionByEDP[TC, TA](initCorpus, storageLevel)
@@ -490,6 +494,47 @@ object LDA {
     println(s"edges in the corpus: $numEdges")
     initCorpus.unpersist(blocking=false)
     edges
+  }
+
+  def convertRawDocs(rawDocs: RDD[String], numTopics: Int, ignDid: Boolean): RDD[Edge[TA]] = {
+    rawDocs.mapPartitionsWithIndex((pid, iter) => {
+      val gen = new XORShiftRandom(pid + 117)
+      var pidMark = pid.toLong << 48
+      iter.flatMap(line => {
+        val tokens = line.split(raw"\t|\s+")
+        val docId = if (ignDid) {
+          pidMark += 1
+          pidMark
+        } else {
+          tokens.head.toLong
+        }
+        val edger = toEdge(gen, docId, numTopics) _
+        tokens.tail.map(field => {
+          val pairs = field.split(":")
+          val termId = pairs(0).toInt
+          val termCnt = if (pairs.length > 1) pairs(1).toInt else 1
+          (termId, termCnt)
+        }).filter(_._2 > 0).map(edger)
+      })
+    })
+  }
+
+  def convertBowDocs(bowDocs: RDD[BOW], numTopics: Int, ignDid: Boolean): RDD[Edge[TA]] = {
+    bowDocs.mapPartitionsWithIndex((pid, iter) => {
+      val gen = new XORShiftRandom(pid + 117)
+      var pidMark = pid.toLong << 48
+      iter.flatMap(Function.tupled((docId, tokens) => {
+        val edger = toEdge(gen, docId, numTopics) _
+        tokens.activeIterator.filter(_._2 > 0).map(edger)
+      }))
+    })
+  }
+
+  private def toEdge(gen: Random, docId: Long, numTopics: Int)
+    (termPair: (Int, Count)): Edge[TA] = {
+    val (termId, termCnt) = termPair
+    val topics = Array.fill(termCnt)(gen.nextInt(numTopics))
+    Edge(termId, genNewDocId(docId), topics)
   }
 
   def resampleCorpus(corpus: Graph[TC, TA], numTopics: Int): Graph[TC, TA] = {
@@ -522,40 +567,5 @@ object LDA {
       case _ =>
         corpus
     }
-  }
-
-  def convertRawDocs(rawDocs: RDD[String], numTopics: Int): RDD[Edge[TA]] = {
-    rawDocs.mapPartitionsWithIndex((pid, iter) => {
-      val gen = new XORShiftRandom(pid + 117)
-      iter.flatMap(line => {
-        val tokens = line.split(raw"\t|\s+")
-        val docId = tokens.head.toLong
-        val edger = toEdge(gen, docId, numTopics) _
-        tokens.tail.map(field => {
-          val pairs = field.split(":")
-          val termId = pairs(0).toInt
-          val termCnt = if (pairs.length > 1) pairs(1).toInt else 1
-          (termId, termCnt)
-        }).filter(_._2 > 0).map(edger)
-      })
-    })
-  }
-
-  def convertBowDocs(bowDocs: RDD[BOW], numTopics: Int): RDD[Edge[TA]] = {
-    bowDocs.mapPartitionsWithIndex((pid, iter) => {
-      val gen = new XORShiftRandom(pid + 117)
-      iter.flatMap{
-        case (docId, tokens) =>
-          val edger = toEdge(gen, docId, numTopics) _
-          tokens.activeIterator.filter(_._2 > 0).map(edger)
-      }
-    })
-  }
-
-  private def toEdge(gen: Random, docId: Long, numTopics: Int)
-    (termPair: (Int, Count)): Edge[TA] = {
-    val (termId, termCnt) = termPair
-    val topics = Array.fill(termCnt)(gen.nextInt(numTopics))
-    Edge(termId, genNewDocId(docId), topics)
   }
 }

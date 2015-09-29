@@ -71,7 +71,7 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSiz
   def deltaUpdate(state: Int, delta: T): Unit = {}
 
   def resetDist(probs: Array[T], space: Array[Int]): this.type = synchronized {
-    resetDist(probs.iterator.zip(space.iterator).map(_.swap), probs.length)
+    resetDist(space.iterator.zip(probs.iterator), probs.length)
   }
 
   def resetDist(distIter: Iterator[(Int, T)], used: Int): this.type = synchronized {
@@ -89,9 +89,11 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSiz
   def directReset(vf: Int => T, used: Int, space: Array[Int]): this.type = synchronized {
     _used = used
     var sum = num.zero
-    for (i <- 0 until used) {
+    var i = 0
+    while (i < used) {
       sum = num.plus(sum, vf(i))
       _cdf(i) = sum
+      i += 1
     }
     _space = space
     this

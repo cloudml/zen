@@ -72,6 +72,7 @@ object LDADriver {
     conf.set(cs_calcPerplexity, options.getOrElse("calcperplexity", "false"))
     conf.set(cs_saveInterval, options.getOrElse("saveinterval", "0"))
     conf.set(cs_saveAsSolid, options.getOrElse("saveassolid", "false"))
+    conf.set(cs_ignoreDocId, options.getOrElse("ignoredocid", "false"))
 
     val useKyro = options.get("usekryo").exists(_.toBoolean)
     if (useKyro) {
@@ -153,12 +154,13 @@ object LDADriver {
       "           -LDAAlgorithm=<*FastLDA|LightLDA>\n" +
       "           -accelMethod=<*Alias|FTree|Hybrid>\n" +
       "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK_SER)>\n" +
-      "           -partStrategy=<Edge2D|*DBH|VSDLP|BBR>\n" +
+      "           -partStrategy=<byTerm|byDoc|Edge2D|*DBH|VSDLP|BBR>\n" +
       "           -initStrategy=<*Random|Sparse|Split>\n" +
       "           -chkptInterval=<Int(*10)> (0 or negative disables checkpoint)\n" +
       "           -calcPerplexity=<true|*false>\n" +
       "           -saveInterval=<Int(*0)> (0 or negative disables save at intervals)\n" +
       "           -saveAsSolid=<true|*false>\n" +
+      "           -ignoreDocId=<true|*false>\n" +
       "           -paraParts=<Int(*0)> (0 uses Spark conf setting)\n" +
       "           -useKryo=<true|*false>"
     if (args.length < 8) {
