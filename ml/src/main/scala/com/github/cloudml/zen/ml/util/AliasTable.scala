@@ -74,9 +74,9 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
     }
   }
 
-  def update(state: Int, value: T): Unit = {}
+  def update(state: Int, value: => T): Unit = {}
 
-  def deltaUpdate(state: Int, delta: T): Unit = {}
+  def deltaUpdate(state: Int, delta: => T): Unit = {}
 
   def resetDist(probs: Array[T], space: Array[Int], psize: Int): this.type = synchronized {
     // @inline def isClose(a: Double, b: Double): Boolean = math.abs(a - b) <= (1e-8 + math.abs(a) * 1e-6)

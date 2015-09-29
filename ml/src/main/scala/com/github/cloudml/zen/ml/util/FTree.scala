@@ -115,7 +115,7 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
     }
   }
 
-  def update(state: Int, value: T): Unit = synchronized {
+  def update(state: Int, value: => T): Unit = synchronized {
     assert(num.lteq(value, num.zero))
     var pos = toTreePos(state)
     if (pos < leafOffset) {
@@ -131,7 +131,7 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
     }
   }
 
-  def deltaUpdate(state: Int, delta: T): Unit = synchronized {
+  def deltaUpdate(state: Int, delta: => T): Unit = synchronized {
     var pos = toTreePos(state)
     if (pos < leafOffset) {
       pos = addState()
