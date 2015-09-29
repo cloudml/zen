@@ -79,7 +79,7 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
   def deltaUpdate(state: Int, delta: T): Unit = {}
 
   def resetDist(probs: Array[T], space: Array[Int], psize: Int): this.type = synchronized {
-    @inline def isClose(a: Double, b: Double): Boolean = math.abs(a - b) <= (1e-8 + math.abs(a) * 1e-6)
+    // @inline def isClose(a: Double, b: Double): Boolean = math.abs(a - b) <= (1e-8 + math.abs(a) * 1e-6)
     reset(psize)
     var sum = num.zero
     var i = 0
@@ -125,14 +125,14 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
         val prest = num.minus(prob, num.minus(sum, split))
         pq(i) = prest
       } else {
-        assert(isClose(num.toDouble(prob), num.toDouble(sum)))
+        // assert(isClose(num.toDouble(prob), num.toDouble(sum)))
         he -= 1
         _l(he) = state
         _h(he) = state
         i += 1
       }
     }
-    assert(le - ls <= 1 && math.abs(he - le) <= 1 && math.abs(he - ls) <= 1)
+    // assert(le - ls <= 1 && math.abs(he - le) <= 1 && math.abs(he - ls) <= 1)
     setNorm(sum)
   }
 
