@@ -178,12 +178,12 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
     updateAncestors(pos, num.negate(p))
   }
 
-  def resetDist(probs: Array[T], space: Array[Int]): this.type = synchronized {
-    resetDist(space.iterator.zip(probs.iterator), probs.length)
+  def resetDist(probs: Array[T], space: Array[Int], psize: Int): this.type = synchronized {
+    resetDist(space.iterator.zip(probs.iterator), psize)
   }
 
-  def resetDist(distIter: Iterator[(Int, T)], used: Int): this.type = synchronized {
-    reset(used)
+  def resetDist(distIter: Iterator[(Int, T)], psize: Int): this.type = synchronized {
+    reset(psize)
     if (!isSparse) {
       for ((i, prob) <- distIter) {
         setLeaf(i, prob)

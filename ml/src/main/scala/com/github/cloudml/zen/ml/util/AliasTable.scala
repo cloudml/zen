@@ -78,43 +78,34 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
 
   def deltaUpdate(state: Int, delta: T): Unit = {}
 
-  def resetDist(probs: Array[T], space: Array[Int]): this.type = synchronized {
+  def resetDist(probs: Array[T], space: Array[Int], psize: Int): this.type = synchronized {
     @inline def isClose(a: Double, b: Double): Boolean = math.abs(a - b) <= (1e-8 + math.abs(a) * 1e-6)
+    reset(psize)
     var sum = num.zero
-    var bin = 0
     var i = 0
-    while (i < probs.length) {
-      val prob = probs(i)
-      if (num.gt(prob, num.zero)) {
-        sum = num.plus(sum, prob)
-        bin += 1
-      }
+    while (i < psize) {
+      sum = num.plus(sum, probs(i))
       i += 1
     }
-    sum = probs.sum
-    reset(bin)
     var ls = 0
     var le = 0
-    var he = bin
-    val sq = new Array[Int](bin)
-    val pq = new Array[T](bin)
+    var he = psize
+    val sq = new Array[Int](psize)
+    val pq = new Array[T](psize)
     var qi = 0
-    val scale = num.fromInt(bin)
+    val scale = num.fromInt(psize)
     i = 0
-    while (i < bin) {
-      val prob = probs(i)
-      if (num.gt(prob, num.zero)) {
-        val pscale = num.times(prob, scale)
-        val state = if (space == null) i else space(i)
-        if (num.lt(pscale, sum)) {
-          _l(le) = state
-          _p(le) = pscale
-          le += 1
-        } else {
-          sq(qi) = state
-          pq(qi) = pscale
-          qi += 1
-        }
+    while (i < psize) {
+      val prob = num.times(probs(i), scale)
+      val state = if (space == null) i else space(i)
+      if (num.lt(prob, sum)) {
+        _l(le) = state
+        _p(le) = prob
+        le += 1
+      } else {
+        sq(qi) = state
+        pq(qi) = prob
+        qi += 1
       }
       i += 1
     }
@@ -134,56 +125,21 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
         val prest = num.minus(prob, num.minus(sum, split))
         pq(i) = prest
       } else {
-        assert(isClose(num.toDouble(prob), num.toDouble(sum)), s"prob=$prob, sum=$sum")
+        assert(isClose(num.toDouble(prob), num.toDouble(sum)))
         he -= 1
         _l(he) = state
         _h(he) = state
         i += 1
       }
     }
-    assert(le - ls <= 1 && math.abs(he - le) <= 1 && math.abs(he - ls) <= 1, s"le=$le, ls=$ls, he=$he")
+    assert(le - ls <= 1 && math.abs(he - le) <= 1 && math.abs(he - ls) <= 1)
     setNorm(sum)
   }
 
-  type Pair = (Int, T)
-
-  def resetDist(distIter: Iterator[(Int, T)], used: Int): this.type = synchronized {    val dist = distIter.toList
-    val sum = dist.map(_._2).sum
-    reset(used)
-    val (loList, hiList) = dist.map(t => (t._1, num.times(t._2, num.fromInt(used))))
-      .partition(t => num.lt(t._2, sum))
-    var ls = 0
-    var le = 0
-    var end = used
-    @inline def isClose(a: Double, b: Double): Boolean = math.abs(a - b) <= (1e-8 + math.abs(a) * 1e-6)
-    def putAlias(list: List[Pair], rest: List[Pair]): List[Pair] = list match {
-      case Nil => rest
-      case (t, pt) :: rlist if num.lt(pt, sum) =>
-        _l(le) = t
-        _p(le) = pt
-        le += 1
-        putAlias(rlist, rest)
-      case (t, pt) :: rlist if ls < le =>
-        _h(ls) = t
-        val pl = _p(ls)
-        ls += 1
-        val pd = num.minus(pt, num.minus(sum, pl))
-        putAlias(List((t, pd)) ++ rlist, rest)
-      case (t, pt) :: rlist=>
-        putAlias(rlist, rest ++ List((t, pt)))
-    }
-    def putRest(rest: List[Pair]): Unit = rest match {
-      case Nil => Unit
-      case (t, pt) :: rrest =>
-        assert(isClose(num.toDouble(pt), num.toDouble(sum)))
-        end -= 1
-        _l(end) = t
-        _h(end) = t
-        putRest(rrest)
-    }
-    putRest(putAlias(hiList, putAlias(loList, List())))
-    assert(le - ls <= 1 && math.abs(end - le) <= 1 && math.abs(end - ls) <= 1)
-    setNorm(sum)
+  def resetDist(distIter: Iterator[(Int, T)], psize: Int): this.type = synchronized {
+    val (space, probs) = distIter.toArray.unzip
+    assert(probs.length == psize)
+    resetDist(probs.toArray, space.toArray, psize)
   }
 
   private def reset(newSize: Int): this.type = {
