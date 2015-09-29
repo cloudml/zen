@@ -106,6 +106,7 @@ class FastLDA extends LDAAlgorithm {
       val lcDstIds = ep.localDstIds
       val vattrs = ep.vertexAttrs
       val data = ep.data
+      val results = new Array[TA](totalSize)
       val indicator = new AtomicInteger
 
       implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
@@ -139,13 +140,14 @@ class FastLDA extends LDAAlgorithm {
             global.update(newTopic, itemRatio(newTopic) * beta)
             termDist.update(newTopic, itemRatio(newTopic) * termTopics(newTopic))
           }
+          results(pos) = topics
           pos += 1
         }
       }))
       Await.ready(all, 2.hour)
       es.shutdown()
 
-      (pid, ep.withoutVertexAttributes[TC]().withData(data))
+      (pid, ep.withoutVertexAttributes[TC]().withData(results))
     })), preservesPartitioning=true)
     GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
   }
@@ -249,6 +251,7 @@ class LightLDA extends LDAAlgorithm {
       val lcDstIds = ep.localDstIds
       val vattrs = ep.vertexAttrs
       val data = ep.data
+      val results = new Array[TA](totalSize)
       val vertSize = vattrs.length
       val indicator = new AtomicInteger
 
@@ -321,13 +324,14 @@ class LightLDA extends LDAAlgorithm {
               }
             }
           }
+          results(pos) = topics
           pos += 1
         }
       }))
       Await.ready(all, 2.hour)
       es.shutdown()
 
-      (pid, ep.withoutVertexAttributes[TC]().withData(data))
+      (pid, ep.withoutVertexAttributes[TC]().withData(results))
     })), preservesPartitioning=true)
     GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
   }

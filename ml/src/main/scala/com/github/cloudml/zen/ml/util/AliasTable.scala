@@ -18,18 +18,13 @@
 package com.github.cloudml.zen.ml.util
 
 import java.util.Random
-import scala.collection.mutable
-import scala.collection.mutable.ArrayBuffer
 import scala.reflect.ClassTag
 
 import breeze.linalg.{Vector => BV}
 
 
 class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: Int)
-  (implicit num: Numeric[T])
-  extends DiscreteSampler[T] with Serializable {
-  type Pair = (Int, T)
-
+  (implicit num: Numeric[T]) extends DiscreteSampler[T] with Serializable {
   private var _l: Array[Int] = new Array[Int](initUsed)
   private var _h: Array[Int] = new Array[Int](initUsed)
   private var _p: Array[T] = new Array[T](initUsed)
@@ -83,6 +78,8 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
 
   def deltaUpdate(state: Int, delta: T): Unit = {}
 
+  @inline def isClose(a: Double, b: Double): Boolean = math.abs(a - b) <= (1e-8 + math.abs(a) * 1e-6)
+
   def resetDist(probs: Array[T], space: Array[Int]): this.type = synchronized {
     val used = probs.length
     reset(used)
@@ -90,45 +87,46 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
     var loStart = 0
     var loEnd = 0
     var hiEnd = used
-    val hq = new Array[Int](used)
-    var hi = 0
+    val sq = new Array[Int](used)
+    val pq = new Array[T](used)
+    var qi = 0
     val scale = num.fromInt(used)
     var i = 0
     while (i < used) {
+      val state = space(i)
       val prob = num.times(probs(i), scale)
       if (num.lt(prob, norm)) {
-        val state = space(i)
         _l(loEnd) = state
         _p(loEnd) = prob
         loEnd +=1
       } else {
-        probs(i) = prob
-        hq(hi) = i
-        hi += 1
+        sq(i) = state
+        pq(qi) = prob
+        qi += 1
       }
       i += 1
     }
-    var j = 0
-    while (j < hi) {
-      val i = hq(j)
-      val state = space(i)
-      val prob = probs(i)
+    i = 0
+    while (i < qi) {
+      val state = sq(i)
+      val prob = pq(i)
       if (num.lt(prob, norm)) {
         _l(loEnd) = state
         _p(loEnd) = scale
         loEnd += 1
-        j += 1
+        i += 1
       } else if (loStart < loEnd) {
         _h(loStart) = state
         val split = _p(loStart)
         val pleft = num.minus(scale, num.minus(norm, split))
-        probs(i) = pleft
+        pq(i) = pleft
         loStart += 1
       } else {
+        assert(isClose(num.toDouble(prob), num.toDouble(norm)), s"$prob != $norm")
         hiEnd -= 1
         _l(hiEnd) = state
         _h(hiEnd) = state
-        j += 1
+        i += 1
       }
     }
     assert(loEnd - loStart <= 1 && math.abs(hiEnd - loEnd) <= 1 && math.abs(hiEnd - loStart) <= 1)
