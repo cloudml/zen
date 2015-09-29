@@ -78,15 +78,14 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
 
   def deltaUpdate(state: Int, delta: T): Unit = {}
 
-  @inline def isClose(a: Double, b: Double): Boolean = math.abs(a - b) <= (1e-8 + math.abs(a) * 1e-6)
-
   def resetDist(probs: Array[T], space: Array[Int]): this.type = synchronized {
+    // @inline def isClose(a: Double, b: Double): Boolean = math.abs(a - b) <= (1e-8 + math.abs(a) * 1e-6)
     val used = probs.length
     reset(used)
     val norm = probs.sum
-    var loStart = 0
-    var loEnd = 0
-    var hiEnd = used
+    var ls = 0
+    var le = 0
+    var he = used
     val sq = new Array[Int](used)
     val pq = new Array[T](used)
     var qi = 0
@@ -96,11 +95,11 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
       val state = space(i)
       val prob = num.times(probs(i), scale)
       if (num.lt(prob, norm)) {
-        _l(loEnd) = state
-        _p(loEnd) = prob
-        loEnd +=1
+        _l(le) = state
+        _p(le) = prob
+        le +=1
       } else {
-        sq(i) = state
+        sq(qi) = state
         pq(qi) = prob
         qi += 1
       }
@@ -111,33 +110,32 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
       val state = sq(i)
       val prob = pq(i)
       if (num.lt(prob, norm)) {
-        _l(loEnd) = state
-        _p(loEnd) = scale
-        loEnd += 1
+        _l(le) = state
+        _p(le) = prob
+        le += 1
         i += 1
-      } else if (loStart < loEnd) {
-        _h(loStart) = state
-        val split = _p(loStart)
-        val pleft = num.minus(scale, num.minus(norm, split))
-        pq(i) = pleft
-        loStart += 1
+      } else if (ls < le) {
+        _h(ls) = state
+        val split = _p(ls)
+        ls += 1
+        val prest = num.minus(prob, num.minus(norm, split))
+        pq(i) = prest
       } else {
-        assert(isClose(num.toDouble(prob), num.toDouble(norm)), s"$prob != $norm")
-        hiEnd -= 1
-        _l(hiEnd) = state
-        _h(hiEnd) = state
+        // assert(isClose(num.toDouble(prob), num.toDouble(norm)))
+        he -= 1
+        _l(he) = state
+        _h(he) = state
         i += 1
       }
     }
-    assert(loEnd - loStart <= 1 && math.abs(hiEnd - loEnd) <= 1 && math.abs(hiEnd - loStart) <= 1)
+    // assert(le - ls <= 1 && math.abs(he - le) <= 1 && math.abs(he - ls) <= 1)
     setNorm(norm)
   }
 
   def resetDist(distIter: Iterator[(Int, T)], used: Int): this.type = synchronized {
-    val (probsIter, spaceIter) = distIter.duplicate
-    val probs = probsIter.map(_._2).toArray
-    val space = spaceIter.map(_._1).toArray
-    resetDist(probs, space)
+    val (space, probs) = distIter.toArray.unzip
+    assert(probs.length == used)
+    resetDist(probs.toArray, space.toArray)
   }
 
   private def reset(newSize: Int): this.type = {
