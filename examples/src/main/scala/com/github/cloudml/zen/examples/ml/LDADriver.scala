@@ -74,6 +74,7 @@ object LDADriver {
     conf.set(cs_saveAsSolid, options.getOrElse("saveassolid", "false"))
     conf.set(cs_ignoreDocId, options.getOrElse("ignoredocid", "false"))
 
+    conf.set("spark.task.cpus", conf.get(cs_numThreads))
     val useKyro = options.get("usekryo").exists(_.toBoolean)
     if (useKyro) {
       conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
@@ -81,11 +82,6 @@ object LDADriver {
       registerKryoClasses(conf)
     } else {
       conf.set("spark.serializer", "org.apache.spark.serializer.JavaSerializer")
-    }
-
-    val paraParts = options.get("paraparts").map(_.toInt).getOrElse(0)
-    if (paraParts > 0) {
-      conf.set("spark.executor.cores", s"$paraParts")
     }
 
     val outPath = new Path(outputPath)
@@ -161,7 +157,6 @@ object LDADriver {
       "           -saveInterval=<Int(*0)> (0 or negative disables save at intervals)\n" +
       "           -saveAsSolid=<true|*false>\n" +
       "           -ignoreDocId=<true|*false>\n" +
-      "           -paraParts=<Int(*0)> (0 uses Spark conf setting)\n" +
       "           -useKryo=<true|*false>"
     if (args.length < 8) {
       println(usage)
