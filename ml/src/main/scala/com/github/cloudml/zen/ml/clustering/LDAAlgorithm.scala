@@ -85,7 +85,7 @@ class FastLDA extends LDAAlgorithm {
       val alphaSum = alpha * numTopics
       val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
       val betaSum = beta * numTerms
-      val denoms = topicCounters.mapValues(nt => 1D / (nt + betaSum))
+      val denoms = BDV.tabulate(numTopics)(topic => 1D / (topicCounters(topic) + betaSum))
       val alphaK_denoms = (denoms.copy :*= (alphaAS - betaSum) :+= 1D) :*= alphaRatio
       val beta_denoms = denoms.copy :*= beta
       val totalSize = ep.size
