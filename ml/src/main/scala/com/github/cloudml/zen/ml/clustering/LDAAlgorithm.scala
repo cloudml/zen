@@ -127,13 +127,13 @@ class FastLDA extends LDAAlgorithm {
           case v: BDV[Count] => v
           case v: BSV[Count] => toBDV(v)
         }
-        val term_denoms = calcTermDenoms(orgTermTopics, denoms, numTopics)
+        val termBeta_denoms = calcTermBetaDenoms(orgTermTopics, denoms, beta_denoms, numTopics)
         val cdfDist = cdfDists(thid)
         var pos = offset
         while (pos < totalSize && lcSrcIds(pos) == si) {
           val di = lcDstIds(pos)
           val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
-          dSparse(cdfDist, docTopics, term_denoms, beta_denoms)
+          dSparse(cdfDist, docTopics, termBeta_denoms)
           val topics = data(pos)
           for (i <- topics.indices) {
             val topic = topics(i)
@@ -213,7 +213,7 @@ class FastLDA extends LDAAlgorithm {
       val used = v.used
       val index = v.index
       val data = v.data
-      val probs = Range(0, used).view.map(i => alphaK_denoms(index(i)) * data(i)).toArray
+      val probs = Array.tabulate(used)(i => alphaK_denoms(index(i)) * data(i))
       w.resetDist(probs, index, used)
   }
 
@@ -225,26 +225,23 @@ class FastLDA extends LDAAlgorithm {
    */
   private[ml] def dSparse(d: CumulativeDist[Double],
     docTopics: BSV[Count],
-    term_denoms: BDV[Double],
-    beta_denoms: BDV[Double]): CumulativeDist[Double] = {
+    termBeta_denoms: BDV[Double]): CumulativeDist[Double] = {
     val used = docTopics.used
     val index = docTopics.index
     val data = docTopics.data
-    d.directReset(i => {
-      val topic = index(i)
-      data(i) * (term_denoms(topic) + beta_denoms(topic))
-    }, used, index)
+    d.directReset(i => data(i) * termBeta_denoms(index(i)), used, index)
   }
 
-  private[ml] def calcTermDenoms(orgTermTopics: BV[Count],
+  private[ml] def calcTermBetaDenoms(orgTermTopics: BV[Count],
     denoms: BDV[Double],
+    beta_denoms: BDV[Double],
     numTopics: Int): BDV[Double] = {
-    val bdv = BDV.zeros[Double](numTopics)
+    val bdv = beta_denoms.copy
     orgTermTopics match {
       case v: BDV[Count] =>
         var i = 0
         while (i < numTopics) {
-          bdv(i) = v(i) * denoms(i)
+          bdv(i) += v(i) * denoms(i)
           i += 1
         }
       case v: BSV[Count] =>
@@ -254,7 +251,7 @@ class FastLDA extends LDAAlgorithm {
         var i = 0
         while (i < used) {
           val topic = index(i)
-          bdv(topic) = data(i) * denoms(topic)
+          bdv(topic) += data(i) * denoms(topic)
           i += 1
         }
     }
@@ -470,7 +467,7 @@ class LightLDA extends LDAAlgorithm {
     numTopics: Int,
     beta: Double,
     betaSum: Double): Unit = topicCounters.synchronized {
-    val probs = Range(0, numTopics).view.map(topic => beta / (topicCounters(topic) + betaSum)).toArray
+    val probs = Array.tabulate(numTopics)(topic => beta / (topicCounters(topic) + betaSum))
     wd.resetDist(probs, null, numTopics)
   }
 
@@ -500,7 +497,7 @@ class LightLDA extends LDAAlgorithm {
       val used = v.used
       val index = v.index
       val data = v.data
-      val probs = Range(0, used).view.map(i => data(i) / (topicCounters(index(i)) + betaSum)).toArray
+      val probs = Array.tabulate(used)(i => data(i) / (topicCounters(index(i)) + betaSum))
       ws.resetDist(probs, index, used)
   }
 
@@ -509,7 +506,7 @@ class LightLDA extends LDAAlgorithm {
     numTopics: Int,
     alphaRatio: Double,
     alphaAS: Double): Unit = topicCounters.synchronized {
-    val probs = Range(0, numTopics).view.map(topic => alphaRatio * (topicCounters(topic) + alphaAS)).toArray
+    val probs = Array.tabulate(numTopics)(topic => alphaRatio * (topicCounters(topic) + alphaAS))
     dd.resetDist(probs, null, numTopics)
   }
 

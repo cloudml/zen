@@ -122,13 +122,13 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
         case v: BDV[Count] => v
         case v: BSV[Count] => toBDV(v)
       }
-      val term_denoms = algo.calcTermDenoms(orgTermTopics, denoms, numTopics)
+      val termBeta_denoms = algo.calcTermBetaDenoms(orgTermTopics, denoms, beta_denoms, numTopics)
       val topic = topics(i)
       docTopics(topic) -= 1
       if (docTopics(topic) == 0) {
         docTopics.compact()
       }
-      algo.dSparse(docCdf, docTopics, term_denoms, beta_denoms)
+      algo.dSparse(docCdf, docTopics, termBeta_denoms)
       val newTopic = algo.tokenSampling(gen, global, termDist, docCdf, termTopics, topic)
       topics(i) = newTopic
       docTopics(newTopic) += 1
