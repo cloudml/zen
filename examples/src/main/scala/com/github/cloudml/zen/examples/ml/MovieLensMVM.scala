@@ -17,26 +17,28 @@
 package com.github.cloudml.zen.examples.ml
 
 import breeze.linalg.{SparseVector => BSV}
-import com.github.cloudml.zen.ml.recommendation.MVM
-import org.apache.log4j.{Level, Logger}
+import com.github.cloudml.zen.ml.recommendation.{MVMRegression, MVMModel, MVMClassification, MVM}
+import com.github.cloudml.zen.ml.util.SparkHacker
 import org.apache.spark.graphx.GraphXUtils
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
-import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.storage.StorageLevel
-import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.{Logging, SparkConf, SparkContext}
 import scopt.OptionParser
 
-object MovieLensMVM {
+object MovieLensMVM extends Logging {
 
   case class Params(
     input: String = null,
     out: String = null,
     numIterations: Int = 40,
+    numPartitions: Int = -1,
     stepSize: Double = 0.1,
     regular: Double = 0.05,
     rank: Int = 20,
     useAdaGrad: Boolean = false,
-    kryo: Boolean = false) extends AbstractParams[Params]
+    useWeightedLambda: Boolean = false,
+    useSVDPlusPlus: Boolean = false,
+    kryo: Boolean = true) extends AbstractParams[Params]
 
   def main(args: Array[String]) {
     val defaultParams = Params()
@@ -45,8 +47,11 @@ object MovieLensMVM {
       opt[Int]("numIterations")
         .text(s"number of iterations, default: ${defaultParams.numIterations}")
         .action((x, c) => c.copy(numIterations = x))
+      opt[Int]("numPartitions")
+        .text(s"number of partitions, default: ${defaultParams.numPartitions}")
+        .action((x, c) => c.copy(numPartitions = x))
       opt[Int]("rank")
-        .text(s"dim of 2-way interactions, default: ${defaultParams.rank}")
+        .text(s"dim of 3-way interactions, default: ${defaultParams.rank}")
         .action((x, c) => c.copy(rank = x))
       opt[Unit]("kryo")
         .text("use Kryo serialization")
@@ -56,11 +61,17 @@ object MovieLensMVM {
         .action((x, c) => c.copy(stepSize = x))
       opt[Double]("regular")
         .text(
-          s"L2 regularization, default: ${defaultParams.regular}".stripMargin)
+          s"L2 regularization, default: ${defaultParams.regular}")
         .action((x, c) => c.copy(regular = x))
       opt[Unit]("adagrad")
         .text("use AdaGrad")
         .action((_, c) => c.copy(useAdaGrad = true))
+      opt[Unit]("weightedLambda")
+        .text("use weighted lambda regularization")
+        .action((_, c) => c.copy(useWeightedLambda = true))
+      opt[Unit]("svdPlusPlus")
+        .text("use SVD++")
+        .action((_, c) => c.copy(useSVDPlusPlus = true))
       arg[String]("<input>")
         .required()
         .text("input paths")
@@ -71,13 +82,13 @@ object MovieLensMVM {
         .action((x, c) => c.copy(out = x))
       note(
         """
-          |For example, the following command runs this app on a synthetic dataset:
+          | For example, the following command runs this app on a synthetic dataset:
           |
           | bin/spark-submit --class com.github.cloudml.zen.examples.ml.MovieLensMVM \
-          |  examples/target/scala-*/zen-examples-*.jar \
-          |  --rank 10 --numIterations 50 --regular 0.01,0.01,0.01 --kryo \
-          |  data/mllib/sample_movielens_data.txt
-          |  data/mllib/MVM_model
+          | examples/target/scala-*/zen-examples-*.jar \
+          | --rank 20 --numIterations 50 --regular 0.01 --kryo \
+          | data/mllib/sample_movielens_data.txt
+          | data/mllib/MVM_model
         """.stripMargin)
     }
 
@@ -89,58 +100,39 @@ object MovieLensMVM {
   }
 
   def run(params: Params): Unit = {
-    val Params(input, out, numIterations, stepSize, regular, rank, useAdaGrad, kryo) = params
+    val Params(input, out, numIterations, numPartitions, stepSize, regular, rank,
+    useAdaGrad, useWeightedLambda, useSVDPlusPlus, kryo) = params
+    val storageLevel = if (useSVDPlusPlus) StorageLevel.DISK_ONLY else StorageLevel.MEMORY_AND_DISK
+    val checkpointDir = s"$out/checkpoint"
     val conf = new SparkConf().setAppName(s"MVM with $params")
     if (kryo) {
       GraphXUtils.registerKryoClasses(conf)
       // conf.set("spark.kryoserializer.buffer.mb", "8")
     }
-    Logger.getRootLogger.setLevel(Level.WARN)
     val sc = new SparkContext(conf)
-    val checkpointDir = s"$out/checkpoint"
     sc.setCheckpointDir(checkpointDir)
-    val movieLens = sc.textFile(input).mapPartitions { iter =>
-      iter.filter(t => !t.startsWith("userId") && !t.isEmpty).map { line =>
-        val Array(userId, movieId, rating, timestamp) = line.split("::")
-        (userId.toInt, (movieId.toInt, rating.toDouble))
-      }
-    }.persist(StorageLevel.MEMORY_AND_DISK)
-    val maxMovieId = movieLens.map(_._2._1).max + 1
-    val maxUserId = movieLens.map(_._1).max + 1
-    val numFeatures = maxUserId + 2 * maxMovieId
-
-    /**
-     * The first view contains [0,maxUserId),The second view contains [maxUserId, maxMovieId + maxUserId)...
-     * The third contains [maxMovieId + maxUserId, numFeatures)  The last id equals the number of features
-     */
-    val views = Array(maxUserId, maxMovieId + maxUserId, numFeatures).map(_.toLong)
-
-    val dataSet = movieLens.map { case (userId, (movieId, rating)) =>
-      val sv = BSV.zeros[Double](maxMovieId)
-      sv(movieId) = rating
-      (userId, sv)
-    }.reduceByKey(_ :+= _).flatMap { case (userId, ratings) =>
-      val activeSize = ratings.activeSize
-      ratings.activeIterator.map { case (movieId, rating) =>
-        val sv = BSV.zeros[Double](numFeatures)
-        sv(userId) = 1.0
-        sv(movieId + maxUserId) = 1.0
-        ratings.activeKeysIterator.foreach { mId =>
-          sv(maxMovieId + maxUserId + mId) = 1.0 / math.sqrt(activeSize)
-        }
-        new LabeledPoint(rating, new SSV(sv.length, sv.index.slice(0, sv.used), sv.data.slice(0, sv.used)))
-      }
-    }.zipWithIndex().map(_.swap).persist(StorageLevel.MEMORY_AND_DISK)
-    dataSet.count()
-    movieLens.unpersist()
-    val Array(trainSet, testSet) = dataSet.randomSplit(Array(0.8, 0.2))
-    trainSet.persist(StorageLevel.MEMORY_AND_DISK).count()
-    testSet.persist(StorageLevel.MEMORY_AND_DISK).count()
-    dataSet.unpersist()
-    val model = MVM.trainRegression(trainSet, numIterations, stepSize, views,
-      regular, 0.0, rank, useAdaGrad, false, 1.0)
+    SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensMVM")
+    val (trainSet, testSet, views) = if (useSVDPlusPlus) {
+      MovieLensUtils.genSamplesSVDPlusPlus(sc, input, numPartitions, storageLevel)
+    }
+    else {
+      MovieLensUtils.genSamplesWithTime(sc, input, numPartitions, storageLevel)
+    }
+    val lfm = new MVMRegression(trainSet, stepSize, views, regular, 0.0, rank,
+      useAdaGrad, useWeightedLambda, 1, storageLevel)
+    var iter = 0
+    var model: MVMModel = null
+    while (iter < numIterations) {
+      val thisItr = math.min(50, numIterations - iter)
+      iter += thisItr
+      lfm.run(thisItr)
+      model = lfm.saveModel()
+      model.factors.count()
+      val rmse = model.loss(testSet)
+      logInfo(f"(Iteration $iter/$numIterations) Test RMSE:                     $rmse%1.4f")
+      println(f"(Iteration $iter/$numIterations) Test RMSE:                     $rmse%1.4f")
+    }
     model.save(sc, out)
-    println(f"Test RMSE: ${model.loss(testSet)}%1.4f")
     sc.stop()
   }
 }
