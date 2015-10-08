@@ -82,11 +82,10 @@ class FastLDA extends LDAAlgorithm {
     val sampl = conf.get(cs_accelMethod, "alias")
     val numPartitions = edges.partitions.length
     val partRDD = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) => {
-      val alphaSum = alpha * numTopics
-      val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
+      val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
       val betaSum = beta * numTerms
       val denoms = BDV.tabulate(numTopics)(topic => 1D / (topicCounters(topic) + betaSum))
-      val alphaK_denoms = (denoms.copy :*= (alphaAS - betaSum) :+= 1D) :*= alphaRatio
+      val alphaK_denoms = (denoms.copy :*= ((alphaAS - betaSum) * alphaRatio)) :+= alphaRatio
       val beta_denoms = denoms.copy :*= beta
       val totalSize = ep.size
       val lcSrcIds = ep.localSrcIds

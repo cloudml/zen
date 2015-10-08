@@ -85,12 +85,13 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
         while (pos < endPos && pos >= 0) {
           val vid = index.getValue(pos)
           val counter = values(pos)
-          def itemProb(topic: Int, cnt: Count) = if (isDocId(vid)) {
-            cnt * beta / (topicCounters(topic) + betaSum)
-          } else {
-            cnt * alphaRatio * (topicCounters(topic) + alphaAS) / (topicCounters(topic) + betaSum)
-          }
-          val pSum = counter.activeIterator.filter(_._2 > 0).map(Function.tupled(itemProb)).sum
+          val pSum = counter.activeIterator.filter(_._2 > 0).map(Function.tupled((topic, cnt) => {
+            if (isDocId(vid)) {
+              cnt * beta / (topicCounters(topic) + betaSum)
+            } else {
+              cnt * alphaRatio * (topicCounters(topic) + alphaAS) / (topicCounters(topic) + betaSum)
+            }
+          })).sum
           val cSum = if (isDocId(vid)) counter.activeValuesIterator.sum else 0
           results(pos) = (counter, pSum, cSum)
           pos = mask.nextSetBit(pos + 1)
@@ -115,9 +116,8 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
       @volatile var dllhs = 0D
 
       implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-      val all = Future.traverse(ep.index.iterator)(t => Future {
-        var pos = t._2
-        val si = lcSrcIds(pos)
+      val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+        val si = lcSrcIds(offset)
         val (orgTermTopics, wSparseSum, _) = vattrs(si)
         val termTopics = orgTermTopics match {
           case v: BDV[Count] => v
@@ -126,6 +126,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
         var llhs_th = 0D
         var wllhs_th = 0D
         var dllhs_th = 0D
+        var pos = offset
         while (pos < totalSize && lcSrcIds(pos) == si) {
           val (orgDocTopics, dSparseSum, docSize) = vattrs(lcDstIds(pos))
           val docTopics = orgDocTopics.asInstanceOf[BSV[Count]]
@@ -154,7 +155,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
         llhs += llhs_th
         wllhs += wllhs_th
         dllhs += dllhs_th
-      })
+      }))
       Await.ready(all, 2.hour)
       es.shutdown()
 
