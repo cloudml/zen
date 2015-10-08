@@ -229,14 +229,14 @@ class LDA(@transient var corpus: Graph[TC, TA],
     val saveIntv = scConf.getInt(cs_saveInterval, 0)
     if (pplx) {
       println("Before Gibbs sampling:")
-      LDAPerplexity.output(this, println)
+      LDAMetrics.outputPerplexity(this, println)
     }
     for (iter <- 1 to totalIter) {
       println(s"Start Gibbs sampling (Iteration $iter/$totalIter)")
       val startedAt = System.nanoTime()
       gibbsSampling(iter)
       if (pplx) {
-        LDAPerplexity.output(this, println)
+        LDAMetrics.outputPerplexity(this, println)
       }
       if (saveIntv > 0 && iter % saveIntv == 0) {
         val sc = corpus.edges.context

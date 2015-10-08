@@ -23,7 +23,7 @@ import scala.concurrent._
 import scala.concurrent.duration._
 
 import LDADefines._
-import LDAPerplexity._
+import LDAMetrics._
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, convert, sum}
 
@@ -132,15 +132,15 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
   def getDocPerplexity: Double = dpplx
 }
 
-object LDAPerplexity {
-  def output(lda: LDA, writer: String => Unit): Unit = {
+object LDAMetrics {
+  def outputPerplexity(lda: LDA, writer: String => Unit): Unit = {
     val pplx = new LDAPerplexity(lda)
     pplx.measure()
     val o = s"perplexity=${pplx.getPerplexity}, word pplx=${pplx.getWordPerplexity}, doc pplx=${pplx.getDocPerplexity}"
     writer(o)
   }
 
-  private def calcWSparseSum(counter: TC,
+  private[ml] def calcWSparseSum(counter: TC,
     alphaK_denoms: BDV[Double],
     numTopics: Int): Double = {
     var wSparseSum = 0D
@@ -164,7 +164,7 @@ object LDAPerplexity {
     wSparseSum
   }
 
-  private def calcDwSum(docTopics: BSV[Count],
+  private[ml] def calcDwSum(docTopics: BSV[Count],
     termBeta_denoms: BDV[Double]) = {
     // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
     val used = docTopics.used
@@ -179,7 +179,7 @@ object LDAPerplexity {
     dwSum
   }
 
-  private def calcTermBetaDenoms(orgTermTopics: BV[Count],
+  private[ml] def calcTermBetaDenoms(orgTermTopics: BV[Count],
     beta_denoms: BDV[Double],
     denoms: BDV[Double],
     numTopics: Int): BDV[Double] = {
