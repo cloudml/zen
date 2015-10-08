@@ -18,13 +18,14 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicIntegerArray
 import scala.concurrent._
 import scala.concurrent.duration._
 
 import LDADefines._
+import LDAPerplexity._
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
-import org.apache.spark.graphx2.impl.GraphImpl
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, convert, sum}
 
 
 trait LDAMetrics {
@@ -53,64 +54,28 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
     val numTokens = lda.numTokens
     val alphaAS = lda.alphaAS
     val alphaSum = numTopics * lda.alpha
-    val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
     val beta = lda.beta
     val betaSum = lda.numTerms * beta
 
-    val graph = lda.corpus.asInstanceOf[GraphImpl[TC, TA]]
-    val vertices = graph.vertices
-    val edges = graph.edges
+    val refrGraph = refreshEdgeAssociations(lda.corpus)
+    val edges = refrGraph.edges
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
-
-    // \frac{{\alpha }_{k}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
-    val tDenseSum = topicCounters.valuesIterator.map(cnt =>
-      beta * alphaRatio * (cnt + alphaAS) / (cnt + betaSum)
-    ).sum
-
-    val partRDD = vertices.partitionsRDD.mapPartitions(_.map(svp => {
-      val totalSize = svp.capacity
-      val index = svp.index
-      val mask = svp.mask
-      val values = svp.values
-      val results = new Array[(TC, Double, Int)](totalSize)
-      val sizePerthrd = {
-        val npt = totalSize / numThreads
-        if (npt * numThreads == totalSize) npt else npt + 1
-      }
-      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-      val all = Range(0, numThreads).map(thid => Future {
-        val startPos = sizePerthrd * thid
-        val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
-        var pos = mask.nextSetBit(startPos)
-        while (pos < endPos && pos >= 0) {
-          val vid = index.getValue(pos)
-          val counter = values(pos)
-          val pSum = counter.activeIterator.filter(_._2 > 0).map(Function.tupled((topic, cnt) => {
-            if (isDocId(vid)) {
-              cnt * beta / (topicCounters(topic) + betaSum)
-            } else {
-              cnt * alphaRatio * (topicCounters(topic) + alphaAS) / (topicCounters(topic) + betaSum)
-            }
-          })).sum
-          val cSum = if (isDocId(vid)) counter.activeValuesIterator.sum else 0
-          results(pos) = (counter, pSum, cSum)
-          pos = mask.nextSetBit(pos + 1)
-        }
-      })
-      Await.ready(Future.sequence(all), 1.hour)
-      es.shutdown()
-      svp.withValues(results)
-    }), preservesPartitioning=true)
-    val cachedGraph = GraphImpl.fromExistingRDDs(vertices.withPartitionsRDD(partRDD), edges)
-
-    val refrGraph = refreshEdgeAssociations(cachedGraph)
-    val sumPart = refrGraph.edges.partitionsRDD.mapPartitions(_.map(t => {
-      val ep = t._2
+    val sumPart = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((_, ep) => {
+      val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
+      val alphaK = (convert(topicCounters, Double) :+= alphaAS) :*= alphaRatio
+      val denoms = BDV.tabulate(numTopics)(topic => 1D / (topicCounters(topic) + betaSum))
+      val alphaK_denoms = (denoms.copy :*= ((alphaAS - betaSum) * alphaRatio)) :+= alphaRatio
+      val beta_denoms = denoms.copy :*= beta
+      // \frac{{\alpha }_{k}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
+      val tDenseSum = sum(alphaK_denoms.copy :*= beta)
       val totalSize = ep.size
       val lcSrcIds = ep.localSrcIds
       val lcDstIds = ep.localDstIds
       val vattrs = ep.vertexAttrs
       val data = ep.data
+      val vertSize = vattrs.length
+      val doc_denoms = new Array[Double](vertSize)
+      val marks = new AtomicIntegerArray(vertSize)
       @volatile var llhs = 0D
       @volatile var wllhs = 0D
       @volatile var dllhs = 0D
@@ -118,37 +83,29 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
       implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
       val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
         val si = lcSrcIds(offset)
-        val (orgTermTopics, wSparseSum, _) = vattrs(si)
-        val termTopics = orgTermTopics match {
-          case v: BDV[Count] => v
-          case v: BSV[Count] => toBDV(v)
-        }
+        val orgTermTopics = vattrs(si)
+        val wSparseSum = calcWSparseSum(orgTermTopics, alphaK_denoms, numTopics)
+        val twSum = tDenseSum + wSparseSum
+        val termBeta_denoms = calcTermBetaDenoms(orgTermTopics, beta_denoms, denoms, numTopics)
         var llhs_th = 0D
         var wllhs_th = 0D
         var dllhs_th = 0D
         var pos = offset
         while (pos < totalSize && lcSrcIds(pos) == si) {
-          val (orgDocTopics, dSparseSum, docSize) = vattrs(lcDstIds(pos))
-          val docTopics = orgDocTopics.asInstanceOf[BSV[Count]]
-          val topics = data(pos)
-          // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
-          val docUsed = docTopics.used
-          val docIndex = docTopics.index
-          val docData = docTopics.data
-          var dwSparseSum = 0D
-          for (i <- 0 until docUsed) {
-            val topic = docIndex(i)
-            val cnt = docData(i)
-            dwSparseSum += cnt * termTopics(topic) / (topicCounters(topic) + betaSum)
+          val di = lcDstIds(pos)
+          val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
+          if (marks.get(di) == 0) {
+            doc_denoms(di) = 1D / (sum(docTopics) + alphaSum)
+            marks.set(di, 1)
           }
-          val prob = (tDenseSum + wSparseSum + dSparseSum + dwSparseSum) / (docSize + alphaSum)
+          val doc_denom = doc_denoms(di)
+          val topics = data(pos)
+          val dwSum = calcDwSum(docTopics, termBeta_denoms)
+          val prob = (twSum + dwSum) * doc_denom
           llhs_th += Math.log(prob) * topics.length
           for (topic <- topics) {
-            val wProb = (termTopics(topic) + beta) / (topicCounters(topic) + betaSum)
-            val dProb = (docTopics(topic) + alphaRatio * (topicCounters(topic) + alphaAS)) /
-              (docSize + alphaSum)
-            wllhs_th += Math.log(wProb)
-            dllhs_th += Math.log(dProb)
+            wllhs_th += Math.log(termBeta_denoms(topic))
+            dllhs_th += Math.log((docTopics(topic) + alphaK(topic)) * doc_denom)
           }
           pos += 1
         }
@@ -160,7 +117,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
       es.shutdown()
 
       (llhs, wllhs, dllhs)
-    }))
+    })))
 
     val (llht, wllht, dllht) = sumPart.collect().unzip3
     pplx = math.exp(-llht.par.sum / numTokens)
@@ -181,5 +138,70 @@ object LDAPerplexity {
     pplx.measure()
     val o = s"perplexity=${pplx.getPerplexity}, word pplx=${pplx.getWordPerplexity}, doc pplx=${pplx.getDocPerplexity}"
     writer(o)
+  }
+
+  private def calcWSparseSum(counter: TC,
+    alphaK_denoms: BDV[Double],
+    numTopics: Int): Double = {
+    var wSparseSum = 0D
+    counter match {
+      case v: BDV[Count] =>
+        var i = 0
+        while (i < numTopics) {
+          wSparseSum += v(i) * alphaK_denoms(i)
+          i += 1
+        }
+      case v: BSV[Count] =>
+        val used = v.used
+        val index = v.index
+        val data = v.data
+        var i = 0
+        while (i < used) {
+          wSparseSum += data(i) * alphaK_denoms(index(i))
+          i += 1
+        }
+    }
+    wSparseSum
+  }
+
+  private def calcDwSum(docTopics: BSV[Count],
+    termBeta_denoms: BDV[Double]) = {
+    // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
+    val used = docTopics.used
+    val index = docTopics.index
+    val data = docTopics.data
+    var dwSum = 0D
+    var i = 0
+    while (i < used) {
+      dwSum += data(i) * termBeta_denoms(index(i))
+      i += 1
+    }
+    dwSum
+  }
+
+  private def calcTermBetaDenoms(orgTermTopics: BV[Count],
+    beta_denoms: BDV[Double],
+    denoms: BDV[Double],
+    numTopics: Int): BDV[Double] = {
+    val bdv = beta_denoms.copy
+    orgTermTopics match {
+      case v: BDV[Count] =>
+        var i = 0
+        while (i < numTopics) {
+          bdv(i) += v(i) * denoms(i)
+          i += 1
+        }
+      case v: BSV[Count] =>
+        val used = v.used
+        val index = v.index
+        val data = v.data
+        var i = 0
+        while (i < used) {
+          val topic = index(i)
+          bdv(topic) += data(i) * denoms(topic)
+          i += 1
+        }
+    }
+    bdv
   }
 }
