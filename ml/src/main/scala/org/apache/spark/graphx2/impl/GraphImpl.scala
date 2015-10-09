@@ -335,7 +335,7 @@ object GraphImpl {
       .withTargetStorageLevel(edgeStorageLevel).cache()
     val vertexRDD = VertexRDD(vertices, edgeRDD, defaultVertexAttr)
       .withTargetStorageLevel(vertexStorageLevel).cache()
-    GraphImpl(vertexRDD, edgeRDD)
+    GraphImpl.fromExistingRDDs(vertexRDD, edgeRDD)
   }
 
   /**

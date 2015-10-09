@@ -342,15 +342,13 @@ object LDA {
     storageLevel: StorageLevel): LDA = {
     val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdgeRDD(docs, storageLevel)
     initCorpus.persist(storageLevel)
-    val edges = initCorpus.edges.setName("edges-0")
-    val vertices = initCorpus.vertices
-    val numTokens = edges.map(_.attr.length.toLong).reduce(_ + _)
+    val numTokens = initCorpus.edges.map(_.attr.length.toLong).reduce(_ + _)
     println(s"tokens in the corpus: $numTokens")
+    val vertices = initCorpus.vertices
     val numTerms = vertices.map(_._1).filter(isTermId).count().toInt
     println(s"terms in the corpus: $numTerms")
     val numDocs = vertices.map(_._1).filter(isDocId).count()
     println(s"docs in the corpus: $numDocs")
-    docs.unpersist(blocking=false)
     val lda = new LDA(initCorpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS,
       algo, storageLevel)
     lda.updateVertexCounters(initCorpus)
@@ -375,11 +373,9 @@ object LDA {
     println(s"terms in the corpus: $numTerms")
     val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdgeRDD(docs, storageLevel)
     initCorpus.persist(storageLevel)
-    initCorpus.edges.setName("edges-0")
     val vertices = initCorpus.vertices
     val numDocs = vertices.map(_._1).filter(isDocId).count()
     println(s"docs in the corpus: $numDocs")
-    docs.unpersist(blocking=false)
     val lda = new LDA(initCorpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS,
       algo, storageLevel)
     lda.updateVertexCounters(initCorpus)
@@ -487,10 +483,9 @@ object LDA {
       case _ =>
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
-    partCorpus.persist(storageLevel)
-    val reCorpus = resampleCorpus(partCorpus, numTopics)
+    val reCorpus = resampleCorpus(partCorpus, numTopics, storageLevel)
     val edges = reCorpus.edges
-    val numEdges = edges.persist(storageLevel).count()
+    val numEdges = edges.persist(storageLevel).setName("edges-0").count()
     println(s"edges in the corpus: $numEdges")
     initCorpus.unpersist(blocking=false)
     edges
@@ -537,10 +532,13 @@ object LDA {
     Edge(termId, genNewDocId(docId), topics)
   }
 
-  def resampleCorpus(corpus: Graph[TC, TA], numTopics: Int): Graph[TC, TA] = {
+  def resampleCorpus(corpus: Graph[TC, TA],
+    numTopics: Int,
+    storageLevel: StorageLevel): Graph[TC, TA] = {
     val conf = corpus.edges.context.getConf
     conf.get(cs_initStrategy, "random") match {
       case "sparse" =>
+        corpus.persist(storageLevel)
         val gen = new XORShiftRandom()
         val tMin = math.min(1000, numTopics / 100)
         val degGraph = GraphImpl(corpus.degrees, corpus.edges)
