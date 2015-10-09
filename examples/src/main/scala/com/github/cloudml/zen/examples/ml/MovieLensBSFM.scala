@@ -16,11 +16,9 @@
  */
 package com.github.cloudml.zen.examples.ml
 
-import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.recommendation.{BSFMRegression, BSFMModel, BSFMClassification, BSFM}
 import com.github.cloudml.zen.ml.util.SparkHacker
-import org.apache.spark.graphx.GraphXUtils
-import org.apache.spark.mllib.linalg.{SparseVector => SSV}
+import org.apache.spark.graphx2.GraphXUtils
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{Logging, SparkConf, SparkContext}
 import scopt.OptionParser

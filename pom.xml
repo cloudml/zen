@@ -62,7 +62,7 @@
     <hadoop.version>2.6.0</hadoop.version>
     <scala.macros.version>2.0.1</scala.macros.version>
     <java.version>1.6</java.version>
-    <scala.version>2.10.4</scala.version>
+    <scala.version>2.10.6</scala.version>
     <scala.binary.version>2.10</scala.binary.version>
     <commons.math3.version>3.4.1</commons.math3.version>
     <PermGen>64m</PermGen>
@@ -192,7 +192,7 @@
         <property><name>!scala-2.11</name></property>
       </activation>
       <properties>
-        <scala.version>2.10.4</scala.version>
+        <scala.version>2.10.6</scala.version>
         <scala.binary.version>2.10</scala.binary.version>
       </properties>
     </profile>
