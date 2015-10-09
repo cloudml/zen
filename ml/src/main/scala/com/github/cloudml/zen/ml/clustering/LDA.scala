@@ -142,7 +142,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
       Await.ready(all, 1.hour)
       es.shutdown()
 
-      results.par.filter(_ != null)
+      results.iterator.filter(_ != null)
     }))).partitionBy(vertices.partitioner.get)
 
     val partRDD = vertices.partitionsRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
@@ -232,7 +232,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
       LDAMetrics.outputPerplexity(this, println)
     }
     for (iter <- 1 to totalIter) {
-      println(s"Start Gibbs sampling (Iteration $iter/$totalIter)")
+      println(s"\nStart Gibbs sampling (Iteration $iter/$totalIter)")
       val startedAt = System.nanoTime()
       gibbsSampling(iter)
       if (pplx) {
@@ -248,7 +248,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
         println(s"Model saved after Iteration $iter")
       }
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      println(s"End Gibbs sampling (Iteration $iter/$totalIter) takes: $elapsedSeconds secs")
+      println(s"End Gibbs sampling (Iteration $iter/$totalIter) takes total: $elapsedSeconds secs")
     }
   }
 
