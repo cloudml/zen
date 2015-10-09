@@ -346,7 +346,7 @@ object LDAModel extends Loader[DistributedLDAModel] {
     } else {
       rdd.asInstanceOf[RDD[(Long, BV[Count])]]
     }
-    val storageLevel = StorageLevel.MEMORY_AND_DISK_SER
+    val storageLevel = StorageLevel.MEMORY_AND_DISK
     termCnts.persist(storageLevel)
     new DistributedLDAModel(termCnts, numTopics, numTerms, numTokens, alpha, beta, alphaAS, storageLevel)
   }

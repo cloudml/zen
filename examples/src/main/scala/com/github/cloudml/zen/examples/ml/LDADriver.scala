@@ -52,7 +52,7 @@ object LDADriver {
     val outputPath = options("outputpath")
     val checkpointPath = outputPath + ".checkpoint"
 
-    val slvlStr = options.getOrElse("storagelevel", "MEMORY_AND_DISK_SER").toUpperCase
+    val slvlStr = options.getOrElse("storagelevel", "MEMORY_AND_DISK").toUpperCase
     val storageLevel = StorageLevel.fromString(slvlStr)
 
     val conf = new SparkConf()
@@ -149,7 +149,7 @@ object LDADriver {
       "           -numThreads=<Int(*1)>\n" +
       "           -LDAAlgorithm=<*FastLDA|LightLDA>\n" +
       "           -accelMethod=<*Alias|FTree|Hybrid>\n" +
-      "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK_SER)>\n" +
+      "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK)>\n" +
       "           -partStrategy=<byTerm|byDoc|Edge2D|*DBH|VSDLP|BBR>\n" +
       "           -initStrategy=<*Random|Sparse|Split>\n" +
       "           -chkptInterval=<Int(*10)> (0 or negative disables checkpoint)\n" +
