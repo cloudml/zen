@@ -71,16 +71,18 @@ class StackedRBM(val innerRBMs: Array[RBM])
 object StackedRBM extends Logging {
   def train(
     data: RDD[SV],
+    batchSize: Int,
     numIteration: Int,
     topology: Array[Int],
     fraction: Double,
     learningRate: Double,
     weightCost: Double): StackedRBM = {
-    train(data, numIteration, new StackedRBM(topology), fraction, learningRate, weightCost)
+    train(data, batchSize, numIteration, new StackedRBM(topology), fraction, learningRate, weightCost)
   }
 
   def train(
     data: RDD[SV],
+    batchSize: Int,
     numIteration: Int,
     stackedRBM: StackedRBM,
     fraction: Double,
@@ -98,7 +100,7 @@ object StackedRBM extends Logging {
       val broadcast = data.context.broadcast(stackedRBM)
       val dataBatch = forward(data, broadcast, layer)
       val rbm = stackedRBM.innerRBMs(layer)
-      RBM.train(dataBatch, numIteration, rbm,
+      RBM.train(dataBatch, batchSize, numIteration, rbm,
         fraction, learningRate, weightCost)
       // broadcast.destroy(blocking = false)
     }

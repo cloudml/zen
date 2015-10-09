@@ -15,16 +15,23 @@
  * limitations under the License.
  */
 
-package com.github.cloudml.zen.ml.neuralNetwork
+package com.github.cloudml.zen.ml.optimization
 
-import com.github.cloudml.zen.ml.util.MnistDatasetSuite
-import org.scalatest.{FunSuite, Matchers}
 
-class RBMSuite extends FunSuite with MnistDatasetSuite with Matchers {
+import org.apache.spark.rdd.RDD
 
-  ignore("RBM") {
-    val (data, numVisible) = mnistTrainDataset(2500)
-    val rbm = RBM.train(data.map(_._1), 100, 1000, numVisible, 256, 0.1, 0.05, 0.0)
-  }
+import org.apache.spark.annotation.DeveloperApi
+import org.apache.spark.mllib.linalg.Vector
 
+/**
+ * :: DeveloperApi ::
+ * Trait for optimization problem solvers.
+ */
+@DeveloperApi
+trait Optimizer extends Serializable {
+
+  /**
+   * Solve the provided convex optimization problem.
+   */
+  def optimize(data: RDD[(Double, Vector)], initialWeights: Vector): Vector
 }

@@ -25,8 +25,8 @@ class DBNSuite extends FunSuite with MnistDatasetSuite with Matchers {
   ignore("DBN") {
     val (data, numVisible) = mnistTrainDataset(2500)
     val dbn = new DBN(Array(numVisible, 500, 10))
-    DBN.pretrain(data, 1000, dbn, 0.1, 0.05, 0.0)
-    DBN.finetune(data, 2000, dbn, 0.1, 0.1, 0.0)
+    DBN.pretrain(data, 100, 1000, dbn, 0.1, 0.05, 0.0)
+    DBN.finetune(data, 100, 2000, dbn, 0.1, 0.1, 0.0)
     val (dataTest, _) = mnistTrainDataset(5000, 2500)
     println("Error: " + MLP.error(dataTest, dbn.mlp, 100))
   }

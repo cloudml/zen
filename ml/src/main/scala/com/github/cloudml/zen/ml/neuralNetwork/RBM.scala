@@ -22,11 +22,11 @@ import java.util.Random
 import breeze.linalg.{Axis => BrzAxis, DenseMatrix => BDM, DenseVector => BDV, axpy => brzAxpy, sum => brzSum}
 import com.github.cloudml.zen.ml.linalg.BLAS
 import com.github.cloudml.zen.ml.util._
+import com.github.cloudml.zen.ml.optimization._
 import org.apache.commons.math3.random.JDKRandomGenerator
 import org.apache.spark.Logging
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.mllib.linalg.{DenseVector => SDV, Vector => SV}
-import org.apache.spark.mllib.optimization.Gradient
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 
@@ -150,6 +150,7 @@ class RBM(
 object RBM extends Logging {
   def train(
     data: RDD[SV],
+    batchSize: Int,
     numIteration: Int,
     numVisible: Int,
     numHidden: Int,
@@ -157,17 +158,18 @@ object RBM extends Logging {
     learningRate: Double,
     weightCost: Double): RBM = {
     val rbm = new RBM(numVisible, numHidden)
-    train(data, numIteration, rbm, fraction, learningRate, weightCost)
+    train(data, batchSize, numIteration, rbm, fraction, learningRate, weightCost)
   }
 
   def train(
     data: RDD[SV],
+    batchSize: Int,
     numIteration: Int,
     rbm: RBM,
     fraction: Double,
     learningRate: Double,
     weightCost: Double): RBM = {
-    runSGD(data, rbm, numIteration, fraction, learningRate, weightCost)
+    runSGD(data, rbm, batchSize, numIteration, fraction, learningRate, weightCost)
   }
 
   def runSGD(
@@ -180,22 +182,24 @@ object RBM extends Logging {
     learningRate: Double,
     weightCost: Double): RBM = {
     val rbm = new RBM(numVisible, numHidden)
-    runSGD(trainingRDD, rbm, maxNumIterations, fraction, learningRate, weightCost)
+    runSGD(trainingRDD, rbm, batchSize, maxNumIterations, fraction, learningRate, weightCost)
   }
 
   def runSGD(
     data: RDD[SV],
     rbm: RBM,
+    batchSize: Int,
     maxNumIterations: Int,
     fraction: Double,
     learningRate: Double,
     weightCost: Double): RBM = {
-    runSGD(data, rbm, maxNumIterations, fraction, learningRate, weightCost, 1 - 1e-2, 1e-8)
+    runSGD(data, rbm, batchSize, maxNumIterations, fraction, learningRate, weightCost, 1 - 1e-2, 1e-8)
   }
 
   def runSGD(
     data: RDD[SV],
     rbm: RBM,
+    batchSize: Int,
     maxNumIterations: Int,
     fraction: Double,
     learningRate: Double,
@@ -204,7 +208,7 @@ object RBM extends Logging {
     epsilon: Double): RBM = {
     val numVisible = rbm.numIn
     val numHidden = rbm.numOut
-    val gradient = new RBMGradient(rbm.numIn, rbm.numOut, rbm.dropoutRate)
+    val gradient = new RBMGradient(rbm.numIn, rbm.numOut, rbm.dropoutRate, batchSize)
     val updater = new RBMAdaDeltaUpdater(numVisible, numHidden, rho, epsilon)
     val optimizer = new GradientDescent(gradient, updater).
       setMiniBatchFraction(fraction).
@@ -301,7 +305,8 @@ object RBM extends Logging {
 private[ml] class RBMGradient(
   val numIn: Int,
   val numOut: Int,
-  val dropoutRate: Double) extends Gradient {
+  val dropoutRate: Double,
+  val batchSize: Int) extends Gradient {
   override def compute(data: SV, label: Double, weights: SV): (SV, Double) = {
     val (weight, visibleBias, hiddenBias) = RBM.vectorToStructure(numIn, numOut, weights)
     val rbm = new RBM(weight, visibleBias, hiddenBias, dropoutRate)
@@ -318,6 +323,31 @@ private[ml] class RBMGradient(
     val (grad, err) = compute(data, label, weights)
     BLAS.axpy(1, grad, cumGradient)
     err
+  }
+
+  override def compute(
+    iter: Iterator[(Double, SV)],
+    weights: SV,
+    cumGradient: SV): (Long, Double) = {
+    val (weight, visibleBias, hiddenBias) = RBM.vectorToStructure(numIn, numOut, weights)
+    val rbm = new RBM(weight, visibleBias, hiddenBias, dropoutRate)
+    var loss = 0D
+    var count = 0L
+    iter.map(_._2).grouped(batchSize).foreach { seq =>
+      val numCol = seq.size
+      val input: BDM[Double] = BDM.zeros(numIn, numCol)
+      seq.zipWithIndex.foreach { case (data, index) =>
+        assert(data.size == numIn)
+        input(::, index) := SparkUtils.toBreeze(data)
+      }
+      var (gradWeight, gradVisibleBias,
+      gradHiddenBias, error, _) = rbm.learn(input)
+      val w = RBM.structureToVector(gradWeight, gradVisibleBias, gradHiddenBias)
+      BLAS.axpy(1, w, cumGradient)
+      loss += error
+      count += numCol
+    }
+    (count, loss)
   }
 }
 

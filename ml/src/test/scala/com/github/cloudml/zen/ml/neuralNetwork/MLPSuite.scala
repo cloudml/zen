@@ -21,10 +21,11 @@ import com.github.cloudml.zen.ml.util.MnistDatasetSuite
 import org.scalatest.{FunSuite, Matchers}
 
 class MLPSuite extends FunSuite with MnistDatasetSuite with Matchers {
-  ignore("MLP") {
+  test("MLP") {
     val (data, numVisible) = mnistTrainDataset(5000)
     val topology = Array(numVisible, 500, 10)
-    val nn = MLP.train(data, 1000, topology, fraction = 0.02, learningRate = 0.1, weightCost = 0.0)
+    val nn = MLP.train(data, 20, 1000, topology, fraction = 0.02,
+      learningRate = 0.1, weightCost = 0.0)
 
     // val nn = MLP.runLBFGS(data, topology, 100, 4000, 1e-5, 0.001)
     // MLP.runSGD(data, nn, 37, 6000, 0.1, 0.5, 0.0)

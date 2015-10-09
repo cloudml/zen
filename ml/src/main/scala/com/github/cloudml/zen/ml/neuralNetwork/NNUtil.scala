@@ -17,19 +17,11 @@
 
 package com.github.cloudml.zen.ml.neuralNetwork
 
-import com.github.cloudml.zen.ml.linalg.BLAS
-import com.github.cloudml.zen.ml.util.SparkUtils._
-
-import java.util.Random
-
-import breeze.linalg.{DenseVector => BDV, DenseMatrix => BDM, Matrix => BM,
-max => brzMax, Axis => BrzAxis, sum => brzSum}
-
-import org.apache.spark.Logging
-import org.apache.spark.annotation.Experimental
-import org.apache.spark.mllib.linalg.{DenseMatrix => SDM, SparseMatrix => SSM, Matrix => SM,
-SparseVector => SSV, DenseVector => SDV, Vector => SV, Vectors, Matrices, BLAS}
+import breeze.linalg.{Axis => BrzAxis, DenseMatrix => BDM, DenseVector => BDV, Matrix => BM, max => brzMax, sum => brzSum}
+import breeze.numerics.{log => brzLog}
 import com.github.cloudml.zen.ml.util.Utils
+import org.apache.spark.annotation.Experimental
+import org.apache.spark.mllib.linalg.{DenseMatrix => SDM, DenseVector => SDV, Matrix => SM, SparseMatrix => SSM, SparseVector => SSV, Vector => SV}
 
 @Experimental
 object NNUtil {
@@ -94,8 +86,7 @@ object NNUtil {
   @inline def softplus(x: Double, expThreshold: Double = 64): Double = {
     if (x > expThreshold) {
       x
-    }
-    else if (x < -expThreshold) {
+    } else if (x < -expThreshold) {
       0
     } else {
       math.log1p(math.exp(x))
@@ -109,7 +100,6 @@ object NNUtil {
       val z = math.exp(y)
       (z - 1) / z
     }
-
   }
 
   @inline def tanh(x: Double): Double = {
@@ -154,7 +144,7 @@ object NNUtil {
     }
   }
 
-  def meanSquaredError(out: BM[Double], label: BM[Double]): Double = {
+  def meanSquaredError(out: BDM[Double], label: BDM[Double]): Double = {
     require(label.rows == out.rows)
     require(label.cols == out.cols)
     var diff = 0D
@@ -163,25 +153,12 @@ object NNUtil {
         diff += math.pow(label(i, j) - out(i, j), 2)
       }
     }
-    diff / out.rows
+    diff
   }
 
-  def crossEntropy(out: BM[Double], label: BM[Double]): Double = {
-    require(label.rows == out.rows)
-    require(label.cols == out.cols)
-    var cost = 0D
-    for (i <- 0 until out.rows) {
-      for (j <- 0 until out.cols) {
-        val a = label(i, j)
-        var b = out(i, j)
-        if (b == 0) {
-          b += 1e-15
-        } else if (b == 1D) {
-          b -= 1e-15
-        }
-        cost -= a * math.log(b) + (1 - a) * math.log1p(1 - b)
-      }
-    }
-    cost / out.rows
+  def crossEntropy(output: BDM[Double], label: BDM[Double]): Double = {
+    require(label.rows == output.rows)
+    require(label.cols == output.cols)
+    0 - brzSum(label :* brzLog(output))
   }
 }

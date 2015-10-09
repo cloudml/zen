@@ -22,7 +22,7 @@ import com.github.cloudml.zen.ml.util.SparkUtils
 import org.apache.spark.annotation.Experimental
 
 import org.apache.spark.mllib.linalg.{Vector => SV, DenseVector => SDV}
-import org.apache.spark.mllib.optimization.Updater
+import com.github.cloudml.zen.ml.optimization._
 
 @Experimental
 class MomentumUpdater(val momentum: Double) extends Updater {

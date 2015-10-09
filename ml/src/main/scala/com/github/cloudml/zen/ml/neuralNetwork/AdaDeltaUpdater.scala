@@ -21,7 +21,7 @@ import com.github.cloudml.zen.ml.linalg.BLAS
 import com.github.cloudml.zen.ml.util.SparkUtils
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.mllib.linalg.{Vector => SV, DenseVector => SDV}
-import org.apache.spark.mllib.optimization.Updater
+import com.github.cloudml.zen.ml.optimization._
 
 @Experimental
 private[ml] class AdaDeltaUpdater(

@@ -30,12 +30,12 @@ trait MnistDatasetSuite extends SharedSparkContext {
   def mnistTrainDataset(size: Int = 5000, dropN: Int = 0): (RDD[(SV, SV)], Int) = {
     val zenHome = sys.props.getOrElse("zen.test.home", fail("spark.test.home is not set!"))
     // http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz
-    val labelsFile = s"${zenHome}/data/mnist/train-labels-idx1-ubyte.gz"
+    val labelsFile = s"$zenHome/data/mnist/train-labels-idx1-ubyte.gz"
     // http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz
-    val imagesFile = s"${zenHome}/data/mnist/train-images-idx3-ubyte.gz"
+    val imagesFile = s"$zenHome/data/mnist/train-images-idx3-ubyte.gz"
     val minstReader = new MinstDatasetReader(labelsFile, imagesFile)
     val numVisible = minstReader.rows * minstReader.cols
-    val minstData = minstReader.drop(dropN).take(size).map { case m@MinstItem(label, data) =>
+    val minstData = minstReader.slice(dropN, dropN + size).map { case m@MinstItem(label, data) =>
       assert(label < 10)
       val y = BDV.zeros[Double](10)
       y := 0.1 / y.length

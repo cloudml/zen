@@ -23,10 +23,10 @@ import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, SparseVector => BS
 axpy => brzAxpy, max => brzMax, norm => brzNorm, sum => brzSum}
 import com.github.cloudml.zen.ml.linalg.BLAS
 import com.github.cloudml.zen.ml.util.SparkUtils
+import com.github.cloudml.zen.ml.optimization._
 import org.apache.spark.Logging
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, Vector => SV}
-import org.apache.spark.mllib.optimization.{Gradient, LBFGS, Updater}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 
@@ -176,56 +176,62 @@ class MLP(
 object MLP extends Logging {
   def train(
     data: RDD[(SV, SV)],
+    batchSize: Int,
     numIteration: Int,
     topology: Array[Int],
     fraction: Double,
     learningRate: Double,
     weightCost: Double): MLP = {
-    train(data, numIteration, new MLP(topology), fraction, learningRate, weightCost)
+    train(data, batchSize, numIteration, new MLP(topology), fraction, learningRate, weightCost)
   }
 
   def train(
     data: RDD[(SV, SV)],
+    batchSize: Int,
     numIteration: Int,
     nn: MLP,
     fraction: Double,
     learningRate: Double,
     weightCost: Double): MLP = {
-    runSGD(data, nn, numIteration, fraction, learningRate, weightCost)
+    runSGD(data, nn, batchSize, numIteration, fraction, learningRate, weightCost)
   }
 
   def runSGD(
     trainingRDD: RDD[(SV, SV)],
+    batchSize: Int,
     topology: Array[Int],
     maxNumIterations: Int,
     fraction: Double,
     learningRate: Double,
     weightCost: Double): MLP = {
     val nn = new MLP(topology)
-    runSGD(trainingRDD, nn, maxNumIterations, fraction, learningRate, weightCost)
+    runSGD(trainingRDD, nn, batchSize, maxNumIterations, fraction, learningRate, weightCost)
   }
 
   def runSGD(
     data: RDD[(SV, SV)],
     nn: MLP,
+    batchSize: Int,
     maxNumIterations: Int,
     fraction: Double,
     learningRate: Double,
     weightCost: Double): MLP = {
-    runSGD(data, nn, maxNumIterations, fraction, learningRate, weightCost, 1 - 1e-2, 1e-8)
+    runSGD(data, nn, batchSize, maxNumIterations, fraction, learningRate, weightCost, 1 - 1e-2, 1e-8)
   }
 
   def runSGD(
     data: RDD[(SV, SV)],
     mlp: MLP,
+    batchSize: Int,
     maxNumIterations: Int,
     fraction: Double,
     learningRate: Double,
     weightCost: Double,
     rho: Double,
     epsilon: Double): MLP = {
-    val gradient = new MLPGradient(mlp.topology, mlp.innerLayers.map(_.layerType), mlp.dropout)
-    val updater = new MLPAdaDeltaUpdater(mlp.topology, rho, epsilon)
+    val gradient = new MLPGradient(mlp.topology, mlp.innerLayers.map(_.layerType),
+      mlp.dropout, batchSize)
+    val updater = new MLPEquilibratedUpdater(mlp.topology, epsilon, 1e-2, 0)
     val optimizer = new GradientDescent(gradient, updater).
       setMiniBatchFraction(fraction).
       setNumIterations(maxNumIterations).
@@ -259,7 +265,7 @@ object MLP extends Logging {
     maxNumIterations: Int,
     convergenceTol: Double,
     weightCost: Double): MLP = {
-    val gradient = new MLPGradient(mlp.topology, mlp.innerLayers.map(_.layerType), mlp.dropout)
+    val gradient = new MLPGradient(mlp.topology, mlp.innerLayers.map(_.layerType), mlp.dropout, batchSize)
     val updater = new MLPUpdater(mlp.topology)
     val optimizer = new LBFGS(gradient, updater).
       setConvergenceTol(convergenceTol).
@@ -277,7 +283,7 @@ object MLP extends Logging {
   private[ml] def fromVector(mlp: MLP, weights: SV): Unit = {
     val structure = vectorToStructure(mlp.topology, weights)
     val layers: Array[Layer] = mlp.innerLayers
-    for (i <- 0 until structure.length) {
+    for (i <- structure.indices) {
       val (weight, bias) = structure(i)
       val layer = layers(i)
       layer.weight := weight
@@ -366,7 +372,7 @@ object MLP extends Logging {
     }
   }
 
-  private def initLayers(topology: Array[Int]): Array[Layer] = {
+  private[ml] def initLayers(topology: Array[Int]): Array[Layer] = {
     val numLayer = topology.length - 1
     val layers = new Array[Layer](numLayer)
     for (layer <- (0 until numLayer).reverse) {
@@ -378,12 +384,25 @@ object MLP extends Logging {
       else {
         new ReLuLayer(numIn, numOut)
       }
-      println(s"layers($layer) = ${numIn} * ${numOut}")
+      println(s"layers($layer) = $numIn * $numOut")
     }
     layers
   }
 
-  private def initDropout(numLayer: Int, d: Array[Double]): Array[Double] = {
+
+  private[ml] def initLayers(
+    params: Array[(BDM[Double], BDV[Double])],
+    layerTypes: Array[String]): Array[Layer] = {
+    val numLayer = params.length
+    val layers = new Array[Layer](numLayer)
+    for (layer <- 0 until numLayer) {
+      val (weight, bias) = params(layer)
+      layers(layer) = Layer.initializeLayer(weight, bias, layerTypes(layer))
+    }
+    layers
+  }
+
+  private[ml] def initDropout(numLayer: Int, d: Array[Double]): Array[Double] = {
     require(d.length > 0)
     val dropout = new Array[Double](numLayer)
     for (layer <- 0 until numLayer) {
@@ -398,18 +417,6 @@ object MLP extends Logging {
     dropout
   }
 
-  private[ml] def initLayers(
-    params: Array[(BDM[Double], BDV[Double])],
-    layerTypes: Array[String]): Array[Layer] = {
-    val numLayer = params.length
-    val layers = new Array[Layer](numLayer)
-    for (layer <- 0 until numLayer) {
-      val (weight, bias) = params(layer)
-      layers(layer) = Layer.initializeLayer(weight, bias, layerTypes(layer))
-    }
-    layers
-  }
-
   private[ml] def l2(
     topology: Array[Int],
     weightsOld: SV,
@@ -421,7 +428,7 @@ object MLP extends Logging {
       var norm = 0D
       val nn = MLP.vectorToStructure(topology, weightsOld)
       val grads = MLP.vectorToStructure(topology, gradient)
-      for (layer <- 0 until nn.length) {
+      for (layer <- nn.indices) {
         brzAxpy(regParam, nn(layer)._1, grads(layer)._1)
         for (i <- 0 until nn(layer)._1.rows) {
           for (j <- 0 until nn(layer)._1.cols) {
@@ -440,7 +447,8 @@ object MLP extends Logging {
 private[ml] class MLPGradient(
   val topology: Array[Int],
   val layerTypes: Array[String],
-  val dropoutRate: Array[Double]) extends Gradient {
+  val dropoutRate: Array[Double],
+  val batchSize: Int) extends Gradient {
 
   override def compute(data: SV, label: Double, weights: SV): (SV, Double) = {
     val layers = MLP.initLayers(MLP.vectorToStructure(topology, weights), layerTypes)
@@ -463,6 +471,35 @@ private[ml] class MLPGradient(
     val (grad, err) = compute(data, label, weights)
     BLAS.axpy(1, grad, cumGradient)
     err
+  }
+
+  override def compute(
+    iter: Iterator[(Double, SV)],
+    weights: SV,
+    cumGradient: SV): (Long, Double) = {
+    val layers = MLP.initLayers(MLP.vectorToStructure(topology, weights), layerTypes)
+    val mlp = new MLP(layers, dropoutRate)
+    val numIn = mlp.numInput
+    val numLabel = mlp.numOut
+    var loss = 0D
+    var count = 0L
+    iter.map(_._2).grouped(batchSize).foreach { seq =>
+      val numCol = seq.size
+      val input = BDM.zeros[Double](numIn, numCol)
+      val label = BDM.zeros[Double](numLabel, numCol)
+
+      seq.zipWithIndex.foreach { case (data, index) =>
+        assert(data.size == numIn + numLabel)
+        val brzVector = SparkUtils.toBreeze(data)
+        input(::, index) := brzVector(0 until numIn)
+        label(::, index) := brzVector(numIn until numIn + numLabel)
+      }
+      val (grads, error, _) = mlp.computeGradient(input, label)
+      BLAS.axpy(1, MLP.structureToVector(grads), cumGradient)
+      loss += error
+      count += numCol
+    }
+    (count, loss)
   }
 }
 
@@ -496,6 +533,23 @@ private[ml] class MLPAdaGradUpdater(
   }
 }
 
+@Experimental
+private[ml] class MLPEquilibratedUpdater(
+  val topology: Array[Int],
+  _epsilon: Double = 1e-6,
+  _gamma: Double = 1e-2,
+  _momentum: Double = 0.9) extends EquilibratedUpdater(_epsilon, _gamma, _momentum) {
+  override protected def l2(
+    weightsOld: SV,
+    gradient: SV,
+    stepSize: Double,
+    iter: Int,
+    regParam: Double): Double = {
+    MLP.l2(topology, weightsOld, gradient, stepSize, iter, regParam)
+  }
+}
+
+@Experimental
 private[ml] class MLPAdaDeltaUpdater(
   val topology: Array[Int],
   rho: Double = 0.99,
@@ -511,6 +565,7 @@ private[ml] class MLPAdaDeltaUpdater(
   }
 }
 
+@Experimental
 private[ml] class MLPMomentumUpdater(
   val topology: Array[Int],
   momentum: Double = 0.9) extends MomentumUpdater(momentum) {

@@ -15,17 +15,15 @@
  * limitations under the License.
  */
 
-package com.github.cloudml.zen.ml.neuralNetwork
-
-import breeze.linalg.{DenseVector => BDV}
-import com.github.cloudml.zen.ml.util.SparkUtils
-import org.apache.spark.Logging
-import org.apache.spark.annotation.{DeveloperApi, Experimental}
-import org.apache.spark.mllib.linalg.{Vector, Vectors}
-import org.apache.spark.mllib.optimization._
-import org.apache.spark.rdd.RDD
+package com.github.cloudml.zen.ml.optimization
 
 import scala.collection.mutable.ArrayBuffer
+
+import com.github.cloudml.zen.ml.linalg.BLAS
+import org.apache.spark.annotation.{Experimental, DeveloperApi}
+import org.apache.spark.Logging
+import org.apache.spark.rdd.RDD
+import org.apache.spark.mllib.linalg.{Vectors, Vector}
 
 /**
  * Class used to solve an optimization problem using Gradient Descent.
@@ -181,22 +179,24 @@ object GradientDescent extends Logging {
      * if it's L2 updater; for L1 updater, the same logic is followed.
      */
     var regVal = updater.compute(
-      weights, Vectors.dense(new Array[Double](weights.size)), 0, 1, regParam)._2
+      weights, Vectors.zeros(weights.size), 0, 1, regParam)._2
 
     for (i <- 1 to numIterations) {
       val bcWeights = data.context.broadcast(weights)
       // Sample a subset (fraction miniBatchFraction) of the total data
       // compute and sum up the subgradients on this subset (this is one map-reduce)
       val (gradientSum, lossSum, miniBatchSize) = data.sample(false, miniBatchFraction, 42 + i)
-        .treeAggregate((BDV.zeros[Double](n), 0.0, 0L))(
+        .mapPartitions(t => Iterator(t))
+        .treeAggregate((Vectors.zeros(n), 0.0, 0L))(
           seqOp = (c, v) => {
-            // c: (grad, loss, count), v: (label, features)
-            val l = gradient.compute(v._2, v._1, bcWeights.value, SparkUtils.fromBreeze(c._1))
-            (c._1, c._2 + l, c._3 + 1)
+            // c: (grad, loss, count), v: Iterator[(label, features)],l: (count, loss)
+            val l = gradient.compute(v, bcWeights.value, c._1)
+            (c._1, c._2 + l._2, c._3 + l._1)
           },
           combOp = (c1, c2) => {
             // c: (grad, loss, count)
-            (c1._1 += c2._1, c1._2 + c2._2, c1._3 + c2._3)
+            BLAS.axpy(1.0, c1._1, c2._1)
+            (c2._1, c1._2 + c2._2, c1._3 + c2._3)
           })
 
       if (miniBatchSize > 0) {
@@ -205,9 +205,9 @@ object GradientDescent extends Logging {
          * and regVal is the regularization value computed in the previous iteration as well.
          */
         stochasticLossHistory.append(lossSum / miniBatchSize + regVal)
-        println(s"loss $i: ${lossSum / miniBatchSize + regVal}")
-        val update = updater.compute(
-          weights, SparkUtils.fromBreeze(gradientSum / miniBatchSize.toDouble), stepSize, i, regParam)
+        println(s"loss $i: ${lossSum / miniBatchSize}")
+        BLAS.scal(1.0 / miniBatchSize, gradientSum)
+        val update = updater.compute(weights, gradientSum, stepSize, i, regParam)
         weights = update._1
         regVal = update._2
       } else {
