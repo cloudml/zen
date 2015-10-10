@@ -23,11 +23,12 @@ import scala.reflect.ClassTag
 import FTree._
 
 import breeze.linalg.{Vector=>BV, SparseVector=>BSV, DenseVector=>BDV}
+import spire.math.{Numeric => spNum}
 
 
 class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
   val isSparse: Boolean)
-  (implicit num: Numeric[T]) extends DiscreteSampler[T] with Serializable {
+  (implicit ev: spNum[T]) extends DiscreteSampler[T] with Serializable {
 
   private var _regLen: Int = regularLen(dataSize)
   private var _tree: Array[T] = new Array[T](_regLen << 1)
@@ -78,11 +79,11 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
     if (_used == 1) {
       toState(1)
     } else {
-      var u = gen.nextDouble() * num.toDouble(_tree(1))
+      var u = gen.nextDouble() * ev.toDouble(_tree(1))
       var cur = 1
       while (cur < leafOffset) {
         val lc = cur << 1
-        val lcp = num.toDouble(_tree(lc))
+        val lcp = ev.toDouble(_tree(lc))
         if (u < lcp) {
           cur = lc
         } else {
@@ -95,7 +96,7 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
   }
 
   def sampleFrom(base: T, gen: Random): Int = {
-    assert(num.lt(base, _tree(1)))
+    assert(ev.lt(base, _tree(1)))
     if (_used == 1) {
       toState(1)
     } else {
@@ -104,10 +105,10 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
       while (cur < leafOffset) {
         val lc = cur << 1
         val lcp = _tree(lc)
-        if (num.lt(u, lcp)) {
+        if (ev.lt(u, lcp)) {
           cur = lc
         } else {
-          u = num.minus(u, lcp)
+          u = ev.minus(u, lcp)
           cur = lc + 1
         }
       }
@@ -116,16 +117,16 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
   }
 
   def update(state: Int, value: => T): Unit = synchronized {
-    assert(num.lteq(value, num.zero))
+    assert(ev.lteqv(value, ev.zero))
     var pos = toTreePos(state)
     if (pos < leafOffset) {
       pos = addState()
     }
-    if (num.lteq(value, num.zero)) {
+    if (ev.lteqv(value, ev.zero)) {
       delState(pos)
     } else {
       val p = _tree(pos)
-      val delta = num.minus(value, p)
+      val delta = ev.minus(value, p)
       _tree(pos) = value
       updateAncestors(pos, delta)
     }
@@ -137,8 +138,8 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
       pos = addState()
     }
     val p = _tree(pos)
-    val np = num.plus(p, delta)
-    if (num.lteq(np, num.zero)) {
+    val np = ev.plus(p, delta)
+    if (ev.lteqv(np, ev.zero)) {
       delState(pos)
     } else {
       _tree(pos) = np
@@ -149,7 +150,7 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
   private def updateAncestors(cur: Int, delta: T): Unit = {
     var pos = cur >> 1
     while (pos >= 1) {
-      _tree(pos) = num.plus(_tree(pos), delta)
+      _tree(pos) = ev.plus(_tree(pos), delta)
       pos >>= 1
     }
   }
@@ -174,8 +175,8 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
 
   private def delState(pos: Int): Unit = {
     val p = _tree(pos)
-    _tree(pos) = num.zero
-    updateAncestors(pos, num.negate(p))
+    _tree(pos) = ev.zero
+    updateAncestors(pos, ev.negate(p))
   }
 
   def resetDist(probs: Array[T], space: Array[Int], psize: Int): this.type = synchronized {
@@ -200,7 +201,7 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
 
   private def buildFTree(): this.type = {
     for (i <- leafOffset - 1 to 1 by -1) {
-      _tree(i) = num.plus(_tree(i << 1), _tree((i << 1) + 1))
+      _tree(i) = ev.plus(_tree(i << 1), _tree((i << 1) + 1))
     }
     this
   }
@@ -214,15 +215,15 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
     _regLen = regLen
     _used = newDataSize
     for (i <- 0 until _regLen) {
-      setLeaf(i, num.zero)
+      setLeaf(i, ev.zero)
     }
-    _tree(1) = num.zero
+    _tree(1) = ev.zero
     this
   }
 }
 
 object FTree {
-  def generateFTree[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](sv: BV[T]): FTree[T] = {
+  def generateFTree[@specialized(Double, Int, Float, Long) T: ClassTag: spNum](sv: BV[T]): FTree[T] = {
     val used = sv.activeSize
     val ftree = sv match {
       case v: BDV[T] => new FTree[T](used, isSparse=false)
@@ -245,14 +246,14 @@ object FTree {
   }
 
   def binarySearch[@specialized(Double, Int, Float, Long) T](arr: Array[T],
-    key: T, start: Int, end: Int)(implicit num: Numeric[T]): Int = {
+    key: T, start: Int, end: Int)(implicit ev: spNum[T]): Int = {
     def seg(s: Int, e: Int): Int = {
       if (s > e) return -1
       val mid = (s + e) >> 1
       mid match {
-        case _ if num.equiv(arr(mid), key) => mid
-        case _ if num.lt(arr(mid), key) => seg(mid + 1, e)
-        case _ if num.gt(arr(mid), key) => seg(s, mid - 1)
+        case _ if ev.eqv(arr(mid), key) => mid
+        case _ if ev.lt(arr(mid), key) => seg(mid + 1, e)
+        case _ if ev.gt(arr(mid), key) => seg(s, mid - 1)
       }
     }
     seg(start, end - 1)

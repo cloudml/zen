@@ -21,15 +21,17 @@ import java.util.Random
 import scala.reflect.ClassTag
 
 import breeze.linalg.{Vector => BV}
+import com.github.fommil.netlib.BLAS.{getInstance => blas}
+import spire.math.{Numeric => spNum}
 
 
 class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: Int)
-  (implicit num: Numeric[T]) extends DiscreteSampler[T] with Serializable {
+  (implicit ev: spNum[T]) extends DiscreteSampler[T] with Serializable {
   private var _l: Array[Int] = new Array[Int](initUsed)
   private var _h: Array[Int] = new Array[Int](initUsed)
   private var _p: Array[T] = new Array[T](initUsed)
   private var _used = initUsed
-  private var _norm = num.zero
+  private var _norm = ev.zero
 
   def l: Array[Int] = _l
 
@@ -51,7 +53,7 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
     } else {
       val bin = gen.nextInt(_used)
       val prob = _p(bin)
-      if (gen.nextDouble() * num.toDouble(_norm) < num.toDouble(prob)) {
+      if (gen.nextDouble() * ev.toDouble(_norm) < ev.toDouble(prob)) {
         _l(bin)
       } else {
         _h(bin)
@@ -60,13 +62,13 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
   }
 
   def sampleFrom(base: T, gen: Random): Int = {
-    assert(num.lt(base, _norm))
+    // assert(ev.lt(base, _norm))
     if (_used == 1) {
       _l(0)
     } else {
       val bin = gen.nextInt(_used)
       val prob = _p(bin)
-      if (num.lt(base, prob)) {
+      if (ev.lt(base, prob)) {
         _l(bin)
       } else {
         _h(bin)
@@ -81,11 +83,29 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
   def resetDist(probs: Array[T], space: Array[Int], psize: Int): this.type = synchronized {
     // @inline def isClose(a: Double, b: Double): Boolean = math.abs(a - b) <= (1e-8 + math.abs(a) * 1e-6)
     reset(psize)
-    var sum = num.zero
-    var i = 0
-    while (i < psize) {
-      sum = num.plus(sum, probs(i))
-      i += 1
+    var sum = ev.zero
+    sum match {
+      case _: Double =>
+        val dprobs = probs.asInstanceOf[Array[Double]]
+        val dscale = psize.toDouble
+        val dsum = blas.dasum(psize, dprobs, 1)
+        sum = ev.fromDouble(dsum)
+        blas.dscal(psize, dscale, dprobs, 1)
+      case _: Float =>
+        val fprobs = probs.asInstanceOf[Array[Float]]
+        val fscale = psize.toFloat
+        val fsum = blas.sasum(psize, fprobs, 1)
+        sum = ev.fromFloat(fsum)
+        blas.sscal(psize, fscale, fprobs, 1)
+      case _ =>
+        val scale = ev.fromInt(psize)
+        var i = 0
+        while (i < psize) {
+          val prob = probs(i)
+          sum = ev.plus(sum, prob)
+          probs(i) = ev.times(prob, scale)
+          i += 1
+        }
     }
     var ls = 0
     var le = 0
@@ -93,12 +113,11 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
     val sq = new Array[Int](psize)
     val pq = new Array[T](psize)
     var qi = 0
-    val scale = num.fromInt(psize)
-    i = 0
+    var i = 0
     while (i < psize) {
-      val prob = num.times(probs(i), scale)
+      val prob = probs(i)
       val state = if (space == null) i else space(i)
-      if (num.lt(prob, sum)) {
+      if (ev.lt(prob, sum)) {
         _l(le) = state
         _p(le) = prob
         le += 1
@@ -113,7 +132,7 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
     while (i < qi) {
       val state = sq(i)
       val prob = pq(i)
-      if (num.lt(prob, sum)) {
+      if (ev.lt(prob, sum)) {
         _l(le) = state
         _p(le) = prob
         le += 1
@@ -122,10 +141,10 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
         _h(ls) = state
         val split = _p(ls)
         ls += 1
-        val prest = num.minus(prob, num.minus(sum, split))
+        val prest = ev.minus(prob, ev.minus(sum, split))
         pq(i) = prest
       } else {
-        // assert(isClose(num.toDouble(prob), num.toDouble(sum)))
+        // assert(isClose(ev.toDouble(prob), ev.toDouble(sum)))
         he -= 1
         _l(he) = state
         _h(he) = state
@@ -149,7 +168,7 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
       _p = new Array[T](newSize)
     }
     _used = newSize
-    _norm = num.zero
+    _norm = ev.zero
     this
   }
 
@@ -160,7 +179,7 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
 }
 
 object AliasTable {
-  def generateAlias[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](sv: BV[T]): AliasTable[T] = {
+  def generateAlias[@specialized(Double, Int, Float, Long) T: ClassTag: spNum](sv: BV[T]): AliasTable[T] = {
     val used = sv.activeSize
     val table = new AliasTable[T](used)
     table.resetDist(sv.activeIterator, used)

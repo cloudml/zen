@@ -23,10 +23,11 @@ import scala.reflect.ClassTag
 import CumulativeDist._
 
 import breeze.linalg.{Vector => BV}
+import spire.math.{Numeric => spNum}
 
 
 class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int)
-  (implicit num: Numeric[T]) extends DiscreteSampler[T] with Serializable {
+  (implicit ev: spNum[T]) extends DiscreteSampler[T] with Serializable {
 
   private var _cdf = new Array[T](dataSize)
   private var _space = new Array[Int](dataSize)
@@ -40,7 +41,7 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSiz
 
   def norm: T = {
     if (_used == 0) {
-      num.zero
+      ev.zero
     } else {
       _cdf(_used - 1)
     }
@@ -50,14 +51,14 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSiz
     if (_used == 1) {
       _space(0)
     } else {
-      val u = gen.nextDouble() * num.toDouble(_cdf(_used - 1))
-      val i = binarySelect(_cdf.map(num.toDouble), u, 0, _used, greater=true)
+      val u = gen.nextDouble() * ev.toDouble(_cdf(_used - 1))
+      val i = binarySelect(_cdf.map(ev.toDouble), u, 0, _used, greater=true)
       _space(i)
     }
   }
 
   def sampleFrom(base: T, gen: Random): Int = {
-    assert(num.lt(base, _cdf(_used - 1)))
+    // assert(ev.lt(base, _cdf(_used - 1)))
     if (_used == 1) {
       _space(0)
     } else {
@@ -76,9 +77,9 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSiz
 
   def resetDist(distIter: Iterator[(Int, T)], psize: Int): this.type = synchronized {
     reset(psize)
-    var sum = num.zero
+    var sum = ev.zero
     for (((state, prob), i) <- distIter.zipWithIndex) {
-      sum = num.plus(sum, prob)
+      sum = ev.plus(sum, prob)
       _cdf(i) = sum
       _space(i) = state
     }
@@ -88,10 +89,10 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSiz
   // don't use this method unless you know what you are doing
   def directReset(vf: Int => T, used: Int, space: Array[Int]): this.type = synchronized {
     _used = used
-    var sum = num.zero
+    var sum = ev.zero
     var i = 0
     while (i < used) {
-      sum = num.plus(sum, vf(i))
+      sum = ev.plus(sum, vf(i))
       _cdf(i) = sum
       i += 1
     }
@@ -112,15 +113,14 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSiz
 }
 
 object CumulativeDist {
-  def generateCdf[@specialized(Double, Int, Float, Long) T: ClassTag: Numeric](sv: BV[T]): CumulativeDist[T] = {
+  def generateCdf[@specialized(Double, Int, Float, Long) T: ClassTag: spNum](sv: BV[T]): CumulativeDist[T] = {
     val used = sv.activeSize
     val cdf = new CumulativeDist[T](used)
     cdf.resetDist(sv.activeIterator, used)
   }
 
-  def binarySelect[@specialized(Double, Int, Float, Long) T](arr: Array[T],
-    key: T, begin: Int, end: Int, greater: Boolean)
-    (implicit num: Numeric[T]): Int = {
+  def binarySelect[@specialized(Double, Int, Float, Long) T](arr: Array[T], key: T,
+    begin: Int, end: Int, greater: Boolean)(implicit ev: spNum[T]): Int = {
     if (begin == end) {
       return if (greater) end else begin - 1
     }
@@ -131,16 +131,16 @@ object CumulativeDist {
     while (b <= e) {
       mid = (e + b) >> 1
       val v = arr(mid)
-      if (num.lt(v, key)) {
+      if (ev.lt(v, key)) {
         b = mid + 1
-      } else if (num.gt(v, key)) {
+      } else if (ev.gt(v, key)) {
         e = mid - 1
       } else {
         return mid
       }
     }
     val v = arr(mid)
-    mid = if ((greater && num.gteq(v, key)) || (!greater && num.lteq(v, key))) {
+    mid = if ((greater && ev.gteqv(v, key)) || (!greater && ev.lteqv(v, key))) {
       mid
     } else if (greater) {
       mid + 1
@@ -148,13 +148,13 @@ object CumulativeDist {
       mid - 1
     }
 
-    if (greater) {
-      if (mid < end) assert(num.gteq(arr(mid), key))
-      if (mid > 0) assert(num.lteq(arr(mid - 1), key))
-    } else {
-      if (mid > 0) assert(num.lteq(arr(mid), key))
-      if (mid < end - 1) assert(num.gteq(arr(mid + 1), key))
-    }
+//    if (greater) {
+//      if (mid < end) assert(ev.gteqv(arr(mid), key))
+//      if (mid > 0) assert(ev.lteqv(arr(mid - 1), key))
+//    } else {
+//      if (mid > 0) assert(ev.lteqv(arr(mid), key))
+//      if (mid < end - 1) assert(ev.gteqv(arr(mid + 1), key))
+//    }
     mid
   }
 }

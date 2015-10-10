@@ -23,7 +23,6 @@ import scala.concurrent._
 import scala.concurrent.duration._
 
 import LDADefines._
-import LDAMetrics._
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, convert, sum}
 
@@ -32,7 +31,7 @@ trait LDAMetrics {
   def measure(): Unit
 }
 
-class LDAPerplexity(lda: LDA) extends LDAMetrics {
+class LDAPerplexity(lda: LDA) extends LDAMetrics with Serializable {
   var pplx = 0D
   var wpplx = 0D
   var dpplx = 0D
@@ -125,21 +124,6 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics {
     dpplx = math.exp(-dllht.par.sum / numTokens)
   }
 
-  def getPerplexity: Double = pplx
-
-  def getWordPerplexity: Double = wpplx
-
-  def getDocPerplexity: Double = dpplx
-}
-
-object LDAMetrics {
-  def outputPerplexity(lda: LDA, writer: String => Unit): Unit = {
-    val pplx = new LDAPerplexity(lda)
-    pplx.measure()
-    val o = s"perplexity=${pplx.getPerplexity}, word pplx=${pplx.getWordPerplexity}, doc pplx=${pplx.getDocPerplexity}"
-    writer(o)
-  }
-
   private[ml] def calcWSparseSum(counter: TC,
     alphaK_denoms: BDV[Double],
     numTopics: Int): Double = {
@@ -203,5 +187,20 @@ object LDAMetrics {
         }
     }
     bdv
+  }
+
+  def getPerplexity: Double = pplx
+
+  def getWordPerplexity: Double = wpplx
+
+  def getDocPerplexity: Double = dpplx
+}
+
+object LDAMetrics {
+  def outputPerplexity(lda: LDA, writer: String => Unit): Unit = {
+    val pplx = new LDAPerplexity(lda)
+    pplx.measure()
+    val o = s"perplexity=${pplx.getPerplexity}, word pplx=${pplx.getWordPerplexity}, doc pplx=${pplx.getDocPerplexity}"
+    writer(o)
   }
 }

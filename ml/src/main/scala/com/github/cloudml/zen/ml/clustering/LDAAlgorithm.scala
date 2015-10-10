@@ -25,7 +25,6 @@ import scala.concurrent._
 import scala.concurrent.duration._
 
 import LDADefines._
-import LDAAlgorithm._
 import com.github.cloudml.zen.ml.util._
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
@@ -44,9 +43,7 @@ abstract class LDAAlgorithm extends Serializable {
     alpha: Double,
     alphaAS: Double,
     beta: Double): Graph[TC, TA]
-}
 
-object LDAAlgorithm {
   private[ml] def resampleTable[@specialized(Double, Int, Float, Long) T](gen: Random,
     table: AliasTable[T],
     state: Int,
@@ -67,8 +64,6 @@ object LDAAlgorithm {
 }
 
 class FastLDA extends LDAAlgorithm {
-  import FastLDA._
-
   override private[ml] def sampleGraph(corpus: Graph[TC, TA],
     topicCounters: BDV[Count],
     seed: Int,
@@ -155,9 +150,7 @@ class FastLDA extends LDAAlgorithm {
     })), preservesPartitioning=true)
     GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
   }
-}
 
-object FastLDA {
   private[ml] def tokenSampling(gen: Random,
     t: DiscreteSampler[Double],
     w: DiscreteSampler[Double],
@@ -266,8 +259,6 @@ object FastLDA {
 }
 
 class LightLDA extends LDAAlgorithm {
-  import LightLDA._
-
   override private[ml] def sampleGraph(corpus: Graph[TC, TA],
     topicCounters: BDV[Count],
     seed: Int,
@@ -383,9 +374,7 @@ class LightLDA extends LDAAlgorithm {
     })), preservesPartitioning=true)
     GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
   }
-}
 
-object LightLDA {
   /**
    * Composition of both Gibbs sampler and Metropolis Hastings sampler
    * time complexity for each sampling is: O(1)

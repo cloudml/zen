@@ -22,7 +22,6 @@ import java.lang.ref.SoftReference
 import java.util.Random
 
 import LDADefines._
-import FastLDA._
 import com.github.cloudml.zen.ml.util._
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum}
@@ -64,7 +63,7 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
     SoftReference[AliasTable[Double]]](numTerms / 2)
   @transient lazy val global = {
     val table = new AliasTable[Double](numTopics)
-    tDense(table, alphaK_denoms, beta, numTopics)
+    algo.tDense(table, alphaK_denoms, beta, numTopics)
   }
 
   private def collectTopicCounters(): BDV[Count] = {
@@ -123,14 +122,14 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
         case v: BDV[Count] => v
         case v: BSV[Count] => toBDV(v)
       }
-      val termBeta_denoms = calcTermBetaDenoms(orgTermTopics, denoms, beta_denoms, numTopics)
+      val termBeta_denoms = algo.calcTermBetaDenoms(orgTermTopics, denoms, beta_denoms, numTopics)
       val topic = topics(i)
       docTopics(topic) -= 1
       if (docTopics(topic) == 0) {
         docTopics.compact()
       }
-      dSparse(docCdf, docTopics, termBeta_denoms)
-      val newTopic = tokenSampling(gen, global, termDist, docCdf, termTopics, topic)
+      algo.dSparse(docCdf, docTopics, termBeta_denoms)
+      val newTopic = algo.tokenSampling(gen, global, termDist, docCdf, termTopics, topic)
       topics(i) = newTopic
       docTopics(newTopic) += 1
     }
@@ -145,7 +144,7 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
     var w = cacheMap(termId)
     if (w == null || w.get() == null) {
       val table = new AliasTable[Double](termTopics.activeSize)
-      wSparse(table, alphaK_denoms, termTopics)
+      algo.wSparse(table, alphaK_denoms, termTopics)
       w = new SoftReference(table)
       cacheMap.update(termId, w)
     }
