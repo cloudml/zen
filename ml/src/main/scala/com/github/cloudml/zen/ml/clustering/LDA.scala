@@ -237,7 +237,8 @@ class LDA(@transient var corpus: Graph[TC, TA],
       println("Before Gibbs sampling:")
       LDAMetrics.outputPerplexity(this, println)
     }
-    for (iter <- 1 to totalIter) {
+    var iter = 1
+    while (iter <= totalIter) {
       println(s"\nStart Gibbs sampling (Iteration $iter/$totalIter)")
       val startedAt = System.nanoTime()
       gibbsSampling(iter)
@@ -253,6 +254,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
         model.save(sc, savPath.toString, isTransposed=true)
         println(s"Model saved after Iteration $iter")
       }
+      iter += 1
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
       println(s"End Gibbs sampling (Iteration $iter/$totalIter) takes total: $elapsedSeconds secs")
     }
@@ -287,11 +289,13 @@ class LDA(@transient var corpus: Graph[TC, TA],
     def vertices = corpus.vertices.filter(t => filter(t._1))
     var countersSum = vertices
     countersSum.persist(storageLevel)
-    for (iter <- 1 to runIter) {
+    var iter = 1
+    while (iter <= runIter) {
       println(s"Save TopicModel (Iteration $iter/$runIter)")
       gibbsSampling(iter, inferenceOnly)
       countersSum = countersSum.innerZipJoin(vertices)((_, a, b) => a :+= b)
       countersSum.persist(storageLevel)
+      iter += 1
     }
     countersSum
   }
@@ -442,8 +446,10 @@ object LDA {
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
     val lda = LDA(computedModel, docs, algo)
-    for (iter <- 1 to 15) {
+    var iter = 1
+    while (iter <= 15) {
       lda.gibbsSampling(iter, inferenceOnly=true)
+      iter += 1
     }
     lda.runGibbsSampling(totalIter)
     lda.toLDAModel()

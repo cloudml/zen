@@ -74,9 +74,9 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
     i + leafOffset
   }
 
-  def sampleRandom(gen: Random): Int = {
-    val u = gen.nextDouble() * ev.toDouble(norm)
-    sampleFrom(ev.fromDouble(u), gen)
+  def sampleRandom(gen: Random)(implicit gev: spNum[T]): Int = {
+    val u = gen.nextDouble() * gev.toDouble(_tree(1))
+    sampleFrom(gev.fromDouble(u), gen)
   }
 
   def sampleFrom(base: T, gen: Random): Int = {
@@ -163,34 +163,40 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
     updateAncestors(pos, ev.negate(p))
   }
 
-  def resetDist(probs: Array[T], space: Array[Int], psize: Int): this.type = synchronized {
+  def resetDist(probs: Array[T], space: Array[Int], psize: Int): FTree[T] = synchronized {
     resetDist(space.iterator.zip(probs.iterator), psize)
   }
 
-  def resetDist(distIter: Iterator[(Int, T)], psize: Int): this.type = synchronized {
+  def resetDist(distIter: Iterator[(Int, T)], psize: Int): FTree[T] = synchronized {
     reset(psize)
     if (!isSparse) {
-      for ((i, prob) <- distIter) {
+      while (distIter.hasNext) {
+        val (i, prob) = distIter.next()
         setLeaf(i, prob)
       }
     } else {
-      for (((state, prob), i) <- distIter.zipWithIndex) {
+      var i = 0
+      while (i < psize) {
+        val (state, prob) = distIter.next()
         setLeaf(i, prob)
         _space(i) = state
+        i += 1
       }
     }
     buildFTree()
     this
   }
 
-  private def buildFTree(): this.type = {
-    for (i <- leafOffset - 1 to 1 by -1) {
+  private def buildFTree(): FTree[T] = {
+    var i = leafOffset - 1
+    while (i >= 1) {
       _tree(i) = ev.plus(_tree(i << 1), _tree((i << 1) + 1))
+      i -= 1
     }
     this
   }
 
-  private def reset(newDataSize: Int): this.type = {
+  private def reset(newDataSize: Int): FTree[T] = {
     val regLen = regularLen(newDataSize)
     if (regLen > (_tree.length >> 1)) {
       _tree = new Array[T](regLen << 1)
@@ -198,8 +204,10 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
     }
     _regLen = regLen
     _used = newDataSize
-    for (i <- 0 until _regLen) {
+    var i = 0
+    while (i < _regLen) {
       setLeaf(i, ev.zero)
+      i += 1
     }
     _tree(1) = ev.zero
     this

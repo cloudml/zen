@@ -46,9 +46,9 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSiz
     }
   }
 
-  def sampleRandom(gen: Random): Int = {
-    val u = gen.nextDouble() * ev.toDouble(norm)
-    sampleFrom(ev.fromDouble(u), gen)
+  def sampleRandom(gen: Random)(implicit gev: spNum[T]): Int = {
+    val u = gen.nextDouble() * gev.toDouble(_cdf(_used - 1))
+    sampleFrom(gev.fromDouble(u), gen)
   }
 
   def sampleFrom(base: T, gen: Random): Int = {
@@ -65,22 +65,25 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSiz
 
   def deltaUpdate(state: Int, delta: => T): Unit = {}
 
-  def resetDist(probs: Array[T], space: Array[Int], psize: Int): this.type = synchronized {
+  def resetDist(probs: Array[T], space: Array[Int], psize: Int): CumulativeDist[T] = synchronized {
     resetDist(space.iterator.zip(probs.iterator), psize)
   }
 
-  def resetDist(distIter: Iterator[(Int, T)], psize: Int): this.type = synchronized {
+  def resetDist(distIter: Iterator[(Int, T)], psize: Int): CumulativeDist[T] = synchronized {
     reset(psize)
     var sum = ev.zero
-    for (((state, prob), i) <- distIter.zipWithIndex) {
+    var i = 0
+    while (i < psize) {
+      val (state, prob) = distIter.next()
       sum = ev.plus(sum, prob)
       _cdf(i) = sum
       _space(i) = state
+      i += 1
     }
     this
   }
 
-  private def reset(newSize: Int): this.type = {
+  private def reset(newSize: Int): CumulativeDist[T] = {
     if (_cdf.length < newSize) {
       _cdf = new Array[T](newSize)
       _space = new Array[Int](newSize)

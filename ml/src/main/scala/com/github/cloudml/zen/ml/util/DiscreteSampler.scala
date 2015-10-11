@@ -19,11 +19,14 @@ package com.github.cloudml.zen.ml.util
 
 import java.util.Random
 
+import spire.math.{Numeric => spNum}
+
+
 trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
   def length: Int
   def used: Int
   def norm: T
-  def sampleRandom(gen: Random): Int
+  def sampleRandom(gen: Random)(implicit gev: spNum[T]): Int
   def sampleFrom(base: T, gen: Random): Int
   def update(state: Int, value: => T): Unit
   def deltaUpdate(state: Int, delta: => T): Unit

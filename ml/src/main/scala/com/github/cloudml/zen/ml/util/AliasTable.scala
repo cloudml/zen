@@ -41,9 +41,9 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
 
   def norm: T = _norm
 
-  def sampleRandom(gen: Random): Int = {
-    val u = gen.nextDouble() * ev.toDouble(norm)
-    sampleFrom(ev.fromDouble(u), gen)
+  def sampleRandom(gen: Random)(implicit gev: spNum[T]): Int = {
+    val u = gen.nextDouble() * gev.toDouble(_norm)
+    sampleFrom(gev.fromDouble(u), gen)
   }
 
   def sampleFrom(base: T, gen: Random): Int = {
@@ -65,7 +65,7 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
 
   def deltaUpdate(state: Int, delta: => T): Unit = {}
 
-  def resetDist(probs: Array[T], space: Array[Int], psize: Int): this.type = synchronized {
+  def resetDist(probs: Array[T], space: Array[Int], psize: Int): AliasTable[T] = synchronized {
     // @inline def isClose(a: Double, b: Double): Boolean = math.abs(a - b) <= (1e-8 + math.abs(a) * 1e-6)
     reset(psize)
     var sum = ev.zero
@@ -140,13 +140,13 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
     setNorm(sum)
   }
 
-  def resetDist(distIter: Iterator[(Int, T)], psize: Int): this.type = synchronized {
+  def resetDist(distIter: Iterator[(Int, T)], psize: Int): AliasTable[T] = synchronized {
     val (space, probs) = distIter.toArray.unzip
     assert(probs.length == psize)
     resetDist(probs.toArray, space.toArray, psize)
   }
 
-  private def reset(newSize: Int): this.type = {
+  private def reset(newSize: Int): AliasTable[T] = {
     if (_l.length < newSize) {
       _l = new Array[Int](newSize)
       _h = new Array[Int](newSize)
@@ -157,7 +157,7 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
     this
   }
 
-  private def setNorm(norm: T): this.type = {
+  private def setNorm(norm: T): AliasTable[T] = {
     _norm = norm
     this
   }

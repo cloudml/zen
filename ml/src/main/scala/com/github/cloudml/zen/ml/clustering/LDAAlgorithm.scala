@@ -30,6 +30,7 @@ import com.github.cloudml.zen.ml.util._
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.GraphImpl
+import spire.math.{Numeric => spNum}
 
 
 abstract class LDAAlgorithm extends Serializable {
@@ -44,7 +45,7 @@ abstract class LDAAlgorithm extends Serializable {
     alphaAS: Double,
     beta: Double): Graph[TC, TA]
 
-  def resampleTable[@specialized(Double, Int, Float, Long) T](gen: Random,
+  def resampleTable[@specialized(Double, Int, Float, Long) T: spNum](gen: Random,
     table: AliasTable[T],
     state: Int,
     cnt: Int = 0,
