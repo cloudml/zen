@@ -75,10 +75,12 @@ object LDADefines {
     topics: Array[Int],
     numTopics: Int): BSV[Count] = {
     val docTopics = BSV.zeros[Count](numTopics)
-    for (i <- tokens.indices) {
+    var i = 0
+    while (i < tokens.length) {
       val topic = gen.nextInt(numTopics)
       topics(i) = topic
       docTopics(topic) += 1
+      i += 1
     }
     docTopics
   }

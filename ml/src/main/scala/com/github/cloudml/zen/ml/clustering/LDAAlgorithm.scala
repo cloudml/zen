@@ -244,7 +244,7 @@ class FastLDA extends LDAAlgorithm {
     val bdv = BDV.zeros[Double](numTopics)
     var i = 0
     while (i < numTopics) {
-      bdv(numTopics) = 1D / (topicCounters(i) + betaSum)
+      bdv(i) = 1.0 / (topicCounters(i) + betaSum)
       i += 1
     }
     bdv
@@ -346,9 +346,11 @@ class LightLDA extends LDAAlgorithm {
             docCache, docTopics, di)
 
           val topics = data(pos)
-          for (i <- topics.indices) {
+          var i = 0
+          while (i < topics.length) {
             var docProposal = gen.nextDouble() < 0.5
-            for (_ <- 1 to 8) {
+            var j = 0
+            while (j < 8) {
               docProposal = !docProposal
               val topic = topics(i)
               var proposalTopic = -1
@@ -380,7 +382,9 @@ class LightLDA extends LDAAlgorithm {
                 topicCounters(topic) -= 1
                 topicCounters(newTopic) += 1
               }
+              j += 1
             }
+            i += 1
           }
           pos += 1
         }
@@ -429,7 +433,7 @@ class LightLDA extends LDAAlgorithm {
     val nq = q(vd, proposalTopic, false)
 
     val pi = (np * cq) / (cp * nq)
-    if (gen.nextDouble() < math.min(1D, pi)) proposalTopic else currentTopic
+    if (gen.nextDouble() < math.min(1.0, pi)) proposalTopic else currentTopic
   }
 
   // scalastyle:off
@@ -507,13 +511,15 @@ class LightLDA extends LDAAlgorithm {
       val probs = new Array[Double](numTopics)
       val space = new Array[Int](numTopics)
       var psize = 0
-      for (topic <- 0 until numTopics) {
-        val cnt = data(topic)
+      var i = 0
+      while (i < numTopics) {
+        val cnt = data(i)
         if (cnt > 0) {
-          probs(psize) = cnt / (topicCounters(topic) + betaSum)
-          space(psize) = topic
+          probs(psize) = cnt / (topicCounters(i) + betaSum)
+          space(psize) = i
           psize += 1
         }
+        i += 1
       }
       ws.resetDist(probs, space, psize)
     case v: BSV[Count] =>

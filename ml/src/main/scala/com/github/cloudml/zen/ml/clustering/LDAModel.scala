@@ -114,7 +114,8 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
     tokens: Array[Int],
     topics: Array[Int],
     docCdf: CumulativeDist[Double]): BSV[Count] = {
-    for (i <- topics.indices) {
+    var i = 0
+    while (i < topics.length) {
       val termId = tokens(i)
       val orgTermTopics = termTopicsArr(termId)
       val termDist = wSparseCached(termDistCache, orgTermTopics, alphaK_denoms, termId)
@@ -132,6 +133,7 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
       val newTopic = algo.tokenSampling(gen, global, termDist, docCdf, termTopics, topic)
       topics(i) = newTopic
       docTopics(newTopic) += 1
+      i += 1
     }
     docTopics
   }

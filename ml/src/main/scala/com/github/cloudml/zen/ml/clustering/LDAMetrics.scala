@@ -103,9 +103,12 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics with Serializable {
           val dwSum = calcDwSum(docTopics, termBeta_denoms)
           val prob = (twSum + dwSum) * doc_denom
           llhs_th += Math.log(prob) * topics.length
-          for (topic <- topics) {
+          var i = 0
+          while (i < topics.length) {
+            val topic = topics(i)
             wllhs_th += Math.log(termBeta_denoms(topic))
             dllhs_th += Math.log((docTopics(topic) + alphaK(topic)) * doc_denom)
+            i += 1
           }
           pos += 1
         }
@@ -155,7 +158,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics with Serializable {
     val used = docTopics.used
     val index = docTopics.index
     val data = docTopics.data
-    var dwSum = 0D
+    var dwSum = 0.0
     var i = 0
     while (i < used) {
       dwSum += data(i) * termBeta_denoms(index(i))
@@ -170,7 +173,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics with Serializable {
     val bdv = BDV.zeros[Double](numTopics)
     var i = 0
     while (i < numTopics) {
-      bdv(numTopics) = 1D / (dTopicCounters(i) + betaSum)
+      bdv(i) = 1.0 / (dTopicCounters(i) + betaSum)
       i += 1
     }
     bdv

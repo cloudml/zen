@@ -121,7 +121,9 @@ class LDA(@transient var corpus: Graph[TC, TA],
           }
           val docTopics = docTuple._2
           val topics = data(pos)
-          for (topic <- topics) {
+          var i = 0
+          while (i < topics.length) {
+            val topic = topics(i)
             if (!inferenceOnly) {
               termTopics(topic) += 1
               termTopics match {
@@ -135,6 +137,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
             docTopics.synchronized {
               docTopics(topic) += 1
             }
+            i += 1
           }
           pos += 1
         }
