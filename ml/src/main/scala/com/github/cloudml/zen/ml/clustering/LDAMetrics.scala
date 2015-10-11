@@ -153,7 +153,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics with Serializable {
   }
 
   def calcDwSum(docTopics: BSV[Count],
-    termBeta_denoms: BDV[Double]) = {
+    termBeta_denoms: BDV[Double]): Double = {
     // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
     val used = docTopics.used
     val index = docTopics.index
