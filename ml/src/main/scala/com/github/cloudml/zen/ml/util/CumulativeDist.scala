@@ -48,13 +48,8 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSiz
   }
 
   def sampleRandom(gen: Random): Int = {
-    if (_used == 1) {
-      _space(0)
-    } else {
-      val u = gen.nextDouble() * ev.toDouble(_cdf(_used - 1))
-      val i = binarySelect(_cdf.map(ev.toDouble), u, 0, _used, greater=true)
-      _space(i)
-    }
+    val u = gen.nextDouble() * ev.toDouble(norm)
+    sampleFrom(ev.fromDouble(u), gen)
   }
 
   def sampleFrom(base: T, gen: Random): Int = {
@@ -87,7 +82,7 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSiz
   }
 
   // don't use this method unless you know what you are doing
-  def directReset(vf: Int => T, used: Int, space: Array[Int]): this.type = synchronized {
+  @inline def directReset(vf: Int => T, used: Int, space: Array[Int]): this.type = synchronized {
     _used = used
     var sum = ev.zero
     var i = 0

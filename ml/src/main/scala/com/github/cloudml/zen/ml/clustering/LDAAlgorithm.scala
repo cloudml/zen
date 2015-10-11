@@ -33,7 +33,7 @@ import org.apache.spark.graphx2.impl.GraphImpl
 
 
 abstract class LDAAlgorithm extends Serializable {
-  private[ml] def sampleGraph(corpus: Graph[TC, TA],
+  def sampleGraph(corpus: Graph[TC, TA],
     topicCounters: BDV[Count],
     seed: Int,
     sampIter: Int,
@@ -44,7 +44,7 @@ abstract class LDAAlgorithm extends Serializable {
     alphaAS: Double,
     beta: Double): Graph[TC, TA]
 
-  private[ml] def resampleTable[@specialized(Double, Int, Float, Long) T](gen: Random,
+  def resampleTable[@specialized(Double, Int, Float, Long) T](gen: Random,
     table: AliasTable[T],
     state: Int,
     cnt: Int = 0,
@@ -64,7 +64,7 @@ abstract class LDAAlgorithm extends Serializable {
 }
 
 class FastLDA extends LDAAlgorithm {
-  override private[ml] def sampleGraph(corpus: Graph[TC, TA],
+  override def sampleGraph(corpus: Graph[TC, TA],
     topicCounters: BDV[Count],
     seed: Int,
     sampIter: Int,
@@ -84,7 +84,7 @@ class FastLDA extends LDAAlgorithm {
     val partRDD = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) => {
       val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
       val betaSum = beta * numTerms
-      val denoms = BDV.tabulate(numTopics)(topic => 1D / (topicCounters(topic) + betaSum))
+      val denoms = calcDenoms(topicCounters, numTopics, betaSum)
       val alphaK_denoms = (denoms.copy :*= ((alphaAS - betaSum) * alphaRatio)) :+= alphaRatio
       val beta_denoms = denoms.copy :*= beta
       val totalSize = ep.size
@@ -134,10 +134,12 @@ class FastLDA extends LDAAlgorithm {
           val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
           dSparse(cdfDist, docTopics, termBeta_denoms)
           val topics = data(pos)
-          for (i <- topics.indices) {
+          var i = 0
+          while (i < topics.length) {
             val topic = topics(i)
             val newTopic = tokenSampling(gen, global, termDist, cdfDist, termTopics, topic)
             topics(i) = newTopic
+            i += 1
           }
           pos += 1
         }
@@ -151,7 +153,7 @@ class FastLDA extends LDAAlgorithm {
     GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
   }
 
-  private[ml] def tokenSampling(gen: Random,
+  def tokenSampling(gen: Random,
     t: DiscreteSampler[Double],
     w: DiscreteSampler[Double],
     d: CumulativeDist[Double],
@@ -176,7 +178,7 @@ class FastLDA extends LDAAlgorithm {
    * t = \frac{{\beta }_{w} \bar{\alpha} ( {n}_{k}^{-di} + \acute{\alpha} ) } {({n}_{k}^{-di}+\bar{\beta})
    * ({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
    */
-  private[ml] def tDense(t: DiscreteSampler[Double],
+  def tDense(t: DiscreteSampler[Double],
     alphaK_denoms: BDV[Double],
     beta: Double,
     numTopics: Int): DiscreteSampler[Double] = {
@@ -189,7 +191,7 @@ class FastLDA extends LDAAlgorithm {
    * w = \frac{ {n}_{kw}^{-di} \bar{\alpha} ( {n}_{k}^{-di} + \acute{\alpha} )}{({n}_{k}^{-di}+\bar{\beta})
    * ({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
    */
-  private[ml] def wSparse(w: DiscreteSampler[Double],
+  def wSparse(w: DiscreteSampler[Double],
     alphaK_denoms: BDV[Double],
     termTopics: TC): DiscreteSampler[Double] = termTopics match {
     case v: BDV[Count] =>
@@ -212,7 +214,12 @@ class FastLDA extends LDAAlgorithm {
       val used = v.used
       val index = v.index
       val data = v.data
-      val probs = Array.tabulate(used)(i => alphaK_denoms(index(i)) * data(i))
+      val probs = new Array[Double](used)
+      var i = 0
+      while (i < used) {
+        probs(i) = alphaK_denoms(index(i)) * data(i)
+        i += 1
+      }
       w.resetDist(probs, index, used)
   }
 
@@ -222,7 +229,7 @@ class FastLDA extends LDAAlgorithm {
    * {({n}_{k}^{-di}+\bar{\beta})({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
    * =  \frac{{n}_{kd} ^{-di}({n}_{kw}^{-di}+{\beta}_{w})}{({n}_{k}^{-di}+\bar{\beta}) }
    */
-  private[ml] def dSparse(d: CumulativeDist[Double],
+  def dSparse(d: CumulativeDist[Double],
     docTopics: BSV[Count],
     termBeta_denoms: BDV[Double]): CumulativeDist[Double] = {
     val used = docTopics.used
@@ -231,7 +238,19 @@ class FastLDA extends LDAAlgorithm {
     d.directReset(i => data(i) * termBeta_denoms(index(i)), used, index)
   }
 
-  private[ml] def calcTermBetaDenoms(orgTermTopics: BV[Count],
+  def calcDenoms(topicCounters: BDV[Count],
+    numTopics: Int,
+    betaSum: Double): BDV[Double] = {
+    val bdv = BDV.zeros[Double](numTopics)
+    var i = 0
+    while (i < numTopics) {
+      bdv(numTopics) = 1D / (topicCounters(i) + betaSum)
+      i += 1
+    }
+    bdv
+  }
+
+  def calcTermBetaDenoms(orgTermTopics: BV[Count],
     denoms: BDV[Double],
     beta_denoms: BDV[Double],
     numTopics: Int): BDV[Double] = {
@@ -259,7 +278,7 @@ class FastLDA extends LDAAlgorithm {
 }
 
 class LightLDA extends LDAAlgorithm {
-  override private[ml] def sampleGraph(corpus: Graph[TC, TA],
+  override def sampleGraph(corpus: Graph[TC, TA],
     topicCounters: BDV[Count],
     seed: Int,
     sampIter: Int,
@@ -394,7 +413,7 @@ class LightLDA extends LDAAlgorithm {
    * {n}_{kw} is the number of occurrence for word w that belong to topic k
    * {n}_{k} is the number of tokens in corpus that belong to topic k
    */
-  private[ml] def tokenSampling(gen: Random,
+  def tokenSampling(gen: Random,
     docTopicCounter: TC,
     termTopicCounter: TC,
     docProposal: Boolean,
@@ -414,7 +433,7 @@ class LightLDA extends LDAAlgorithm {
   }
 
   // scalastyle:off
-  private[ml] def tokenTopicProb(totalTopicCounter: BDV[Count],
+  def tokenTopicProb(totalTopicCounter: BDV[Count],
      beta: Double,
      alpha: Double,
      alphaAS: Double,
@@ -441,13 +460,13 @@ class LightLDA extends LDAAlgorithm {
 
   // scalastyle:on
 
-  private[ml] def wordProb(totalTopicCounter: BDV[Count],
+  def wordProb(totalTopicCounter: BDV[Count],
     numTerms: Int,
     beta: Double)(termTopicCounter: TC, topic: Int, isAdjustment: Boolean): Double = {
     (termTopicCounter(topic) + beta) / (totalTopicCounter(topic) + beta * numTerms)
   }
 
-  private[ml] def docProb(totalTopicCounter: BDV[Count],
+  def docProb(totalTopicCounter: BDV[Count],
     alpha: Double,
     alphaAS: Double,
     numTokens: Long)(docTopicCounter: TC, topic: Int, isAdjustment: Boolean): Double = {
@@ -461,19 +480,24 @@ class LightLDA extends LDAAlgorithm {
   /**
    * \frac{{\beta}_{w}}{{n}_{k}+\bar{\beta}}
    */
-  private[ml] def wDense(wd: AliasTable[Double],
+  def wDense(wd: AliasTable[Double],
     topicCounters: BDV[Count],
     numTopics: Int,
     beta: Double,
     betaSum: Double): Unit = topicCounters.synchronized {
-    val probs = Array.tabulate(numTopics)(topic => beta / (topicCounters(topic) + betaSum))
+    val probs = new Array[Double](numTopics)
+    var i = 0
+    while (i < numTopics) {
+      probs(i) = beta / (topicCounters(i) + betaSum)
+      i += 1
+    }
     wd.resetDist(probs, null, numTopics)
   }
 
   /**
    * \frac{{n}_{kw}}{{n}_{k}+\bar{\beta}}
    */
-  private[ml] def wSparse(ws: AliasTable[Double],
+  def wSparse(ws: AliasTable[Double],
     topicCounters: BDV[Count],
     termTopics: TC,
     betaSum: Double): Unit = termTopics match {
@@ -496,20 +520,30 @@ class LightLDA extends LDAAlgorithm {
       val used = v.used
       val index = v.index
       val data = v.data
-      val probs = Array.tabulate(used)(i => data(i) / (topicCounters(index(i)) + betaSum))
+      val probs = new Array[Double](used)
+      var i = 0
+      while (i < used) {
+        probs(i) = data(i) / (topicCounters(index(i)) + betaSum)
+        i += 1
+      }
       ws.resetDist(probs, index, used)
   }
 
-  private[ml] def dDense(dd: AliasTable[Double],
+  def dDense(dd: AliasTable[Double],
     topicCounters: BDV[Count],
     numTopics: Int,
     alphaRatio: Double,
     alphaAS: Double): Unit = topicCounters.synchronized {
-    val probs = Array.tabulate(numTopics)(topic => alphaRatio * (topicCounters(topic) + alphaAS))
+    val probs = new Array[Double](numTopics)
+    var i = 0
+    while (i < numTopics) {
+      probs(i) = alphaRatio * (topicCounters(i) + alphaAS)
+      i += 1
+    }
     dd.resetDist(probs, null, numTopics)
   }
 
-  private[ml] def dSparseCached(updatePred: SoftReference[AliasTable[Count]] => Boolean,
+  def dSparseCached(updatePred: SoftReference[AliasTable[Count]] => Boolean,
     cacheArray: Array[SoftReference[AliasTable[Count]]],
     docTopics: TC,
     lcDocId: Int): AliasTable[Count] = {

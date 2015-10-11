@@ -26,7 +26,7 @@ import spire.math.{Numeric => spNum}
 
 
 class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: Int)
-  (implicit ev: spNum[T]) extends DiscreteSampler[T] with Serializable {
+  (implicit ev: spNum[T]) extends DiscreteSampler[T] {
   private var _l: Array[Int] = new Array[Int](initUsed)
   private var _h: Array[Int] = new Array[Int](initUsed)
   private var _p: Array[T] = new Array[T](initUsed)
@@ -48,17 +48,8 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
   def norm: T = _norm
 
   def sampleRandom(gen: Random): Int = {
-    if (_used == 1) {
-      _l(0)
-    } else {
-      val bin = gen.nextInt(_used)
-      val prob = _p(bin)
-      if (gen.nextDouble() * ev.toDouble(_norm) < ev.toDouble(prob)) {
-        _l(bin)
-      } else {
-        _h(bin)
-      }
-    }
+    val u = gen.nextDouble() * ev.toDouble(norm)
+    sampleFrom(ev.fromDouble(u), gen)
   }
 
   def sampleFrom(base: T, gen: Random): Int = {

@@ -61,8 +61,9 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics with Serializable {
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
     val sumPart = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((_, ep) => {
       val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
-      val alphaK = (convert(topicCounters, Double) :+= alphaAS) :*= alphaRatio
-      val denoms = BDV.tabulate(numTopics)(topic => 1D / (topicCounters(topic) + betaSum))
+      val dTopicCounters = convert(topicCounters, Double)
+      val alphaK = (dTopicCounters.copy :+= alphaAS) :*= alphaRatio
+      val denoms = calcDenoms(dTopicCounters, numTopics, betaSum)
       val alphaK_denoms = (denoms.copy :*= ((alphaAS - betaSum) * alphaRatio)) :+= alphaRatio
       val beta_denoms = denoms.copy :*= beta
       // \frac{{\alpha }_{k}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
@@ -124,7 +125,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics with Serializable {
     dpplx = math.exp(-dllht.par.sum / numTokens)
   }
 
-  private[ml] def calcWSparseSum(counter: TC,
+  def calcWSparseSum(counter: TC,
     alphaK_denoms: BDV[Double],
     numTopics: Int): Double = {
     var wSparseSum = 0D
@@ -148,7 +149,7 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics with Serializable {
     wSparseSum
   }
 
-  private[ml] def calcDwSum(docTopics: BSV[Count],
+  def calcDwSum(docTopics: BSV[Count],
     termBeta_denoms: BDV[Double]) = {
     // \frac{{n}_{kw}{n}_{kd}}{{n}_{k}+\bar{\beta}}
     val used = docTopics.used
@@ -163,7 +164,19 @@ class LDAPerplexity(lda: LDA) extends LDAMetrics with Serializable {
     dwSum
   }
 
-  private[ml] def calcTermBetaDenoms(orgTermTopics: BV[Count],
+  def calcDenoms(dTopicCounters: BDV[Double],
+    numTopics: Int,
+    betaSum: Double): BDV[Double] = {
+    val bdv = BDV.zeros[Double](numTopics)
+    var i = 0
+    while (i < numTopics) {
+      bdv(numTopics) = 1D / (dTopicCounters(i) + betaSum)
+      i += 1
+    }
+    bdv
+  }
+
+  def calcTermBetaDenoms(orgTermTopics: BV[Count],
     beta_denoms: BDV[Double],
     denoms: BDV[Double],
     numTopics: Int): BDV[Double] = {

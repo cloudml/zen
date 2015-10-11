@@ -76,23 +76,8 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
   }
 
   def sampleRandom(gen: Random): Int = {
-    if (_used == 1) {
-      toState(1)
-    } else {
-      var u = gen.nextDouble() * ev.toDouble(_tree(1))
-      var cur = 1
-      while (cur < leafOffset) {
-        val lc = cur << 1
-        val lcp = ev.toDouble(_tree(lc))
-        if (u < lcp) {
-          cur = lc
-        } else {
-          u -= lcp
-          cur = lc + 1
-        }
-      }
-      toState(cur)
-    }
+    val u = gen.nextDouble() * ev.toDouble(norm)
+    sampleFrom(ev.fromDouble(u), gen)
   }
 
   def sampleFrom(base: T, gen: Random): Int = {
