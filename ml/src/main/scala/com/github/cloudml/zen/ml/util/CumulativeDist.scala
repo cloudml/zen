@@ -28,10 +28,9 @@ import spire.math.{Numeric => spNum}
 
 class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int)
   (implicit ev: spNum[T]) extends DiscreteSampler[T] with Serializable {
-
-  private var _cdf = new Array[T](dataSize)
-  private var _space = new Array[Int](dataSize)
-  private var _used: Int = dataSize
+  var _cdf = new Array[T](dataSize)
+  var _space = new Array[Int](dataSize)
+  var _used: Int = dataSize
 
   def length: Int = _cdf.length
 
@@ -78,20 +77,6 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSiz
       _cdf(i) = sum
       _space(i) = state
     }
-    this
-  }
-
-  // don't use this method unless you know what you are doing
-  @inline def directReset(vf: Int => T, used: Int, space: Array[Int]): this.type = synchronized {
-    _used = used
-    var sum = ev.zero
-    var i = 0
-    while (i < used) {
-      sum = ev.plus(sum, vf(i))
-      _cdf(i) = sum
-      i += 1
-    }
-    _space = space
     this
   }
 

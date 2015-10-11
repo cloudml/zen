@@ -235,7 +235,18 @@ class FastLDA extends LDAAlgorithm {
     val used = docTopics.used
     val index = docTopics.index
     val data = docTopics.data
-    d.directReset(i => data(i) * termBeta_denoms(index(i)), used, index)
+    // DANGER operations for performance
+    d._used = used
+    val cdf = d._cdf
+    var sum = 0.0
+    var i = 0
+    while (i < used) {
+      sum += data(i) * termBeta_denoms(index(i))
+      cdf(i) = sum
+      i += 1
+    }
+    d._space = index
+    d
   }
 
   def calcDenoms(topicCounters: BDV[Count],

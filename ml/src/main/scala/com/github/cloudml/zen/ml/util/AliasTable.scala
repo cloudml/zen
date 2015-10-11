@@ -27,17 +27,11 @@ import spire.math.{Numeric => spNum}
 
 class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: Int)
   (implicit ev: spNum[T]) extends DiscreteSampler[T] {
-  private var _l: Array[Int] = new Array[Int](initUsed)
-  private var _h: Array[Int] = new Array[Int](initUsed)
-  private var _p: Array[T] = new Array[T](initUsed)
-  private var _used = initUsed
-  private var _norm = ev.zero
-
-  def l: Array[Int] = _l
-
-  def h: Array[Int] = _h
-
-  def p: Array[T] = _p
+  var _l: Array[Int] = new Array[Int](initUsed)
+  var _h: Array[Int] = new Array[Int](initUsed)
+  var _p: Array[T] = new Array[T](initUsed)
+  var _used = initUsed
+  var _norm = ev.zero
 
   def used: Int = _used
 

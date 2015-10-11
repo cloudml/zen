@@ -29,11 +29,10 @@ import spire.math.{Numeric => spNum}
 class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
   val isSparse: Boolean)
   (implicit ev: spNum[T]) extends DiscreteSampler[T] with Serializable {
-
-  private var _regLen: Int = regularLen(dataSize)
-  private var _tree: Array[T] = new Array[T](_regLen << 1)
-  private var _space: Array[Int] = if (!isSparse) null else new Array[Int](_regLen)
-  private var _used: Int = dataSize
+  var _regLen: Int = regularLen(dataSize)
+  var _tree: Array[T] = new Array[T](_regLen << 1)
+  var _space: Array[Int] = if (!isSparse) null else new Array[Int](_regLen)
+  var _used: Int = dataSize
 
   def length: Int = _tree.length
 

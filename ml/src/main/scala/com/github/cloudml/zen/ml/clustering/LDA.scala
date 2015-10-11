@@ -81,6 +81,8 @@ class LDA(@transient var corpus: Graph[TC, TA],
 
   def updateVertexCounters(newCorpus: Graph[TC, TA],
     inferenceOnly: Boolean = false): Unit = {
+    val numTopics = this.numTopics
+    val dscp = numTopics >> 3
     val numThreads = scConf.getInt(cs_numThreads, 1)
     val graph = newCorpus.asInstanceOf[GraphImpl[TC, TA]]
     val vertices = graph.vertices
@@ -124,15 +126,15 @@ class LDA(@transient var corpus: Graph[TC, TA],
           var i = 0
           while (i < topics.length) {
             val topic = topics(i)
-            if (!inferenceOnly) {
-              termTopics(topic) += 1
-              termTopics match {
-                case v: BSV[Count] if v.activeSize > (numTopics >> 2) =>
+            if (!inferenceOnly) termTopics match {
+              case v: BDV[Count] => v(topic) += 1
+              case v: BSV[Count] =>
+                v(topic) += 1
+                if (v.activeSize >= dscp) {
                   termTuple = (l2g(si), toBDV(v))
                   results(si) = termTuple
                   termTopics = termTuple._2
-                case _ =>
-              }
+                }
             }
             docTopics.synchronized {
               docTopics(topic) += 1
@@ -171,7 +173,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
                   case v: BDV[Count] => v :+= u
                   case v: BSV[Count] =>
                     u :+= v
-                    if (u.activeSize > (numTopics >> 2)) toBDV(u) else u
+                    if (u.activeSize >= dscp) toBDV(u) else u
                 }
               } else agg match {
                 case u: BSV[Count] => counter match {
@@ -191,6 +193,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
   }
 
   def collectTopicCounters(): Unit = {
+    val numTopics = this.numTopics
     val numThreads = scConf.getInt(cs_numThreads, 1)
     val graph = corpus.asInstanceOf[GraphImpl[TC, TA]]
     val aggRdd = graph.vertices.partitionsRDD.mapPartitions(_.map(svp => {
@@ -222,8 +225,8 @@ class LDA(@transient var corpus: Graph[TC, TA],
       aggs.reduce(_ :+= _)
     }))
     val gtc = aggRdd.collect().par.reduce(_ :+= _)
-    val count = gtc.data.par.map(_.toLong).sum
-    assert(count == numTokens, s"numTokens=$numTokens, count=$count")
+    // val count = gtc.data.par.map(_.toLong).sum
+    // assert(count == numTokens, s"numTokens=$numTokens, count=$count")
     topicCounters = gtc
   }
 
