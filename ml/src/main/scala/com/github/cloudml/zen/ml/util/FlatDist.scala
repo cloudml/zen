@@ -20,17 +20,18 @@ package com.github.cloudml.zen.ml.util
 import java.util.Random
 import scala.reflect.ClassTag
 
-import breeze.linalg.{SparseVector => brSV, DenseVector => brDV, sum, StorageVector}
+import breeze.linalg.{SparseVector => brSV, DenseVector => brDV, StorageVector}
+import breeze.storage.Zero
 import spire.math.{Numeric => spNum}
 
 
-class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
+class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](dim: Int,
   val isSparse: Boolean)
   (implicit ev: spNum[T]) extends DiscreteSampler[T] with Serializable {
-  var _dist = initDist(dataSize)
+  var _dist = initDist()
   var _norm = ev.zero
 
-  @inline def length: Int = _dist.length
+  @inline def length: Int = dim
 
   @inline def used: Int = _dist.activeSize
 
@@ -76,19 +77,23 @@ class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int
   }
 
   def resetDist(probs: Array[T], space: Array[Int], psize: Int): FlatDist[T] = synchronized {
-    if (isSparse) {
-      val dist = new brSV[T](space, probs, psize, probs.length)
-      _dist = dist
-      setNorm(sum(dist))
+    implicit val zero = Zero(ev.zero)
+    _dist = if (isSparse) {
+      new brSV[T](space, probs, psize, dim)
     } else {
-      val dist = new brDV[T](probs)
-      _dist = dist
-      setNorm(sum(dist))
+      new brDV[T](probs)
     }
+    var sum = ev.zero
+    var i = 0
+    while (i < psize) {
+      sum = ev.plus(sum, probs(i))
+      i += 1
+    }
+    setNorm(sum)
   }
 
   def resetDist(distIter: Iterator[(Int, T)], psize: Int): FlatDist[T] = synchronized {
-    reset(psize)
+    reset()
     var sum = ev.zero
     while (distIter.hasNext) {
       val (state, prob) = distIter.next()
@@ -99,14 +104,15 @@ class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int
     this
   }
 
-  private def reset(newSize: Int): FlatDist[T] = {
-    _dist = initDist(newSize)
+  private def reset(): FlatDist[T] = {
+    _dist = initDist()
     _norm = ev.zero
     this
   }
 
-  private def initDist(size: Int): StorageVector[T] = {
-    if (isSparse) brSV.zeros[T](size) else brDV.zeros[T](size)
+  private def initDist(): StorageVector[T] = {
+    implicit val zero = Zero(ev.zero)
+    if (isSparse) brSV.zeros[T](dim) else brDV.zeros[T](dim)
   }
 
   private def setNorm(norm: T): FlatDist[T] = {
