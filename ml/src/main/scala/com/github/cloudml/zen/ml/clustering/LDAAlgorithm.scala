@@ -64,6 +64,65 @@ abstract class LDAAlgorithm extends Serializable {
   }
 }
 
+class SparseLDA extends LDAAlgorithm {
+  override def sampleGraph(corpus: Graph[TC, TA],
+    topicCounters: BDV[Count],
+    seed: Int,
+    sampIter: Int,
+    numTokens: Long,
+    numTopics: Int,
+    numTerms: Int,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): GraphImpl[TC, TA] = {
+    val graph = refreshEdgeAssociations(corpus)
+    val edges = graph.edges
+    val vertices = graph.vertices
+    val conf = edges.context.getConf
+    val numThreads = conf.getInt(cs_numThreads, 1)
+    val numPartitions = edges.partitions.length
+    val partRDD = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) => {
+      val totalSize = ep.size
+      val lcSrcIds = ep.localSrcIds
+      val lcDstIds = ep.localDstIds
+      val vattrs = ep.vertexAttrs
+      val data = ep.data
+      val thq = new ConcurrentLinkedQueue(0 until numThreads)
+      val gens = new Array[XORShiftRandom](numThreads)
+
+      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+      val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+        val thid = thq.poll()
+        var gen = gens(thid)
+        if (gen == null) {
+          gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
+          gens(thid) = gen
+        }
+        val si = lcSrcIds(offset)
+        var pos = offset
+        while (pos < totalSize && lcSrcIds(pos) == si) {
+          val di = lcDstIds(pos)
+          val topics = data(pos)
+          var i = 0
+          while (i < topics.length) {
+            val topic = topics(i)
+            val newTopic = topic
+            topics(i) = newTopic
+            i += 1
+          }
+          pos += 1
+        }
+        thq.add(thid)
+      }))
+      Await.ready(all, 2.hour)
+      es.shutdown()
+
+      (pid, ep.withoutVertexAttributes[TC]())
+    })), preservesPartitioning = true)
+    GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
+  }
+}
+
 class FastLDA extends LDAAlgorithm {
   override def sampleGraph(corpus: Graph[TC, TA],
     topicCounters: BDV[Count],
