@@ -27,8 +27,8 @@ import org.scalatest.{Matchers, FunSuite}
 class FMSuite extends FunSuite with SharedSparkContext with Matchers {
   test("binary classification") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-    val dataSetFile = s"${sparkHome}/data/binary_classification_data.txt"
-    val checkpoint = s"$sparkHome/tmp"
+    val dataSetFile = s"$sparkHome/data/binary_classification_data.txt"
+    val checkpoint = s"$sparkHome/target/tmp"
     sc.setCheckpointDir(checkpoint)
     val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile).zipWithIndex().map {
       case (LabeledPoint(label, features), id) =>
@@ -74,8 +74,8 @@ class FMSuite extends FunSuite with SharedSparkContext with Matchers {
 
   ignore("regression") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-    val dataSetFile = s"${sparkHome}/data/regression_data.txt"
-    val checkpoint = s"$sparkHome/tmp"
+    val dataSetFile = s"$sparkHome/data/regression_data.txt"
+    val checkpoint = s"$sparkHome/target/tmp"
     sc.setCheckpointDir(checkpoint)
     val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile).zipWithIndex().map {
       case (labeledPoint, id) =>

@@ -25,7 +25,7 @@ import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.{EdgeRDDImpl, GraphImpl}
 import org.apache.spark.mllib.classification.LogisticRegressionModel
 import org.apache.spark.mllib.linalg.{DenseVector => SDV}
-import org.apache.spark.mllib.regression.LabeledPoint
+import org.apache.spark.mllib.regression.{GeneralizedLinearModel, LabeledPoint}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{HashPartitioner, Logging}
@@ -143,13 +143,13 @@ abstract class LogisticRegression(
 
   protected def loss(q: VertexRDD[VD]): Double
 
-  def saveModel(): LogisticRegressionModel = {
-    val numFeatures = features.map(_._1).max().toInt + 1
-    val featureData = new Array[Double](numFeatures)
+  def saveModel(numFeatures: Int = -1): GeneralizedLinearModel = {
+    val len = if (numFeatures < 0) features.map(_._1).max().toInt + 1 else numFeatures
+    val featureData = new Array[Double](len)
     features.toLocalIterator.foreach { case (index, value) =>
       featureData(index.toInt) = value
     }
-    new LogisticRegressionModel(new SDV(featureData), 0.0, numFeatures, 2)
+    new LogisticRegressionModel(new SDV(featureData), 0.0, len, 2).clearThreshold()
   }
 
   protected def updateGradientSum(gradient: VertexRDD[Double], iter: Int): VertexRDD[Double] = {
@@ -158,6 +158,7 @@ abstract class LogisticRegression(
     }
     if (useAdaGrad) {
       val delta = adaGrad(gradientSum, gradient, 1e-4, 1.0)
+      checkpointGradientSum(delta)
       delta.setName(s"delta-$iter").persist(storageLevel).count()
 
       gradient.unpersist(blocking = false)
@@ -166,7 +167,6 @@ abstract class LogisticRegression(
 
       if (gradientSum != null) gradientSum.unpersist(blocking = false)
       gradientSum = delta.mapValues(_.last).setName(s"deltaSum-$iter").persist(storageLevel)
-      checkpointGradientSum()
       gradientSum.count()
       delta.unpersist(blocking = false)
       newGradient
@@ -263,13 +263,13 @@ abstract class LogisticRegression(
     }
   }
 
-  protected def checkpointGradientSum(): Unit = {
-    val sc = gradientSum.sparkContext
+  protected def checkpointGradientSum(delta: VertexRDD[Array[Double]]): Unit = {
+    val sc = delta.sparkContext
     if (innerIter % checkpointInterval == 0 && sc.getCheckpointDir.isDefined) {
-      if (gradientSum != null) gradientSum.checkpoint()
-      if (deltaSum != null) deltaSum.checkpoint()
+      delta.checkpoint()
     }
   }
+
 
   protected def unpersistVertices(): Unit = {
     if (previousVertices != null) previousVertices.unpersist(blocking = false)
@@ -474,7 +474,7 @@ object LogisticRegression {
     stepSize: Double,
     regParam: Double,
     useAdaGrad: Boolean = false,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): LogisticRegressionModel = {
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): GeneralizedLinearModel = {
     val data = input.map { case (id, LabeledPoint(label, features)) =>
       assert(id >= 0.0, s"sampleId $id less than 0")
       val newLabel = if (label > 0.0) 1.0 else 0.0
@@ -482,7 +482,7 @@ object LogisticRegression {
     }
     val lr = new LogisticRegressionSGD(data, stepSize, regParam, useAdaGrad, storageLevel)
     lr.run(numIterations)
-    lr.saveModel
+    lr.saveModel()
   }
 
   /**
@@ -506,7 +506,7 @@ object LogisticRegression {
     regParam: Double,
     epsilon: Double = 1e-3,
     useAdaGrad: Boolean = false,
-    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): LogisticRegressionModel = {
+    storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK): GeneralizedLinearModel = {
     val data = input.map { case (id, LabeledPoint(label, features)) =>
       assert(id >= 0.0, s"sampleId $id less than 0")
       val newLabel = if (label > 0.0) 1.0 else -1.0

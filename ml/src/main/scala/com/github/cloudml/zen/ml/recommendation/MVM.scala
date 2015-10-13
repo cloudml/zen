@@ -22,8 +22,8 @@ import java.util.{Random => JavaRandom}
 import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.recommendation.MVM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
-import com.github.cloudml.zen.ml.util.Utils
-import org.apache.spark.Logging
+import com.github.cloudml.zen.ml.util.{XORShiftRandom, Utils}
+import org.apache.spark.{SparkContext, Logging}
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.{EdgeRDDImpl, GraphImpl}
 import org.apache.spark.mllib.regression.LabeledPoint
@@ -198,8 +198,9 @@ private[ml] abstract class MVM extends Serializable with Logging {
           while (i < rank) {
             if (grad(i) != 0.0) {
               weight(i) -= thisIterStepSize * (grad(i) + regParamL2 * wd * weight(i))
-              val wi = weight(i)
-              weight(i) = signum(wi) * max(0.0, abs(wi) - wd * shrinkageVal)
+              if (shrinkageVal > 0) {
+                weight(i) = signum(weight(i)) * max(0.0, abs(weight(i)) - wd * shrinkageVal)
+              }
             }
             i += 1
           }
@@ -600,14 +601,23 @@ object MVM {
     sampleId: Long,
     iter: Int,
     mod: Int): Boolean = {
-    random.setSeed(seed * sampleId)
+    random.setSeed((iter + 117) / mod + sampleId)
     random.nextInt(mod) == iter % mod
   }
 
   @inline private[ml] def genRandom(mod: Int, iter: Int): JavaRandom = {
-    val random: JavaRandom = new JavaRandom()
+    val random: JavaRandom = new XORShiftRandom()
     random.setSeed(17425170 - iter / mod)
     random
+  }
+
+  private[ml] def reduceInterval(a: VD, b: VD): VD = {
+    var i = 0
+    while (i < a.length) {
+      a(i) += b(i)
+      i += 1
+    }
+    a
   }
 
   /**
@@ -629,15 +639,6 @@ object MVM {
       i += 1
     }
     sum
-  }
-
-  private[ml] def reduceInterval(a: VD, b: VD): VD = {
-    var i = 0
-    while (i < a.length) {
-      a(i) += b(i)
-      i += 1
-    }
-    a
   }
 
   private[ml] def forwardInterval(rank: Int, viewSize: Int, viewId: Int, x: ED, w: VD): VD = {
