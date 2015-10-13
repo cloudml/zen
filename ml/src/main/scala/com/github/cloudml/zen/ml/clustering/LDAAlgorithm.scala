@@ -64,65 +64,6 @@ abstract class LDAAlgorithm extends Serializable {
   }
 }
 
-class SparseLDA extends LDAAlgorithm {
-  override def sampleGraph(corpus: Graph[TC, TA],
-    topicCounters: BDV[Count],
-    seed: Int,
-    sampIter: Int,
-    numTokens: Long,
-    numTopics: Int,
-    numTerms: Int,
-    alpha: Double,
-    alphaAS: Double,
-    beta: Double): GraphImpl[TC, TA] = {
-    val graph = refreshEdgeAssociations(corpus)
-    val edges = graph.edges
-    val vertices = graph.vertices
-    val conf = edges.context.getConf
-    val numThreads = conf.getInt(cs_numThreads, 1)
-    val numPartitions = edges.partitions.length
-    val partRDD = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) => {
-      val totalSize = ep.size
-      val lcSrcIds = ep.localSrcIds
-      val lcDstIds = ep.localDstIds
-      val vattrs = ep.vertexAttrs
-      val data = ep.data
-      val thq = new ConcurrentLinkedQueue(0 until numThreads)
-      val gens = new Array[XORShiftRandom](numThreads)
-
-      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-      val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
-        val thid = thq.poll()
-        var gen = gens(thid)
-        if (gen == null) {
-          gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
-          gens(thid) = gen
-        }
-        val si = lcSrcIds(offset)
-        var pos = offset
-        while (pos < totalSize && lcSrcIds(pos) == si) {
-          val di = lcDstIds(pos)
-          val topics = data(pos)
-          var i = 0
-          while (i < topics.length) {
-            val topic = topics(i)
-            val newTopic = topic
-            topics(i) = newTopic
-            i += 1
-          }
-          pos += 1
-        }
-        thq.add(thid)
-      }))
-      Await.ready(all, 2.hour)
-      es.shutdown()
-
-      (pid, ep.withoutVertexAttributes[TC]())
-    })), preservesPartitioning = true)
-    GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
-  }
-}
-
 class FastLDA extends LDAAlgorithm {
   override def sampleGraph(corpus: Graph[TC, TA],
     topicCounters: BDV[Count],
@@ -632,5 +573,201 @@ class LightLDA extends LDAAlgorithm {
       cacheArray(lcDocId) = new SoftReference(table)
       table
     }
+  }
+}
+
+class SparseLDA extends LDAAlgorithm {
+  override def sampleGraph(corpus: Graph[TC, TA],
+    topicCounters: BDV[Count],
+    seed: Int,
+    sampIter: Int,
+    numTokens: Long,
+    numTopics: Int,
+    numTerms: Int,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): GraphImpl[TC, TA] = {
+    val graph = refreshEdgeAssociations(corpus)
+    val edges = graph.edges
+    val vertices = graph.vertices
+    val conf = edges.context.getConf
+    val numThreads = conf.getInt(cs_numThreads, 1)
+    val numPartitions = edges.partitions.length
+    val partRDD = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) => {
+      val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
+      val betaSum = beta * numTerms
+      val totalSize = ep.size
+      val lcSrcIds = ep.localSrcIds
+      val lcDstIds = ep.localDstIds
+      val vattrs = ep.vertexAttrs
+      val data = ep.data
+      val thq = new ConcurrentLinkedQueue(0 until numThreads)
+      val gens = new Array[XORShiftRandom](numThreads)
+      val docDists = new Array[FlatDist[Double]](numThreads)
+      val mainDists = new Array[FlatDist[Double]](numThreads)
+      val alphaK_denoms = calcGlobalCache(topicCounters, alphaAS, betaSum, alphaRatio, numTopics)
+      val global = new FlatDist[Double](numTopics, isSparse=false)
+      tDense(global, alphaK_denoms, beta, numTopics)
+
+      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+      val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+        val thid = thq.poll()
+        var gen = gens(thid)
+        if (gen == null) {
+          gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
+          gens(thid) = gen
+          docDists(thid) = new FlatDist[Double](numTopics, isSparse=true)
+          mainDists(thid) = new FlatDist[Double](numTopics, isSparse=true)
+        }
+        val docDist = docDists(thid)
+        val si = lcSrcIds(offset)
+        val docTopics = vattrs(si).asInstanceOf[BSV[Count]]
+        val nkd_denoms = calcDocCache(topicCounters, docTopics, betaSum, numTopics)
+        dSparse(docDist, nkd_denoms, beta)
+        val docAlphaK_Denoms = calcDocAlphaKDenoms(alphaK_denoms, nkd_denoms)
+        val mainDist = mainDists(thid)
+        var pos = offset
+        while (pos < totalSize && lcSrcIds(pos) == si) {
+          val di = lcDstIds(pos)
+          val termTopics = vattrs(di)
+          wSparse(mainDist, termTopics, docAlphaK_Denoms, numTopics)
+          val topics = data(pos)
+          var i = 0
+          while (i < topics.length) {
+            topics(i) = tokenSampling(gen, global, docDist, mainDist)
+            i += 1
+          }
+          pos += 1
+        }
+        thq.add(thid)
+      }))
+      Await.ready(all, 2.hour)
+      es.shutdown()
+
+      (pid, ep.withoutVertexAttributes[TC]())
+    })), preservesPartitioning = true)
+    GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
+  }
+
+  def tokenSampling(gen: Random,
+    t: FlatDist[Double],
+    d: FlatDist[Double],
+    w: FlatDist[Double]): Int = {
+    val wSum = w.norm
+    val wdSum = wSum + d.norm
+    val distSum = wdSum + t.norm
+    val genSum = gen.nextDouble() * distSum
+    if (genSum < wSum) {
+      w.sampleFrom(genSum, gen)
+    } else if (genSum < wdSum) {
+      d.sampleFrom(genSum - wSum, gen)
+    } else {
+      t.sampleFrom(genSum - wdSum, gen)
+    }
+  }
+
+  def tDense(t: FlatDist[Double],
+    alphaK_denoms: BDV[Double],
+    beta: Double,
+    numTopics: Int): FlatDist[Double] = {
+    val probs = new Array[Double](numTopics)
+    var i = 0
+    while (i < numTopics) {
+      probs(i) = beta * alphaK_denoms(i)
+      i += 1
+    }
+    t.resetDist(probs, null, numTopics)
+  }
+
+  def dSparse(d: FlatDist[Double],
+    nkd_denoms: BSV[Double],
+    beta: Double): FlatDist[Double] = {
+    val used = nkd_denoms.used
+    val index = nkd_denoms.index
+    val data = nkd_denoms.data
+    val probs = new Array[Double](used)
+    var i = 0
+    while (i < used) {
+      probs(i) = beta * nkd_denoms(i)
+      i += 1
+    }
+    d.resetDist(probs, index, used)
+  }
+
+  def wSparse(w: FlatDist[Double],
+    termTopics: TC,
+    docAlphaK_Denoms: BDV[Double],
+    numTopics: Int): FlatDist[Double] = termTopics match {
+    case v: BDV[Count] =>
+      val probs = new Array[Double](numTopics)
+      val space = new Array[Int](numTopics)
+      var psize = 0
+      var i = 0
+      while (i < numTopics) {
+        val cnt = v(i)
+        if (cnt > 0) {
+          probs(psize) = docAlphaK_Denoms(i) * cnt
+          space(psize) = i
+          psize += 1
+        }
+        i += 1
+      }
+      w.resetDist(probs, space, psize)
+    case v: BSV[Count] =>
+      val used = v.used
+      val index = v.index
+      val data = v.data
+      val probs = new Array[Double](used)
+      var i = 0
+      while (i < used) {
+        probs(i) = docAlphaK_Denoms(index(i)) * data(i)
+        i += 1
+      }
+      w.resetDist(probs, index, used)
+  }
+
+  def calcGlobalCache(topicCounters: BDV[Count],
+    alphaAS: Double,
+    betaSum: Double,
+    alphaRatio: Double,
+    numTopics: Int): BDV[Double] = {
+    val arr = new Array[Double](numTopics)
+    var i = 0
+    while (i < numTopics) {
+      val nt = topicCounters(i)
+      arr(i) = alphaRatio * (nt + alphaAS) / (nt + betaSum)
+      i += 1
+    }
+    new BDV(arr)
+  }
+
+  def calcDocCache(topicCounters: BDV[Count],
+    docTopics: BSV[Count],
+    betaSum: Double,
+    numTopics: Int): BSV[Double] = {
+    val used = docTopics.used
+    val index = docTopics.index
+    val data = docTopics.data
+    val arr = new Array[Double](used)
+    var i = 0
+    while (i < used) {
+      arr(i) = data(i) / (topicCounters(i) + betaSum)
+      i += 1
+    }
+    new BSV(index, arr, used, numTopics)
+  }
+
+  def calcDocAlphaKDenoms(alphaK_denoms: BDV[Double],
+    nkd_denoms: BSV[Double]): BDV[Double] = {
+    val bdv = alphaK_denoms.copy
+    val used = nkd_denoms.used
+    val index = nkd_denoms.index
+    val data = nkd_denoms.data
+    var i = 0
+    while (i < used) {
+      bdv(index(i)) += data(i)
+      i += 1
+    }
+    bdv
   }
 }
