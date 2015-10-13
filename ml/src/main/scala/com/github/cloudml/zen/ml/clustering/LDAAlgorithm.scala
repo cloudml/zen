@@ -30,7 +30,7 @@ import com.github.cloudml.zen.ml.util._
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
 import org.apache.spark.graphx2._
-import org.apache.spark.graphx2.impl.GraphImpl
+import org.apache.spark.graphx2.impl.{EdgePartition, GraphImpl}
 import spire.math.{Numeric => spNum}
 
 
@@ -44,33 +44,23 @@ abstract class LDAAlgorithm extends Serializable {
     numTerms: Int,
     alpha: Double,
     alphaAS: Double,
-    beta: Double): GraphImpl[TC, TA]
-
-  def updateVertexCounters(newCorpus: Graph[TC, TA],
-    numTopics: Int,
-    inferenceOnly: Boolean = false): GraphImpl[TC, TA]
-
-  def resampleTable[@specialized(Double, Int, Float, Long) T: spNum](gen: Random,
-    table: AliasTable[T],
-    state: Int,
-    cnt: Int = 0,
-    numSampling: Int = 0): Int = {
-    val newState = table.sampleRandom(gen)
-    if (newState == state && numSampling < 16) {
-      // discard it if the newly sampled topic is current topic
-      if ((cnt == 1 && table.used > 1) ||
-        /* the sampled topic that contains current token and other tokens */
-        (cnt > 1 && gen.nextDouble() < 1.0 / cnt)
-      /* the sampled topic has 1/cnt probability that belongs to current token */ ) {
-        return resampleTable(gen, table, state, cnt, numSampling + 1)
-      }
-    }
-    newState
+    beta: Double): GraphImpl[TC, TA] = {
+    val graph = refreshEdgeAssociations(corpus)
+    val edges = graph.edges
+    val vertices = graph.vertices
+    val conf = edges.context.getConf
+    val numThreads = conf.getInt(cs_numThreads, 1)
+    val accelMethod = conf.get(cs_accelMethod, "alias")
+    val numPartitions = edges.partitions.length
+    val spf = samplePartition(numThreads, accelMethod, numPartitions, sampIter, seed,
+      topicCounters, numTokens, numTopics, numTerms, alpha, alphaAS, beta)_
+    val partRDD = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) =>
+      (pid, spf(pid, ep))
+    )), preservesPartitioning=true)
+    GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
   }
-}
 
-abstract class LDAWordByWord extends LDAAlgorithm {
-  override def updateVertexCounters(sampledCorpus: Graph[TC, TA],
+  def updateVertexCounters(sampledCorpus: Graph[TC, TA],
     numTopics: Int,
     inferenceOnly: Boolean = false): GraphImpl[TC, TA] = {
     val dscp = numTopics >> 3
@@ -79,68 +69,10 @@ abstract class LDAWordByWord extends LDAAlgorithm {
     val edges = graph.edges
     val conf = edges.context.getConf
     val numThreads = conf.getInt(cs_numThreads, 1)
-    val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap(Function.tupled((_, ep) => {
-      val totalSize = ep.size
-      val lcSrcIds = ep.localSrcIds
-      val lcDstIds = ep.localDstIds
-      val l2g = ep.local2global
-      val vattrs = ep.vertexAttrs
-      val data = ep.data
-      val vertSize = vattrs.length
-      val results = new Array[(VertexId, TC)](vertSize)
-      val marks = new AtomicIntegerArray(vertSize)
-
-      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-      val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
-        val si = lcSrcIds(offset)
-        var termTuple = results(si)
-        if (termTuple == null && !inferenceOnly) {
-          termTuple = (l2g(si), BSV.zeros[Count](numTopics))
-          results(si) = termTuple
-        }
-        var termTopics = if (!inferenceOnly) termTuple._2 else null
-        var pos = offset
-        while (pos < totalSize && lcSrcIds(pos) == si) {
-          val di = lcDstIds(pos)
-          var docTuple = results(di)
-          if (docTuple == null) {
-            if (marks.getAndDecrement(di) == 0) {
-              docTuple = (l2g(di), BSV.zeros[Count](numTopics))
-              results(di) = docTuple
-              marks.set(di, Int.MaxValue)
-            } else {
-              while (marks.get(di) <= 0) {}
-              docTuple = results(di)
-            }
-          }
-          val docTopics = docTuple._2
-          val topics = data(pos)
-          var i = 0
-          while (i < topics.length) {
-            val topic = topics(i)
-            if (!inferenceOnly) termTopics match {
-              case v: BDV[Count] => v(topic) += 1
-              case v: BSV[Count] =>
-                v(topic) += 1
-                if (v.activeSize >= dscp) {
-                  termTuple = (l2g(si), toBDV(v))
-                  results(si) = termTuple
-                  termTopics = termTuple._2
-                }
-            }
-            docTopics.synchronized {
-              docTopics(topic) += 1
-            }
-            i += 1
-          }
-          pos += 1
-        }
-      }))
-      Await.ready(all, 1.hour)
-      es.shutdown()
-
-      results.iterator.filter(_ != null)
-    }))).partitionBy(vertices.partitioner.get)
+    val cpf = countPartition(numThreads, numTopics, inferenceOnly)_
+    val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap(Function.tupled((_, ep) =>
+      cpf(ep)
+    ))).partitionBy(vertices.partitioner.get)
 
     val partRDD = vertices.partitionsRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
       (svpIter, cntsIter) => svpIter.map(svp => {
@@ -183,96 +115,193 @@ abstract class LDAWordByWord extends LDAAlgorithm {
     )
     GraphImpl.fromExistingRDDs(vertices.withPartitionsRDD(partRDD), edges)
   }
-}
 
-class FastLDA extends LDAWordByWord {
-  override def sampleGraph(corpus: Graph[TC, TA],
-    topicCounters: BDV[Count],
-    seed: Int,
+  def samplePartition(numThreads: Int,
+    accelMethod: String,
+    numPartitions: Int,
     sampIter: Int,
+    seed: Int,
+    topicCounters: BDV[Count],
     numTokens: Long,
     numTopics: Int,
     numTerms: Int,
     alpha: Double,
     alphaAS: Double,
-    beta: Double): GraphImpl[TC, TA] = {
-    val graph = refreshEdgeAssociations(corpus)
-    val edges = graph.edges
-    val vertices = graph.vertices
-    val conf = edges.context.getConf
-    val numThreads = conf.getInt(cs_numThreads, 1)
-    val sampl = conf.get(cs_accelMethod, "alias")
-    val numPartitions = edges.partitions.length
-    val partRDD = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) => {
-      val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
-      val betaSum = beta * numTerms
-      val denoms = calcDenoms(topicCounters, numTopics, betaSum)
-      val alphaK_denoms = (denoms.copy :*= ((alphaAS - betaSum) * alphaRatio)) :+= alphaRatio
-      val beta_denoms = denoms.copy :*= beta
-      val totalSize = ep.size
-      val lcSrcIds = ep.localSrcIds
-      val lcDstIds = ep.localDstIds
-      val vattrs = ep.vertexAttrs
-      val data = ep.data
-      val thq = new ConcurrentLinkedQueue(0 until numThreads)
-      // table/ftree is a per term data structure
-      // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
-      // so, use below simple cache to avoid calculating table each time
-      val global: DiscreteSampler[Double] = sampl match {
-        case "ftree" => new FTree[Double](numTopics, isSparse=false)
-        case "alias" | "hybrid" => new AliasTable(numTopics)
+    beta: Double)
+    (pid: Int, ep: EdgePartition[TA, TC]): EdgePartition[TA, TC]
+
+  def countPartition(numThreads: Int,
+    numTopics: Int,
+    inferenceOnly: Boolean)
+    (ep: EdgePartition[TA, TC]): Iterator[(VertexId, TC)]
+
+  def resampleTable[@specialized(Double, Int, Float, Long) T: spNum](gen: Random,
+    table: AliasTable[T],
+    state: Int,
+    cnt: Int = 0,
+    numSampling: Int = 0): Int = {
+    val newState = table.sampleRandom(gen)
+    if (newState == state && numSampling < 16) {
+      // discard it if the newly sampled topic is current topic
+      if ((cnt == 1 && table.used > 1) ||
+        /* the sampled topic that contains current token and other tokens */
+        (cnt > 1 && gen.nextDouble() < 1.0 / cnt)
+      /* the sampled topic has 1/cnt probability that belongs to current token */ ) {
+        return resampleTable(gen, table, state, cnt, numSampling + 1)
       }
-      val gens = new Array[XORShiftRandom](numThreads)
-      val termDists = new Array[DiscreteSampler[Double]](numThreads)
-      val cdfDists = new Array[CumulativeDist[Double]](numThreads)
-      tDense(global, alphaK_denoms, beta, numTopics)
+    }
+    newState
+  }
+}
 
-      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-      val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
-        val thid = thq.poll()
-        var gen = gens(thid)
-        if (gen == null) {
-          gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
-          gens(thid) = gen
-          termDists(thid) = sampl match {
-            case "alias" => new AliasTable[Double](numTopics)
-            case "ftree" | "hybrid" => new FTree(numTopics, isSparse=true)
-          }
-          cdfDists(thid) = new CumulativeDist[Double](numTopics)
-        }
-        val termDist = termDists(thid)
-        val si = lcSrcIds(offset)
-        val orgTermTopics = vattrs(si)
-        wSparse(termDist, alphaK_denoms, orgTermTopics)
-        val termTopics = orgTermTopics match {
-          case v: BDV[Count] => v
-          case v: BSV[Count] => toBDV(v)
-        }
-        val termBeta_denoms = calcTermBetaDenoms(orgTermTopics, denoms, beta_denoms, numTopics)
-        val cdfDist = cdfDists(thid)
-        var pos = offset
-        while (pos < totalSize && lcSrcIds(pos) == si) {
-          val di = lcDstIds(pos)
-          val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
-          dSparse(cdfDist, docTopics, termBeta_denoms)
-          val topics = data(pos)
-          var i = 0
-          while (i < topics.length) {
-            val topic = topics(i)
-            val newTopic = tokenSampling(gen, global, termDist, cdfDist, termTopics, topic)
-            topics(i) = newTopic
-            i += 1
-          }
-          pos += 1
-        }
-        thq.add(thid)
-      }))
-      Await.ready(all, 2.hour)
-      es.shutdown()
+abstract class LDAWordByWord extends LDAAlgorithm {
+  override def countPartition(numThreads: Int,
+    numTopics: Int,
+    inferenceOnly: Boolean)
+    (ep: EdgePartition[TA, TC]): Iterator[(VertexId, TC)] = {
+    val dscp = numTopics >>> 3
+    val totalSize = ep.size
+    val lcSrcIds = ep.localSrcIds
+    val lcDstIds = ep.localDstIds
+    val l2g = ep.local2global
+    val vattrs = ep.vertexAttrs
+    val data = ep.data
+    val vertSize = vattrs.length
+    val results = new Array[(VertexId, TC)](vertSize)
+    val marks = new AtomicIntegerArray(vertSize)
 
-      (pid, ep.withoutVertexAttributes[TC]())
-    })), preservesPartitioning=true)
-    GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
+    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+      val si = lcSrcIds(offset)
+      var termTuple = results(si)
+      if (termTuple == null && !inferenceOnly) {
+        termTuple = (l2g(si), BSV.zeros[Count](numTopics))
+        results(si) = termTuple
+      }
+      var termTopics = if (!inferenceOnly) termTuple._2 else null
+      var pos = offset
+      while (pos < totalSize && lcSrcIds(pos) == si) {
+        val di = lcDstIds(pos)
+        var docTuple = results(di)
+        if (docTuple == null) {
+          if (marks.getAndDecrement(di) == 0) {
+            docTuple = (l2g(di), BSV.zeros[Count](numTopics))
+            results(di) = docTuple
+            marks.set(di, Int.MaxValue)
+          } else {
+            while (marks.get(di) <= 0) {}
+            docTuple = results(di)
+          }
+        }
+        val docTopics = docTuple._2
+        val topics = data(pos)
+        var i = 0
+        while (i < topics.length) {
+          val topic = topics(i)
+          if (!inferenceOnly) termTopics match {
+            case v: BDV[Count] => v(topic) += 1
+            case v: BSV[Count] =>
+              v(topic) += 1
+              if (v.activeSize >= dscp) {
+                termTuple = (l2g(si), toBDV(v))
+                results(si) = termTuple
+                termTopics = termTuple._2
+              }
+          }
+          docTopics.synchronized {
+            docTopics(topic) += 1
+          }
+          i += 1
+        }
+        pos += 1
+      }
+    }))
+    Await.ready(all, 1.hour)
+    es.shutdown()
+    results.iterator.filter(_ != null)
+  }
+}
+
+class FastLDA extends LDAWordByWord {
+  override def samplePartition(numThreads: Int,
+    accelMethod: String,
+    numPartitions: Int,
+    sampIter: Int,
+    seed: Int,
+    topicCounters: BDV[Count],
+    numTokens: Long,
+    numTopics: Int,
+    numTerms: Int,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double)
+    (pid: Int, ep: EdgePartition[TA, TC]): EdgePartition[TA, TC] = {
+    val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
+    val betaSum = beta * numTerms
+    val denoms = calcDenoms(topicCounters, numTopics, betaSum)
+    val alphaK_denoms = (denoms.copy :*= ((alphaAS - betaSum) * alphaRatio)) :+= alphaRatio
+    val beta_denoms = denoms.copy :*= beta
+    val totalSize = ep.size
+    val lcSrcIds = ep.localSrcIds
+    val lcDstIds = ep.localDstIds
+    val vattrs = ep.vertexAttrs
+    val data = ep.data
+    val thq = new ConcurrentLinkedQueue(0 until numThreads)
+    // table/ftree is a per term data structure
+    // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
+    // so, use below simple cache to avoid calculating table each time
+    val global: DiscreteSampler[Double] = accelMethod match {
+      case "ftree" => new FTree[Double](numTopics, isSparse=false)
+      case "alias" | "hybrid" => new AliasTable(numTopics)
+    }
+    val gens = new Array[XORShiftRandom](numThreads)
+    val termDists = new Array[DiscreteSampler[Double]](numThreads)
+    val cdfDists = new Array[CumulativeDist[Double]](numThreads)
+    tDense(global, alphaK_denoms, beta, numTopics)
+
+    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+      val thid = thq.poll()
+      var gen = gens(thid)
+      if (gen == null) {
+        gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
+        gens(thid) = gen
+        termDists(thid) = accelMethod match {
+          case "alias" => new AliasTable[Double](numTopics)
+          case "ftree" | "hybrid" => new FTree(numTopics, isSparse=true)
+        }
+        cdfDists(thid) = new CumulativeDist[Double](numTopics)
+      }
+      val termDist = termDists(thid)
+      val si = lcSrcIds(offset)
+      val orgTermTopics = vattrs(si)
+      wSparse(termDist, alphaK_denoms, orgTermTopics)
+      val termTopics = orgTermTopics match {
+        case v: BDV[Count] => v
+        case v: BSV[Count] => toBDV(v)
+      }
+      val termBeta_denoms = calcTermBetaDenoms(orgTermTopics, denoms, beta_denoms, numTopics)
+      val cdfDist = cdfDists(thid)
+      var pos = offset
+      while (pos < totalSize && lcSrcIds(pos) == si) {
+        val di = lcDstIds(pos)
+        val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
+        dSparse(cdfDist, docTopics, termBeta_denoms)
+        val topics = data(pos)
+        var i = 0
+        while (i < topics.length) {
+          val topic = topics(i)
+          val newTopic = tokenSampling(gen, global, termDist, cdfDist, termTopics, topic)
+          topics(i) = newTopic
+          i += 1
+        }
+        pos += 1
+      }
+      thq.add(thid)
+    }))
+    Await.ready(all, 2.hour)
+    es.shutdown()
+    ep.withoutVertexAttributes()
   }
 
   def tokenSampling(gen: Random,
@@ -411,124 +440,117 @@ class FastLDA extends LDAWordByWord {
 }
 
 class LightLDA extends LDAWordByWord {
-  override def sampleGraph(corpus: Graph[TC, TA],
-    topicCounters: BDV[Count],
-    seed: Int,
+  override def samplePartition(numThreads: Int,
+    accelMethod: String,
+    numPartitions: Int,
     sampIter: Int,
+    seed: Int,
+    topicCounters: BDV[Count],
     numTokens: Long,
     numTopics: Int,
     numTerms: Int,
     alpha: Double,
     alphaAS: Double,
-    beta: Double): GraphImpl[TC, TA] = {
-    val graph = refreshEdgeAssociations(corpus)
-    val edges = graph.edges
-    val vertices = graph.vertices
-    val conf = edges.context.getConf
-    val numThreads = conf.getInt(cs_numThreads, 1)
-    val numPartitions = edges.partitions.length
-    val partRDD = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) => {
-      val alphaSum = alpha * numTopics
-      val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
-      val betaSum = beta * numTerms
-      val totalSize = ep.size
-      val lcSrcIds = ep.localSrcIds
-      val lcDstIds = ep.localDstIds
-      val vattrs = ep.vertexAttrs
-      val data = ep.data
-      val vertSize = vattrs.length
-      val thq = new ConcurrentLinkedQueue(0 until numThreads)
+    beta: Double)
+    (pid: Int, ep: EdgePartition[TA, TC]): EdgePartition[TA, TC] = {
+    val alphaSum = alpha * numTopics
+    val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
+    val betaSum = beta * numTerms
+    val totalSize = ep.size
+    val lcSrcIds = ep.localSrcIds
+    val lcDstIds = ep.localDstIds
+    val vattrs = ep.vertexAttrs
+    val data = ep.data
+    val vertSize = vattrs.length
+    val thq = new ConcurrentLinkedQueue(0 until numThreads)
 
-      val alphaDist = new AliasTable[Double](numTopics)
-      val betaDist = new AliasTable[Double](numTopics)
-      val docCache = new Array[SoftReference[AliasTable[Count]]](vertSize)
-      val gens = new Array[XORShiftRandom](numThreads)
-      val termDists = new Array[AliasTable[Double]](numThreads)
-      dDense(alphaDist, topicCounters, numTopics, alphaRatio, alphaAS)
-      wDense(betaDist, topicCounters, numTopics, beta, betaSum)
-      val p = tokenTopicProb(topicCounters, beta, alpha,
-        alphaAS, numTokens, numTerms) _
-      val dPFun = docProb(topicCounters, alpha, alphaAS, numTokens) _
-      val wPFun = wordProb(topicCounters, numTerms, beta) _
+    val alphaDist = new AliasTable[Double](numTopics)
+    val betaDist = new AliasTable[Double](numTopics)
+    val docCache = new Array[SoftReference[AliasTable[Count]]](vertSize)
+    val gens = new Array[XORShiftRandom](numThreads)
+    val termDists = new Array[AliasTable[Double]](numThreads)
+    dDense(alphaDist, topicCounters, numTopics, alphaRatio, alphaAS)
+    wDense(betaDist, topicCounters, numTopics, beta, betaSum)
+    val p = tokenTopicProb(topicCounters, beta, alpha,
+      alphaAS, numTokens, numTerms) _
+    val dPFun = docProb(topicCounters, alpha, alphaAS, numTokens) _
+    val wPFun = wordProb(topicCounters, numTerms, beta) _
 
-      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-      val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
-        val thid = thq.poll()
-        var gen = gens(thid)
-        if (gen == null) {
-          gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
-          gens(thid) = gen
-          termDists(thid) = new AliasTable[Double](numTopics)
+    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+      val thid = thq.poll()
+      var gen = gens(thid)
+      if (gen == null) {
+        gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
+        gens(thid) = gen
+        termDists(thid) = new AliasTable[Double](numTopics)
+      }
+      val termDist = termDists(thid)
+      val si = lcSrcIds(offset)
+      val termTopics = vattrs(si)
+      wSparse(termDist, topicCounters, termTopics, betaSum)
+      var pos = offset
+      while (pos < totalSize && lcSrcIds(pos) == si) {
+        val di = lcDstIds(pos)
+        val docTopics = vattrs(di)
+        if (gen.nextDouble() < 1e-6) {
+          dDense(alphaDist, topicCounters, numTopics, alphaRatio, alphaAS)
+          wDense(betaDist, topicCounters, numTopics, beta, betaSum)
         }
-        val termDist = termDists(thid)
-        val si = lcSrcIds(offset)
-        val termTopics = vattrs(si)
-        wSparse(termDist, topicCounters, termTopics, betaSum)
-        var pos = offset
-        while (pos < totalSize && lcSrcIds(pos) == si) {
-          val di = lcDstIds(pos)
-          val docTopics = vattrs(di)
-          if (gen.nextDouble() < 1e-6) {
-            dDense(alphaDist, topicCounters, numTopics, alphaRatio, alphaAS)
-            wDense(betaDist, topicCounters, numTopics, beta, betaSum)
-          }
-          if (gen.nextDouble() < 1e-4) {
-            wSparse(termDist, topicCounters, termTopics, betaSum)
-          }
-          val docDist = dSparseCached(cache => cache == null || cache.get() == null || gen.nextDouble() < 1e-2,
-            docCache, docTopics, di)
+        if (gen.nextDouble() < 1e-4) {
+          wSparse(termDist, topicCounters, termTopics, betaSum)
+        }
+        val docDist = dSparseCached(cache => cache == null || cache.get() == null || gen.nextDouble() < 1e-2,
+          docCache, docTopics, di)
 
-          val topics = data(pos)
-          var i = 0
-          while (i < topics.length) {
-            var docProposal = gen.nextDouble() < 0.5
-            var j = 0
-            while (j < 8) {
-              docProposal = !docProposal
-              val topic = topics(i)
-              var proposalTopic = -1
-              val q = if (docProposal) {
-                val sNorm = alphaDist.norm
-                val norm = sNorm + docDist.norm
-                if (gen.nextDouble() * norm < sNorm) {
-                  proposalTopic = alphaDist.sampleRandom(gen)
-                } else {
-                  proposalTopic = resampleTable(gen, docDist, topic, docTopics(topic))
-                }
-                dPFun
+        val topics = data(pos)
+        var i = 0
+        while (i < topics.length) {
+          var docProposal = gen.nextDouble() < 0.5
+          var j = 0
+          while (j < 8) {
+            docProposal = !docProposal
+            val topic = topics(i)
+            var proposalTopic = -1
+            val q = if (docProposal) {
+              val sNorm = alphaDist.norm
+              val norm = sNorm + docDist.norm
+              if (gen.nextDouble() * norm < sNorm) {
+                proposalTopic = alphaDist.sampleRandom(gen)
               } else {
-                val sNorm = termDist.norm
-                val norm = sNorm + betaDist.norm
-                val table = if (gen.nextDouble() * norm < sNorm) termDist else betaDist
-                proposalTopic = table.sampleRandom(gen)
-                wPFun
+                proposalTopic = resampleTable(gen, docDist, topic, docTopics(topic))
               }
-
-              val newTopic = tokenSampling(gen, docTopics, termTopics, docProposal,
-                topic, proposalTopic, q, p)
-              if (newTopic != topic) {
-                topics(i) = newTopic
-                docTopics(topic) -= 1
-                docTopics(newTopic) += 1
-                termTopics(topic) -= 1
-                termTopics(newTopic) += 1
-                topicCounters(topic) -= 1
-                topicCounters(newTopic) += 1
-              }
-              j += 1
+              dPFun
+            } else {
+              val sNorm = termDist.norm
+              val norm = sNorm + betaDist.norm
+              val table = if (gen.nextDouble() * norm < sNorm) termDist else betaDist
+              proposalTopic = table.sampleRandom(gen)
+              wPFun
             }
-            i += 1
-          }
-          pos += 1
-        }
-        thq.add(thid)
-      }))
-      Await.ready(all, 2.hour)
-      es.shutdown()
 
-      (pid, ep.withoutVertexAttributes[TC]())
-    })), preservesPartitioning=true)
-    GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
+            val newTopic = tokenSampling(gen, docTopics, termTopics, docProposal,
+              topic, proposalTopic, q, p)
+            if (newTopic != topic) {
+              topics(i) = newTopic
+              docTopics(topic) -= 1
+              docTopics(newTopic) += 1
+              termTopics(topic) -= 1
+              termTopics(newTopic) += 1
+              topicCounters(topic) -= 1
+              topicCounters(newTopic) += 1
+            }
+            j += 1
+          }
+          i += 1
+        }
+        pos += 1
+      }
+      thq.add(thid)
+    }))
+    Await.ready(all, 2.hour)
+    es.shutdown()
+    ep.withoutVertexAttributes()
   }
 
   /**
@@ -698,191 +720,136 @@ class LightLDA extends LDAWordByWord {
 }
 
 abstract class LDADocByDoc extends LDAAlgorithm {
-  override def updateVertexCounters(sampledCorpus: Graph[TC, TA],
+  override def countPartition(numThreads: Int,
     numTopics: Int,
-    inferenceOnly: Boolean = false): GraphImpl[TC, TA] = {
-    val dscp = numTopics >> 3
-    val graph = sampledCorpus.asInstanceOf[GraphImpl[TC, TA]]
-    val vertices = graph.vertices
-    val edges = graph.edges
-    val conf = edges.context.getConf
-    val numThreads = conf.getInt(cs_numThreads, 1)
-    val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap(Function.tupled((_, ep) => {
-      val totalSize = ep.size
-      val lcSrcIds = ep.localSrcIds
-      val lcDstIds = ep.localDstIds
-      val l2g = ep.local2global
-      val vattrs = ep.vertexAttrs
-      val data = ep.data
-      val vertSize = vattrs.length
-      val results = new Array[(VertexId, TC)](vertSize)
-      val marks = new AtomicIntegerArray(vertSize)
+    inferenceOnly: Boolean)
+    (ep: EdgePartition[TA, TC]): Iterator[(VertexId, TC)] = {
+    val dscp = numTopics >>> 3
+    val totalSize = ep.size
+    val lcSrcIds = ep.localSrcIds
+    val lcDstIds = ep.localDstIds
+    val l2g = ep.local2global
+    val vattrs = ep.vertexAttrs
+    val data = ep.data
+    val vertSize = vattrs.length
+    val results = new Array[(VertexId, TC)](vertSize)
+    val marks = new AtomicIntegerArray(vertSize)
 
-      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-      val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
-        val si = lcSrcIds(offset)
-        val docTuple = (l2g(si), BSV.zeros[Count](numTopics))
-        results(si) = docTuple
-        val docTopics = docTuple._2
-        var pos = offset
-        while (pos < totalSize && lcSrcIds(pos) == si) {
-          val di = lcDstIds(pos)
-          var termTuple = results(di)
-          if (termTuple == null && !inferenceOnly) {
-            if (marks.getAndDecrement(di) == 0) {
-              termTuple = (l2g(di), BSV.zeros[Count](numTopics))
-              results(di) = termTuple
-              marks.set(di, Int.MaxValue)
-            } else {
-              while (marks.get(di) <= 0) {}
-              termTuple = results(di)
-            }
+    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+      val si = lcSrcIds(offset)
+      val docTuple = (l2g(si), BSV.zeros[Count](numTopics))
+      results(si) = docTuple
+      val docTopics = docTuple._2
+      var pos = offset
+      while (pos < totalSize && lcSrcIds(pos) == si) {
+        val di = lcDstIds(pos)
+        var termTuple = results(di)
+        if (termTuple == null && !inferenceOnly) {
+          if (marks.getAndDecrement(di) == 0) {
+            termTuple = (l2g(di), BSV.zeros[Count](numTopics))
+            results(di) = termTuple
+            marks.set(di, Int.MaxValue)
+          } else {
+            while (marks.get(di) <= 0) {}
+            termTuple = results(di)
           }
-          var termTopics = if (!inferenceOnly) termTuple._2 else null
-          val topics = data(pos)
-          var i = 0
-          while (i < topics.length) {
-            val topic = topics(i)
-            docTopics(topic) += 1
-            if (!inferenceOnly) {
-              while (marks.getAndSet(di, -1) < 0) {}
-              termTopics match {
-                case v: BDV[Count] => v(topic) += 1
-                case v: BSV[Count] =>
-                  v(topic) += 1
-                  if (v.activeSize >= dscp) {
-                    termTuple = (l2g(si), toBDV(v))
-                    results(di) = termTuple
-                    termTopics = termTuple._2
-                  }
-              }
-              marks.set(di, Int.MaxValue)
-            }
-            i += 1
-          }
-          pos += 1
         }
-      }))
-      Await.ready(all, 1.hour)
-      es.shutdown()
-
-      results.iterator.filter(_ != null)
-    }))).partitionBy(vertices.partitioner.get)
-
-    val partRDD = vertices.partitionsRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
-      (svpIter, cntsIter) => svpIter.map(svp => {
-        val results = svp.values
-        val index = svp.index
-        val marks = new AtomicIntegerArray(results.length)
-        implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-        val all = cntsIter.grouped(numThreads * 5).map(batch => Future {
-          batch.foreach(Function.tupled((vid, counter) => {
-            val i = index.getPos(vid)
-            if (marks.getAndDecrement(i) == 0) {
-              results(i) = counter
-            } else {
-              while (marks.getAndSet(i, -1) <= 0) {}
-              val agg = results(i)
-              results(i) = if (isTermId(vid)) agg match {
-                case u: BDV[Count] => counter match {
-                  case v: BDV[Count] => u :+= v
-                  case v: BSV[Count] => u :+= v
+        var termTopics = if (!inferenceOnly) termTuple._2 else null
+        val topics = data(pos)
+        var i = 0
+        while (i < topics.length) {
+          val topic = topics(i)
+          docTopics(topic) += 1
+          if (!inferenceOnly) {
+            while (marks.getAndSet(di, -1) < 0) {}
+            termTopics match {
+              case v: BDV[Count] => v(topic) += 1
+              case v: BSV[Count] =>
+                v(topic) += 1
+                if (v.activeSize >= dscp) {
+                  termTuple = (l2g(si), toBDV(v))
+                  results(di) = termTuple
+                  termTopics = termTuple._2
                 }
-                case u: BSV[Count] => counter match {
-                  case v: BDV[Count] => v :+= u
-                  case v: BSV[Count] =>
-                    u :+= v
-                    if (u.activeSize >= dscp) toBDV(u) else u
-                }
-              } else agg match {
-                case u: BSV[Count] => counter match {
-                  case v: BSV[Count] => u :+= v
-                }
-              }
             }
-            marks.set(i, Int.MaxValue)
-          }))
-        })
-        Await.ready(Future.sequence(all), 1.hour)
-        es.shutdown()
-        svp.withValues(results)
-      })
-    )
-    GraphImpl.fromExistingRDDs(vertices.withPartitionsRDD(partRDD), edges)
+            marks.set(di, Int.MaxValue)
+          }
+          i += 1
+        }
+        pos += 1
+      }
+    }))
+    Await.ready(all, 1.hour)
+    es.shutdown()
+    results.iterator.filter(_ != null)
   }
 }
 
 class SparseLDA extends LDADocByDoc {
-  override def sampleGraph(corpus: Graph[TC, TA],
-    topicCounters: BDV[Count],
-    seed: Int,
+  override def samplePartition(numThreads: Int,
+    accelMethod: String,
+    numPartitions: Int,
     sampIter: Int,
+    seed: Int,
+    topicCounters: BDV[Count],
     numTokens: Long,
     numTopics: Int,
     numTerms: Int,
     alpha: Double,
     alphaAS: Double,
-    beta: Double): GraphImpl[TC, TA] = {
-    val graph = refreshEdgeAssociations(corpus)
-    val edges = graph.edges
-    val vertices = graph.vertices
-    val conf = edges.context.getConf
-    val numThreads = conf.getInt(cs_numThreads, 1)
-    val numPartitions = edges.partitions.length
-    val partRDD = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) => {
-      val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
-      val betaSum = beta * numTerms
-      val totalSize = ep.size
-      val lcSrcIds = ep.localSrcIds
-      val lcDstIds = ep.localDstIds
-      val vattrs = ep.vertexAttrs
-      val data = ep.data
-      val thq = new ConcurrentLinkedQueue(0 until numThreads)
-      val gens = new Array[XORShiftRandom](numThreads)
-      val docDists = new Array[FlatDist[Double]](numThreads)
-      val mainDists = new Array[FlatDist[Double]](numThreads)
-      val alphaK_denoms = calcGlobalCache(topicCounters, alphaAS, betaSum, alphaRatio, numTopics)
-      val global = new FlatDist[Double](numTopics, isSparse=false)
-      tDense(global, alphaK_denoms, beta, numTopics)
+    beta: Double)
+    (pid: Int, ep: EdgePartition[TA, TC]): EdgePartition[TA, TC] = {
+    val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
+    val betaSum = beta * numTerms
+    val totalSize = ep.size
+    val lcSrcIds = ep.localSrcIds
+    val lcDstIds = ep.localDstIds
+    val vattrs = ep.vertexAttrs
+    val data = ep.data
+    val thq = new ConcurrentLinkedQueue(0 until numThreads)
+    val gens = new Array[XORShiftRandom](numThreads)
+    val docDists = new Array[FlatDist[Double]](numThreads)
+    val mainDists = new Array[FlatDist[Double]](numThreads)
+    val alphaK_denoms = calcGlobalCache(topicCounters, alphaAS, betaSum, alphaRatio, numTopics)
+    val global = new FlatDist[Double](numTopics, isSparse = false)
+    tDense(global, alphaK_denoms, beta, numTopics)
 
-      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-      val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
-        val thid = thq.poll()
-        var gen = gens(thid)
-        if (gen == null) {
-          gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
-          gens(thid) = gen
-          docDists(thid) = new FlatDist[Double](numTopics, isSparse=true)
-          mainDists(thid) = new FlatDist[Double](numTopics, isSparse=true)
+    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+      val thid = thq.poll()
+      var gen = gens(thid)
+      if (gen == null) {
+        gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
+        gens(thid) = gen
+        docDists(thid) = new FlatDist[Double](numTopics, isSparse = true)
+        mainDists(thid) = new FlatDist[Double](numTopics, isSparse = true)
+      }
+      val docDist = docDists(thid)
+      val si = lcSrcIds(offset)
+      val docTopics = vattrs(si).asInstanceOf[BSV[Count]]
+      val nkd_denoms = calcDocCache(topicCounters, docTopics, betaSum, numTopics)
+      dSparse(docDist, nkd_denoms, beta)
+      val docAlphaK_Denoms = calcDocAlphaKDenoms(alphaK_denoms, nkd_denoms)
+      val mainDist = mainDists(thid)
+      var pos = offset
+      while (pos < totalSize && lcSrcIds(pos) == si) {
+        val di = lcDstIds(pos)
+        val termTopics = vattrs(di)
+        wSparse(mainDist, termTopics, docAlphaK_Denoms, numTopics)
+        val topics = data(pos)
+        var i = 0
+        while (i < topics.length) {
+          topics(i) = tokenSampling(gen, global, docDist, mainDist)
+          i += 1
         }
-        val docDist = docDists(thid)
-        val si = lcSrcIds(offset)
-        val docTopics = vattrs(si).asInstanceOf[BSV[Count]]
-        val nkd_denoms = calcDocCache(topicCounters, docTopics, betaSum, numTopics)
-        dSparse(docDist, nkd_denoms, beta)
-        val docAlphaK_Denoms = calcDocAlphaKDenoms(alphaK_denoms, nkd_denoms)
-        val mainDist = mainDists(thid)
-        var pos = offset
-        while (pos < totalSize && lcSrcIds(pos) == si) {
-          val di = lcDstIds(pos)
-          val termTopics = vattrs(di)
-          wSparse(mainDist, termTopics, docAlphaK_Denoms, numTopics)
-          val topics = data(pos)
-          var i = 0
-          while (i < topics.length) {
-            topics(i) = tokenSampling(gen, global, docDist, mainDist)
-            i += 1
-          }
-          pos += 1
-        }
-        thq.add(thid)
-      }))
-      Await.ready(all, 2.hour)
-      es.shutdown()
-
-      (pid, ep.withoutVertexAttributes[TC]())
-    })), preservesPartitioning = true)
-    GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
+        pos += 1
+      }
+      thq.add(thid)
+    }))
+    Await.ready(all, 2.hour)
+    es.shutdown()
+    ep.withoutVertexAttributes()
   }
 
   def tokenSampling(gen: Random,
