@@ -123,8 +123,8 @@ class LDA(@transient var corpus: Graph[TC, TA],
       aggs.reduce(_ :+= _)
     }))
     val gtc = aggRdd.collect().par.reduce(_ :+= _)
-    // val count = gtc.data.par.map(_.toLong).sum
-    // assert(count == numTokens, s"numTokens=$numTokens, count=$count")
+    val count = gtc.data.par.map(_.toLong).sum
+    assert(count == numTokens, s"numTokens=$numTokens, count=$count")
     topicCounters = gtc
   }
 
@@ -133,7 +133,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
     val saveIntv = scConf.getInt(cs_saveInterval, 0)
     if (pplx) {
       println("Before Gibbs sampling:")
-      LDAMetrics.outputPerplexity(this, println)
+      LDAPerplexity(this).output(println)
     }
     var iter = 1
     while (iter <= totalIter) {
@@ -141,7 +141,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
       val startedAt = System.nanoTime()
       gibbsSampling(iter)
       if (pplx) {
-        LDAMetrics.outputPerplexity(this, println)
+        LDAPerplexity(this).output(println)
       }
       if (saveIntv > 0 && iter % saveIntv == 0) {
         val sc = corpus.edges.context

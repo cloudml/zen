@@ -28,7 +28,7 @@ import scala.concurrent.duration._
 import LDADefines._
 import com.github.cloudml.zen.ml.util._
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum, convert}
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.{EdgePartition, GraphImpl}
 import spire.math.{Numeric => spNum}
@@ -116,6 +116,28 @@ abstract class LDAAlgorithm extends Serializable {
     GraphImpl.fromExistingRDDs(vertices.withPartitionsRDD(partRDD), edges)
   }
 
+  def calcPerplexity(corpus: Graph[TC, TA],
+    topicCounters: BDV[Count],
+    numTokens: Long,
+    numTopics: Int,
+    numTerms: Int,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): LDAPerplexity = {
+    val refrGraph = refreshEdgeAssociations(corpus)
+    val edges = refrGraph.edges
+    val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
+    val ppf = perplexPartition(numThreads, topicCounters, numTokens, numTopics, numTerms, alpha, alphaAS, beta)_
+    val sumPart = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((_, ep) =>
+      ppf(ep)
+    )))
+    val (llht, wllht, dllht) = sumPart.collect().unzip3
+    val pplx = math.exp(-llht.par.sum / numTokens)
+    val wpplx = math.exp(-wllht.par.sum / numTokens)
+    val dpplx = math.exp(-dllht.par.sum / numTokens)
+    new LDAPerplexity(pplx, wpplx, dpplx)
+  }
+
   def samplePartition(numThreads: Int,
     accelMethod: String,
     numPartitions: Int,
@@ -135,6 +157,16 @@ abstract class LDAAlgorithm extends Serializable {
     inferenceOnly: Boolean)
     (ep: EdgePartition[TA, TC]): Iterator[(VertexId, TC)]
 
+  def perplexPartition(numThreads: Int,
+    topicCounters: BDV[Count],
+    numTokens: Long,
+    numTopics: Int,
+    numTerms: Int,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double)
+    (ep: EdgePartition[TA, TC]): (Double, Double, Double)
+
   def resampleTable[@specialized(Double, Int, Float, Long) T: spNum](gen: Random,
     table: AliasTable[T],
     state: Int,
@@ -151,6 +183,37 @@ abstract class LDAAlgorithm extends Serializable {
       }
     }
     newState
+  }
+
+  def resetDist_abDense(ab: DiscreteSampler[Double],
+    alphak_denoms: BDV[Double],
+    beta: Double): DiscreteSampler[Double] = {
+    val probs = alphak_denoms.copy :*= beta
+    ab.resetDist(probs.data, null, probs.length)
+  }
+
+  @inline def sum_abDense(alphak_denoms: BDV[Double],
+    beta: Double): Double = {
+    sum(alphak_denoms :*= beta)
+  }
+
+  def calc_denoms(topicCounters: BDV[Count],
+    betaSum: Double): BDV[Double] = {
+    val k = topicCounters.length
+    val bdv = BDV.zeros[Double](k)
+    var i = 0
+    while (i < k) {
+      bdv(i) = 1.0 / (topicCounters(i) + betaSum)
+      i += 1
+    }
+    bdv
+  }
+
+  @inline def calc_alphak_denoms(denoms: BDV[Double],
+    alphaAS: Double,
+    betaSum: Double,
+    alphaRatio: Double): BDV[Double] = {
+    (denoms.copy :*= ((alphaAS - betaSum) * alphaRatio)) :+= alphaRatio
   }
 }
 
@@ -220,6 +283,196 @@ abstract class LDAWordByWord extends LDAAlgorithm {
     es.shutdown()
     results.iterator.filter(_ != null)
   }
+
+  override def perplexPartition(numThreads: Int,
+    topicCounters: BDV[Count],
+    numTokens: Long,
+    numTopics: Int,
+    numTerms: Int,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double)
+    (ep: EdgePartition[TA, TC]): (Double, Double, Double) = {
+    val alphaSum = alpha * numTopics
+    val betaSum = beta * numTerms
+    val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
+    val alphaks = (convert(topicCounters, Double) :+= alphaAS) :*= alphaRatio
+    val denoms = calc_denoms(topicCounters, betaSum)
+    val alphak_denoms = calc_alphak_denoms(denoms, alphaAS, betaSum, alphaRatio)
+    val beta_denoms = denoms.copy :*= beta
+    // \frac{{\alpha }_{k}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
+    val abDenseSum = sum_abDense(alphak_denoms, beta)
+    val totalSize = ep.size
+    val lcSrcIds = ep.localSrcIds
+    val lcDstIds = ep.localDstIds
+    val vattrs = ep.vertexAttrs
+    val data = ep.data
+    val vertSize = vattrs.length
+    val doc_denoms = new Array[Double](vertSize)
+    val marks = new AtomicIntegerArray(vertSize)
+    @volatile var llhs = 0D
+    @volatile var wllhs = 0D
+    @volatile var dllhs = 0D
+
+    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+      val si = lcSrcIds(offset)
+      val termTopics = vattrs(si)
+      val waSparseSum = sum_waSparse(alphak_denoms, termTopics)
+      val sum12 = abDenseSum + waSparseSum
+      val termBeta_denoms = calc_termBeta_denoms(denoms, beta_denoms, termTopics)
+      var llhs_th = 0D
+      var wllhs_th = 0D
+      var dllhs_th = 0D
+      var pos = offset
+      while (pos < totalSize && lcSrcIds(pos) == si) {
+        val di = lcDstIds(pos)
+        val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
+        if (marks.get(di) == 0) {
+          doc_denoms(di) = 1.0 / (sum(docTopics) + alphaSum)
+          marks.set(di, 1)
+        }
+        val doc_denom = doc_denoms(di)
+        val topics = data(pos)
+        val dwbSparseSum = sum_dwbSparse(termBeta_denoms, docTopics)
+        val prob = (sum12 + dwbSparseSum) * doc_denom
+        llhs_th += Math.log(prob) * topics.length
+        var i = 0
+        while (i < topics.length) {
+          val topic = topics(i)
+          wllhs_th += Math.log(termBeta_denoms(topic))
+          dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * doc_denom)
+          i += 1
+        }
+        pos += 1
+      }
+      llhs += llhs_th
+      wllhs += wllhs_th
+      dllhs += dllhs_th
+    }))
+    Await.ready(all, 2.hour)
+    es.shutdown()
+    (llhs, wllhs, dllhs)
+  }
+
+  def resetDist_waSparse(wa: DiscreteSampler[Double],
+    alphak_denoms: BDV[Double],
+    termTopics: TC): DiscreteSampler[Double] = termTopics match {
+    case v: BDV[Count] =>
+      val k = v.length
+      val probs = new Array[Double](k)
+      val space = new Array[Int](k)
+      var psize = 0
+      var i = 0
+      while (i < k) {
+        val cnt = v(i)
+        if (cnt > 0) {
+          probs(psize) = alphak_denoms(i) * cnt
+          space(psize) = i
+          psize += 1
+        }
+        i += 1
+      }
+      wa.resetDist(probs, space, psize)
+    case v: BSV[Count] =>
+      val used = v.used
+      val index = v.index
+      val data = v.data
+      val probs = new Array[Double](used)
+      var i = 0
+      while (i < used) {
+        probs(i) = alphak_denoms(index(i)) * data(i)
+        i += 1
+      }
+      wa.resetDist(probs, index, used)
+  }
+
+  def sum_waSparse(alphak_denoms: BDV[Double],
+    termTopics: TC): Double = termTopics match {
+    case v: BDV[Count] =>
+      val k = v.length
+      var sum = 0.0
+      var i = 0
+      while (i < k) {
+        val cnt = v(i)
+        if (cnt > 0) {
+          sum += alphak_denoms(i) * cnt
+        }
+        i += 1
+      }
+      sum
+    case v: BSV[Count] =>
+      val used = v.used
+      val index = v.index
+      val data = v.data
+      var sum = 0.0
+      var i = 0
+      while (i < used) {
+        sum += alphak_denoms(index(i)) * data(i)
+        i += 1
+      }
+      sum
+  }
+  
+  def resetDist_dwbSparse(dwb: CumulativeDist[Double],
+    termBeta_denoms: BDV[Double],
+    docTopics: BSV[Count]): CumulativeDist[Double] = {
+    val used = docTopics.used
+    val index = docTopics.index
+    val data = docTopics.data
+    // DANGER operations for performance
+    dwb._used = used
+    val cdf = dwb._cdf
+    var sum = 0.0
+    var i = 0
+    while (i < used) {
+      sum += termBeta_denoms(index(i)) * data(i)
+      cdf(i) = sum
+      i += 1
+    }
+    dwb._space = index
+    dwb
+  }
+
+  def sum_dwbSparse(termBeta_denoms: BDV[Double],
+    docTopics: BSV[Count]): Double = {
+    val used = docTopics.used
+    val index = docTopics.index
+    val data = docTopics.data
+    var sum = 0.0
+    var i = 0
+    while (i < used) {
+      sum += termBeta_denoms(index(i)) * data(i)
+      i += 1
+    }
+    sum
+  }
+
+  def calc_termBeta_denoms(denoms: BDV[Double],
+    beta_denoms: BDV[Double],
+    termTopics: TC): BDV[Double] = {
+    val bdv = beta_denoms.copy
+    termTopics match {
+      case v: BDV[Count] =>
+        val k = v.length
+        var i = 0
+        while (i < k) {
+          bdv(i) += denoms(i) * v(i)
+          i += 1
+        }
+      case v: BSV[Count] =>
+        val used = v.used
+        val index = v.index
+        val data = v.data
+        var i = 0
+        while (i < used) {
+          val topic = index(i)
+          bdv(topic) += denoms(topic) * data(i)
+          i += 1
+        }
+    }
+    bdv
+  }
 }
 
 class FastLDA extends LDAWordByWord {
@@ -238,8 +491,8 @@ class FastLDA extends LDAWordByWord {
     (pid: Int, ep: EdgePartition[TA, TC]): EdgePartition[TA, TC] = {
     val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
     val betaSum = beta * numTerms
-    val denoms = calcDenoms(topicCounters, numTopics, betaSum)
-    val alphaK_denoms = (denoms.copy :*= ((alphaAS - betaSum) * alphaRatio)) :+= alphaRatio
+    val denoms = calc_denoms(topicCounters, betaSum)
+    val alphak_denoms = calc_alphak_denoms(denoms, alphaAS, betaSum, alphaRatio)
     val beta_denoms = denoms.copy :*= beta
     val totalSize = ep.size
     val lcSrcIds = ep.localSrcIds
@@ -257,7 +510,7 @@ class FastLDA extends LDAWordByWord {
     val gens = new Array[XORShiftRandom](numThreads)
     val termDists = new Array[DiscreteSampler[Double]](numThreads)
     val cdfDists = new Array[CumulativeDist[Double]](numThreads)
-    tDense(global, alphaK_denoms, beta, numTopics)
+    resetDist_abDense(global, alphak_denoms, beta)
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
     val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
@@ -274,25 +527,24 @@ class FastLDA extends LDAWordByWord {
       }
       val termDist = termDists(thid)
       val si = lcSrcIds(offset)
-      val orgTermTopics = vattrs(si)
-      wSparse(termDist, alphaK_denoms, orgTermTopics)
-      val termTopics = orgTermTopics match {
+      val termTopics = vattrs(si)
+      resetDist_waSparse(termDist, alphak_denoms, termTopics)
+      val denseTermTopics = termTopics match {
         case v: BDV[Count] => v
         case v: BSV[Count] => toBDV(v)
       }
-      val termBeta_denoms = calcTermBetaDenoms(orgTermTopics, denoms, beta_denoms, numTopics)
+      val termBeta_denoms = calc_termBeta_denoms(denoms, beta_denoms, termTopics)
       val cdfDist = cdfDists(thid)
       var pos = offset
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
         val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
-        dSparse(cdfDist, docTopics, termBeta_denoms)
+        resetDist_dwbSparse(cdfDist, termBeta_denoms, docTopics)
         val topics = data(pos)
         var i = 0
         while (i < topics.length) {
           val topic = topics(i)
-          val newTopic = tokenSampling(gen, global, termDist, cdfDist, termTopics, topic)
-          topics(i) = newTopic
+          topics(i) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
           i += 1
         }
         pos += 1
@@ -305,137 +557,23 @@ class FastLDA extends LDAWordByWord {
   }
 
   def tokenSampling(gen: Random,
-    t: DiscreteSampler[Double],
-    w: DiscreteSampler[Double],
-    d: CumulativeDist[Double],
+    ab: DiscreteSampler[Double],
+    wa: DiscreteSampler[Double],
+    dwb: CumulativeDist[Double],
     termTopics: BDV[Count],
     topic: Int): Int = {
-    val dSum = d.norm
-    val dwSum = dSum + w.norm
-    val distSum = dwSum + t.norm
+    val dwbSum = dwb.norm
+    val sum23 = dwbSum + wa.norm
+    val distSum = sum23 + ab.norm
     val genSum = gen.nextDouble() * distSum
-    if (genSum < dSum) {
-      d.sampleFrom(genSum, gen)
-    } else if (genSum < dwSum) w match {
+    if (genSum < dwbSum) {
+      dwb.sampleFrom(genSum, gen)
+    } else if (genSum < sum23) wa match {
       case wt: AliasTable[Double] => resampleTable(gen, wt, topic, termTopics(topic))
-      case wf: FTree[Double] => wf.sampleFrom(genSum - dSum, gen)
+      case wf: FTree[Double] => wf.sampleFrom(genSum - dwbSum, gen)
     } else {
-      t.sampleFrom(genSum - dwSum, gen)
+      ab.sampleFrom(genSum - sum23, gen)
     }
-  }
-
-  /**
-   * dense part in the decomposed sampling formula:
-   * t = \frac{{\beta }_{w} \bar{\alpha} ( {n}_{k}^{-di} + \acute{\alpha} ) } {({n}_{k}^{-di}+\bar{\beta})
-   * ({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
-   */
-  def tDense(t: DiscreteSampler[Double],
-    alphaK_denoms: BDV[Double],
-    beta: Double,
-    numTopics: Int): DiscreteSampler[Double] = {
-    val probs = alphaK_denoms.copy :*= beta
-    t.resetDist(probs.data, null, numTopics)
-  }
-
-  /**
-   * word related sparse part in the decomposed sampling formula:
-   * w = \frac{ {n}_{kw}^{-di} \bar{\alpha} ( {n}_{k}^{-di} + \acute{\alpha} )}{({n}_{k}^{-di}+\bar{\beta})
-   * ({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
-   */
-  def wSparse(w: DiscreteSampler[Double],
-    alphaK_denoms: BDV[Double],
-    termTopics: TC): DiscreteSampler[Double] = termTopics match {
-    case v: BDV[Count] =>
-      val numTopics = v.length
-      val probs = new Array[Double](numTopics)
-      val space = new Array[Int](numTopics)
-      var psize = 0
-      var i = 0
-      while (i < numTopics) {
-        val cnt = v(i)
-        if (cnt > 0) {
-          probs(psize) = alphaK_denoms(i) * cnt
-          space(psize) = i
-          psize += 1
-        }
-        i += 1
-      }
-      w.resetDist(probs, space, psize)
-    case v: BSV[Count] =>
-      val used = v.used
-      val index = v.index
-      val data = v.data
-      val probs = new Array[Double](used)
-      var i = 0
-      while (i < used) {
-        probs(i) = alphaK_denoms(index(i)) * data(i)
-        i += 1
-      }
-      w.resetDist(probs, index, used)
-  }
-
-  /**
-   * doc related sparse part in the decomposed sampling formula:
-   * d =  \frac{{n}_{kd} ^{-di}({\sum{n}_{k}^{-di} + \bar{\acute{\alpha}}})({n}_{kw}^{-di}+{\beta}_{w})}
-   * {({n}_{k}^{-di}+\bar{\beta})({\sum{n}_{k}^{-di} +\bar{\acute{\alpha}}})}
-   * =  \frac{{n}_{kd} ^{-di}({n}_{kw}^{-di}+{\beta}_{w})}{({n}_{k}^{-di}+\bar{\beta}) }
-   */
-  def dSparse(d: CumulativeDist[Double],
-    docTopics: BSV[Count],
-    termBeta_denoms: BDV[Double]): CumulativeDist[Double] = {
-    val used = docTopics.used
-    val index = docTopics.index
-    val data = docTopics.data
-    // DANGER operations for performance
-    d._used = used
-    val cdf = d._cdf
-    var sum = 0.0
-    var i = 0
-    while (i < used) {
-      sum += data(i) * termBeta_denoms(index(i))
-      cdf(i) = sum
-      i += 1
-    }
-    d._space = index
-    d
-  }
-
-  def calcDenoms(topicCounters: BDV[Count],
-    numTopics: Int,
-    betaSum: Double): BDV[Double] = {
-    val bdv = BDV.zeros[Double](numTopics)
-    var i = 0
-    while (i < numTopics) {
-      bdv(i) = 1.0 / (topicCounters(i) + betaSum)
-      i += 1
-    }
-    bdv
-  }
-
-  def calcTermBetaDenoms(orgTermTopics: BV[Count],
-    denoms: BDV[Double],
-    beta_denoms: BDV[Double],
-    numTopics: Int): BDV[Double] = {
-    val bdv = beta_denoms.copy
-    orgTermTopics match {
-      case v: BDV[Count] =>
-        var i = 0
-        while (i < numTopics) {
-          bdv(i) += v(i) * denoms(i)
-          i += 1
-        }
-      case v: BSV[Count] =>
-        val used = v.used
-        val index = v.index
-        val data = v.data
-        var i = 0
-        while (i < used) {
-          val topic = index(i)
-          bdv(topic) += data(i) * denoms(topic)
-          i += 1
-        }
-    }
-    bdv
   }
 }
 
@@ -453,8 +591,7 @@ class LightLDA extends LDAWordByWord {
     alphaAS: Double,
     beta: Double)
     (pid: Int, ep: EdgePartition[TA, TC]): EdgePartition[TA, TC] = {
-    val alphaSum = alpha * numTopics
-    val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
+    val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
     val betaSum = beta * numTerms
     val totalSize = ep.size
     val lcSrcIds = ep.localSrcIds
@@ -469,12 +606,11 @@ class LightLDA extends LDAWordByWord {
     val docCache = new Array[SoftReference[AliasTable[Count]]](vertSize)
     val gens = new Array[XORShiftRandom](numThreads)
     val termDists = new Array[AliasTable[Double]](numThreads)
-    dDense(alphaDist, topicCounters, numTopics, alphaRatio, alphaAS)
-    wDense(betaDist, topicCounters, numTopics, beta, betaSum)
-    val p = tokenTopicProb(topicCounters, beta, alpha,
-      alphaAS, numTokens, numTerms) _
-    val dPFun = docProb(topicCounters, alpha, alphaAS, numTokens) _
-    val wPFun = wordProb(topicCounters, numTerms, beta) _
+    resetDist_aDense(alphaDist, topicCounters, numTopics, alphaRatio, alphaAS)
+    resetDist_bDense(betaDist, topicCounters, numTopics, beta, betaSum)
+    val p = tokenTopicProb(topicCounters, beta, alpha, alphaAS, numTokens, numTerms)_
+    val dPFun = docProb(topicCounters, alpha, alphaAS, numTokens)_
+    val wPFun = wordProb(topicCounters, numTerms, beta)_
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
     val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
@@ -488,17 +624,17 @@ class LightLDA extends LDAWordByWord {
       val termDist = termDists(thid)
       val si = lcSrcIds(offset)
       val termTopics = vattrs(si)
-      wSparse(termDist, topicCounters, termTopics, betaSum)
+      resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
       var pos = offset
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
         val docTopics = vattrs(di)
         if (gen.nextDouble() < 1e-6) {
-          dDense(alphaDist, topicCounters, numTopics, alphaRatio, alphaAS)
-          wDense(betaDist, topicCounters, numTopics, beta, betaSum)
+          resetDist_aDense(alphaDist, topicCounters, numTopics, alphaRatio, alphaAS)
+          resetDist_bDense(betaDist, topicCounters, numTopics, beta, betaSum)
         }
         if (gen.nextDouble() < 1e-4) {
-          wSparse(termDist, topicCounters, termTopics, betaSum)
+          resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
         }
         val docDist = dSparseCached(cache => cache == null || cache.get() == null || gen.nextDouble() < 1e-2,
           docCache, docTopics, di)
@@ -513,18 +649,18 @@ class LightLDA extends LDAWordByWord {
             val topic = topics(i)
             var proposalTopic = -1
             val q = if (docProposal) {
-              val sNorm = alphaDist.norm
-              val norm = sNorm + docDist.norm
-              if (gen.nextDouble() * norm < sNorm) {
+              val aSum = alphaDist.norm
+              val dPropSum = aSum + docDist.norm
+              if (gen.nextDouble() * dPropSum < aSum) {
                 proposalTopic = alphaDist.sampleRandom(gen)
               } else {
                 proposalTopic = resampleTable(gen, docDist, topic, docTopics(topic))
               }
               dPFun
             } else {
-              val sNorm = termDist.norm
-              val norm = sNorm + betaDist.norm
-              val table = if (gen.nextDouble() * norm < sNorm) termDist else betaDist
+              val wSum = termDist.norm
+              val wPropSum = wSum + betaDist.norm
+              val table = if (gen.nextDouble() * wPropSum < wSum) termDist else betaDist
               proposalTopic = table.sampleRandom(gen)
               wPFun
             }
@@ -639,7 +775,7 @@ class LightLDA extends LDAWordByWord {
   /**
    * \frac{{\beta}_{w}}{{n}_{k}+\bar{\beta}}
    */
-  def wDense(wd: AliasTable[Double],
+  def resetDist_bDense(b: AliasTable[Double],
     topicCounters: BDV[Count],
     numTopics: Int,
     beta: Double,
@@ -650,13 +786,13 @@ class LightLDA extends LDAWordByWord {
       probs(i) = beta / (topicCounters(i) + betaSum)
       i += 1
     }
-    wd.resetDist(probs, null, numTopics)
+    b.resetDist(probs, null, numTopics)
   }
 
   /**
    * \frac{{n}_{kw}}{{n}_{k}+\bar{\beta}}
    */
-  def wSparse(ws: AliasTable[Double],
+  def resetDist_wSparse(ws: AliasTable[Double],
     topicCounters: BDV[Count],
     termTopics: TC,
     betaSum: Double): Unit = termTopics match {
@@ -690,7 +826,7 @@ class LightLDA extends LDAWordByWord {
       ws.resetDist(probs, index, used)
   }
 
-  def dDense(dd: AliasTable[Double],
+  def resetDist_aDense(a: AliasTable[Double],
     topicCounters: BDV[Count],
     numTopics: Int,
     alphaRatio: Double,
@@ -701,7 +837,7 @@ class LightLDA extends LDAWordByWord {
       probs(i) = alphaRatio * (topicCounters(i) + alphaAS)
       i += 1
     }
-    dd.resetDist(probs, null, numTopics)
+    a.resetDist(probs, null, numTopics)
   }
 
   def dSparseCached(updatePred: SoftReference[AliasTable[Count]] => Boolean,
@@ -784,6 +920,189 @@ abstract class LDADocByDoc extends LDAAlgorithm {
     es.shutdown()
     results.iterator.filter(_ != null)
   }
+
+  override def perplexPartition(numThreads: Int,
+    topicCounters: BDV[Count],
+    numTokens: Long,
+    numTopics: Int,
+    numTerms: Int,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double)
+    (ep: EdgePartition[TA, TC]): (Double, Double, Double) = {
+    val alphaSum = alpha * numTopics
+    val betaSum = beta * numTerms
+    val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
+    val alphaK = (convert(topicCounters, Double) :+= alphaAS) :*= alphaRatio
+    val denoms = calc_denoms(topicCounters, betaSum)
+    val alphak_denoms = calc_alphak_denoms(denoms, alphaAS, betaSum, alphaRatio)
+    val beta_denoms = denoms.copy :*= beta
+    val abDenseSum = sum_abDense(alphak_denoms, beta)
+    val totalSize = ep.size
+    val lcSrcIds = ep.localSrcIds
+    val lcDstIds = ep.localDstIds
+    val vattrs = ep.vertexAttrs
+    val data = ep.data
+    val vertSize = vattrs.length
+    val doc_denoms = new Array[Double](vertSize)
+    val marks = new AtomicIntegerArray(vertSize)
+    @volatile var llhs = 0D
+    @volatile var wllhs = 0D
+    @volatile var dllhs = 0D
+
+    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+      val si = lcSrcIds(offset)
+      val docTopics = vattrs(si).asInstanceOf[BSV[Count]]
+      val doc_denom = 1.0 / (sum(docTopics) + alphaSum)
+      val nkd_denoms = calc_nkd_denoms(denoms, docTopics)
+      val dbSparseSum = sum_dbSparse(nkd_denoms, beta)
+      val sum12 = abDenseSum + dbSparseSum
+      val docAlphaK_denoms = calc_docAlphaK_denoms(alphak_denoms, nkd_denoms)
+      var llhs_th = 0D
+      var wllhs_th = 0D
+      var dllhs_th = 0D
+      var pos = offset
+      while (pos < totalSize && lcSrcIds(pos) == si) {
+        val di = lcDstIds(pos)
+        val termTopics = vattrs(di)
+        val topics = data(pos)
+        val wdaSparseSum = sum_wdaSparse(docAlphaK_denoms, termTopics)
+        val prob = (sum12 + wdaSparseSum) * doc_denom
+        llhs_th += Math.log(prob) * topics.length
+        var i = 0
+        while (i < topics.length) {
+          val topic = topics(i)
+          // wllhs_th += Math.log(termBeta_denoms(topic))
+          dllhs_th += Math.log((termTopics(topic) + alphaK(topic)) * doc_denom)
+          i += 1
+        }
+        pos += 1
+      }
+      llhs += llhs_th
+      wllhs += wllhs_th
+      dllhs += dllhs_th
+    }))
+    Await.ready(all, 2.hour)
+    es.shutdown()
+    (llhs, wllhs, dllhs)
+  }
+
+  def resetDist_dbSparse(db: FlatDist[Double],
+    nkd_denoms: BSV[Double],
+    beta: Double): FlatDist[Double] = {
+    val used = nkd_denoms.used
+    val index = nkd_denoms.index
+    val data = nkd_denoms.data
+    val probs = new Array[Double](used)
+    var i = 0
+    while (i < used) {
+      probs(i) = beta * data(i)
+      i += 1
+    }
+    db.resetDist(probs, index, used)
+  }
+
+  def sum_dbSparse(nkd_denoms: BSV[Double],
+    beta: Double): Double = {
+    val used = nkd_denoms.used
+    val index = nkd_denoms.index
+    val data = nkd_denoms.data
+    var sum = 0.0
+    var i = 0
+    while (i < used) {
+      sum += beta * data(i)
+      i += 1
+    }
+    sum
+  }
+  
+  def resetDist_wdaSparse(wda: FlatDist[Double],
+    docAlphaK_Denoms: BDV[Double],
+    termTopics: TC): FlatDist[Double] = termTopics match {
+    case v: BDV[Count] =>
+      val k = v.length
+      val probs = new Array[Double](k)
+      val space = new Array[Int](k)
+      var psize = 0
+      var i = 0
+      while (i < k) {
+        val cnt = v(i)
+        if (cnt > 0) {
+          probs(psize) = docAlphaK_Denoms(i) * cnt
+          space(psize) = i
+          psize += 1
+        }
+        i += 1
+      }
+      wda.resetDist(probs, space, psize)
+    case v: BSV[Count] =>
+      val used = v.used
+      val index = v.index
+      val data = v.data
+      val probs = new Array[Double](used)
+      var i = 0
+      while (i < used) {
+        probs(i) = docAlphaK_Denoms(index(i)) * data(i)
+        i += 1
+      }
+      wda.resetDist(probs, index, used)
+  }
+
+  def sum_wdaSparse(docAlphaK_Denoms: BDV[Double],
+    termTopics: TC): Double = termTopics match {
+    case v: BDV[Count] =>
+      val k = v.length
+      var sum = 0.0
+      var i = 0
+      while (i < k) {
+        val cnt = v(i)
+        if (cnt > 0) {
+          sum += docAlphaK_Denoms(i) * cnt
+        }
+        i += 1
+      }
+      sum
+    case v: BSV[Count] =>
+      val used = v.used
+      val index = v.index
+      val data = v.data
+      var sum = 0.0
+      var i = 0
+      while (i < used) {
+        sum += docAlphaK_Denoms(index(i)) * data(i)
+        i += 1
+      }
+      sum
+  }
+  
+  def calc_nkd_denoms(denoms: BDV[Double],
+    docTopics: BSV[Count]): BSV[Double] = {
+    val used = docTopics.used
+    val index = docTopics.index
+    val data = docTopics.data
+    val arr = new Array[Double](used)
+    var i = 0
+    while (i < used) {
+      arr(i) = data(i) * denoms(i)
+      i += 1
+    }
+    new BSV(index, arr, used, denoms.length)
+  }
+
+  def calc_docAlphaK_denoms(alphak_denoms: BDV[Double],
+    nkd_denoms: BSV[Double]): BDV[Double] = {
+    val bdv = alphak_denoms.copy
+    val used = nkd_denoms.used
+    val index = nkd_denoms.index
+    val data = nkd_denoms.data
+    var i = 0
+    while (i < used) {
+      bdv(index(i)) += data(i)
+      i += 1
+    }
+    bdv
+  }
 }
 
 class SparseLDA extends LDADocByDoc {
@@ -811,9 +1130,10 @@ class SparseLDA extends LDADocByDoc {
     val gens = new Array[XORShiftRandom](numThreads)
     val docDists = new Array[FlatDist[Double]](numThreads)
     val mainDists = new Array[FlatDist[Double]](numThreads)
-    val alphaK_denoms = calcGlobalCache(topicCounters, alphaAS, betaSum, alphaRatio, numTopics)
-    val global = new FlatDist[Double](numTopics, isSparse = false)
-    tDense(global, alphaK_denoms, beta, numTopics)
+    val denoms = calc_denoms(topicCounters, betaSum)
+    val alphak_denoms = calc_alphak_denoms(denoms, alphaAS, betaSum, alphaRatio)
+    val global = new FlatDist[Double](numTopics, isSparse=false)
+    resetDist_abDense(global, alphak_denoms, beta)
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
     val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
@@ -822,21 +1142,21 @@ class SparseLDA extends LDADocByDoc {
       if (gen == null) {
         gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
         gens(thid) = gen
-        docDists(thid) = new FlatDist[Double](numTopics, isSparse = true)
-        mainDists(thid) = new FlatDist[Double](numTopics, isSparse = true)
+        docDists(thid) = new FlatDist[Double](numTopics, isSparse=true)
+        mainDists(thid) = new FlatDist[Double](numTopics, isSparse=true)
       }
       val docDist = docDists(thid)
       val si = lcSrcIds(offset)
       val docTopics = vattrs(si).asInstanceOf[BSV[Count]]
-      val nkd_denoms = calcDocCache(topicCounters, docTopics, betaSum, numTopics)
-      dSparse(docDist, nkd_denoms, beta)
-      val docAlphaK_Denoms = calcDocAlphaKDenoms(alphaK_denoms, nkd_denoms)
+      val nkd_denoms = calc_nkd_denoms(denoms, docTopics)
+      resetDist_dbSparse(docDist, nkd_denoms, beta)
+      val docAlphaK_denoms = calc_docAlphaK_denoms(alphak_denoms, nkd_denoms)
       val mainDist = mainDists(thid)
       var pos = offset
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
         val termTopics = vattrs(di)
-        wSparse(mainDist, termTopics, docAlphaK_Denoms, numTopics)
+        resetDist_wdaSparse(mainDist, docAlphaK_denoms, termTopics)
         val topics = data(pos)
         var i = 0
         while (i < topics.length) {
@@ -853,124 +1173,19 @@ class SparseLDA extends LDADocByDoc {
   }
 
   def tokenSampling(gen: Random,
-    t: FlatDist[Double],
-    d: FlatDist[Double],
-    w: FlatDist[Double]): Int = {
-    val wSum = w.norm
-    val wdSum = wSum + d.norm
-    val distSum = wdSum + t.norm
+    ab: FlatDist[Double],
+    db: FlatDist[Double],
+    wda: FlatDist[Double]): Int = {
+    val wdaSum = wda.norm
+    val sum23 = wdaSum + db.norm
+    val distSum = sum23 + ab.norm
     val genSum = gen.nextDouble() * distSum
-    if (genSum < wSum) {
-      w.sampleFrom(genSum, gen)
-    } else if (genSum < wdSum) {
-      d.sampleFrom(genSum - wSum, gen)
+    if (genSum < wdaSum) {
+      wda.sampleFrom(genSum, gen)
+    } else if (genSum < sum23) {
+      db.sampleFrom(genSum - wdaSum, gen)
     } else {
-      t.sampleFrom(genSum - wdSum, gen)
+      ab.sampleFrom(genSum - sum23, gen)
     }
-  }
-
-  def tDense(t: FlatDist[Double],
-    alphaK_denoms: BDV[Double],
-    beta: Double,
-    numTopics: Int): FlatDist[Double] = {
-    val probs = new Array[Double](numTopics)
-    var i = 0
-    while (i < numTopics) {
-      probs(i) = beta * alphaK_denoms(i)
-      i += 1
-    }
-    t.resetDist(probs, null, numTopics)
-  }
-
-  def dSparse(d: FlatDist[Double],
-    nkd_denoms: BSV[Double],
-    beta: Double): FlatDist[Double] = {
-    val used = nkd_denoms.used
-    val index = nkd_denoms.index
-    val data = nkd_denoms.data
-    val probs = new Array[Double](used)
-    var i = 0
-    while (i < used) {
-      probs(i) = beta * nkd_denoms(i)
-      i += 1
-    }
-    d.resetDist(probs, index, used)
-  }
-
-  def wSparse(w: FlatDist[Double],
-    termTopics: TC,
-    docAlphaK_Denoms: BDV[Double],
-    numTopics: Int): FlatDist[Double] = termTopics match {
-    case v: BDV[Count] =>
-      val probs = new Array[Double](numTopics)
-      val space = new Array[Int](numTopics)
-      var psize = 0
-      var i = 0
-      while (i < numTopics) {
-        val cnt = v(i)
-        if (cnt > 0) {
-          probs(psize) = docAlphaK_Denoms(i) * cnt
-          space(psize) = i
-          psize += 1
-        }
-        i += 1
-      }
-      w.resetDist(probs, space, psize)
-    case v: BSV[Count] =>
-      val used = v.used
-      val index = v.index
-      val data = v.data
-      val probs = new Array[Double](used)
-      var i = 0
-      while (i < used) {
-        probs(i) = docAlphaK_Denoms(index(i)) * data(i)
-        i += 1
-      }
-      w.resetDist(probs, index, used)
-  }
-
-  def calcGlobalCache(topicCounters: BDV[Count],
-    alphaAS: Double,
-    betaSum: Double,
-    alphaRatio: Double,
-    numTopics: Int): BDV[Double] = {
-    val arr = new Array[Double](numTopics)
-    var i = 0
-    while (i < numTopics) {
-      val nt = topicCounters(i)
-      arr(i) = alphaRatio * (nt + alphaAS) / (nt + betaSum)
-      i += 1
-    }
-    new BDV(arr)
-  }
-
-  def calcDocCache(topicCounters: BDV[Count],
-    docTopics: BSV[Count],
-    betaSum: Double,
-    numTopics: Int): BSV[Double] = {
-    val used = docTopics.used
-    val index = docTopics.index
-    val data = docTopics.data
-    val arr = new Array[Double](used)
-    var i = 0
-    while (i < used) {
-      arr(i) = data(i) / (topicCounters(i) + betaSum)
-      i += 1
-    }
-    new BSV(index, arr, used, numTopics)
-  }
-
-  def calcDocAlphaKDenoms(alphaK_denoms: BDV[Double],
-    nkd_denoms: BSV[Double]): BDV[Double] = {
-    val bdv = alphaK_denoms.copy
-    val used = nkd_denoms.used
-    val index = nkd_denoms.index
-    val data = nkd_denoms.data
-    var i = 0
-    while (i < used) {
-      bdv(index(i)) += data(i)
-      i += 1
-    }
-    bdv
   }
 }

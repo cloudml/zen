@@ -52,18 +52,17 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
   @transient val topicCounters = collectTopicCounters()
   @transient val algo = new FastLDA
 
-  @transient val alphaSum = alpha * numTopics
-  @transient val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
+  @transient val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
   @transient val betaSum = beta * numTerms
   @transient val denoms = topicCounters.mapValues(nt => 1D / (nt + betaSum))
-  @transient val alphaK_denoms = (denoms.copy :*= (alphaAS - betaSum) :+= 1D) :*= alphaRatio
+  @transient val alphak_denoms = (denoms.copy :*= (alphaAS - betaSum) :+= 1D) :*= alphaRatio
   @transient val beta_denoms = denoms.copy :*= beta
 
   @transient lazy val termDistCache = new AppendOnlyMap[Int,
     SoftReference[AliasTable[Double]]](numTerms / 2)
   @transient lazy val global = {
     val table = new AliasTable[Double](numTopics)
-    algo.tDense(table, alphaK_denoms, beta, numTopics)
+    algo.resetDist_abDense(table, alphak_denoms, beta)
   }
 
   private def collectTopicCounters(): BDV[Count] = {
@@ -117,20 +116,20 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
     var i = 0
     while (i < topics.length) {
       val termId = tokens(i)
-      val orgTermTopics = termTopicsArr(termId)
-      val termDist = wSparseCached(termDistCache, orgTermTopics, alphaK_denoms, termId)
-      val termTopics = orgTermTopics match {
+      val termTopics = termTopicsArr(termId)
+      val termDist = wSparseCached(termDistCache, termTopics, alphak_denoms, termId)
+      val denseTermTopics = termTopics match {
         case v: BDV[Count] => v
         case v: BSV[Count] => toBDV(v)
       }
-      val termBeta_denoms = algo.calcTermBetaDenoms(orgTermTopics, denoms, beta_denoms, numTopics)
+      val termBeta_denoms = algo.calc_termBeta_denoms(denoms, beta_denoms, termTopics)
       val topic = topics(i)
       docTopics(topic) -= 1
       if (docTopics(topic) == 0) {
         docTopics.compact()
       }
-      algo.dSparse(docCdf, docTopics, termBeta_denoms)
-      val newTopic = algo.tokenSampling(gen, global, termDist, docCdf, termTopics, topic)
+      algo.resetDist_dwbSparse(docCdf, termBeta_denoms, docTopics)
+      val newTopic = algo.tokenSampling(gen, global, termDist, docCdf, denseTermTopics, topic)
       topics(i) = newTopic
       docTopics(newTopic) += 1
       i += 1
@@ -146,7 +145,7 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
     var w = cacheMap(termId)
     if (w == null || w.get() == null) {
       val table = new AliasTable[Double](termTopics.activeSize)
-      algo.wSparse(table, alphaK_denoms, termTopics)
+      algo.resetDist_waSparse(table, alphaK_denoms, termTopics)
       w = new SoftReference(table)
       cacheMap.update(termId, w)
     }
