@@ -43,7 +43,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     data.cache()
     val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, storageLevel)
     val pps = new Array[Double](incrementalLearning)
-    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new SparseLDA, storageLevel)
+    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new FastLDA, storageLevel)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
@@ -92,6 +92,40 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, storageLevel)
     val pps = new Array[Double](incrementalLearning)
     val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new LightLDA, storageLevel)
+    var i = 0
+    val startedAt = System.currentTimeMillis()
+    while (i < incrementalLearning) {
+      lda.runGibbsSampling(totalIterations)
+      pps(i) = LDAPerplexity(lda).getPerplexity
+      i += 1
+    }
+
+    println((System.currentTimeMillis() - startedAt) / 1e3)
+    pps.foreach(println)
+
+    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
+    assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
+    assert(pps.head - pps.last > 0)
+
+    val ldaModel = lda.toLDAModel(2).toLocalLDAModel
+    data.collect().foreach { case (_, sv) =>
+      val a = ldaModel.inference(sv)
+      val b = ldaModel.inference(sv)
+      val sim: Double = euclideanDistance(a, b)
+      assert(sim < 0.1)
+    }
+  }
+
+  test("SparseLDA || Gibbs sampling") {
+    val model = generateRandomLDAModel(numTopics, numTerms)
+    val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
+
+    val data = sc.parallelize(corpus, 2)
+    sc.getConf.set(cs_numThreads, "4")
+    data.cache()
+    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, storageLevel)
+    val pps = new Array[Double](incrementalLearning)
+    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new SparseLDA, storageLevel)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {

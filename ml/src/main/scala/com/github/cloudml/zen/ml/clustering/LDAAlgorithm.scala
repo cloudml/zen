@@ -904,7 +904,7 @@ abstract class LDADocByDoc extends LDAAlgorithm {
               case v: BSV[Count] =>
                 v(topic) += 1
                 if (v.activeSize >= dscp) {
-                  termTuple = (l2g(si), toBDV(v))
+                  termTuple = (l2g(di), toBDV(v))
                   results(di) = termTuple
                   termTopics = termTuple._2
                 }
