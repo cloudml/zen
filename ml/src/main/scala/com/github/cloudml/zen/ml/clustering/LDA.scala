@@ -113,6 +113,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
           if (isTermId(index.getValue(pos))) values(pos) match {
             case u: BDV[Count] => agg :+= u
             case u: BSV[Count] => agg :+= u
+            case _ =>
           }
           pos = mask.nextSetBit(pos + 1)
         }

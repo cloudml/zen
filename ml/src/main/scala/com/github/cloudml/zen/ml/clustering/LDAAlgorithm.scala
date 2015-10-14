@@ -669,12 +669,14 @@ class LightLDA extends LDAWordByWord {
               topic, proposalTopic, q, p)
             if (newTopic != topic) {
               topics(i) = newTopic
-              docTopics(topic) -= 1
-              docTopics(newTopic) += 1
-              termTopics(topic) -= 1
-              termTopics(newTopic) += 1
               topicCounters(topic) -= 1
               topicCounters(newTopic) += 1
+              termTopics(topic) -= 1
+              termTopics(newTopic) += 1
+              docTopics.synchronized {
+                docTopics(topic) -= 1
+                docTopics(newTopic) += 1
+              }
             }
             j += 1
           }
@@ -779,7 +781,7 @@ class LightLDA extends LDAWordByWord {
     topicCounters: BDV[Count],
     numTopics: Int,
     beta: Double,
-    betaSum: Double): Unit = topicCounters.synchronized {
+    betaSum: Double): Unit = {
     val probs = new Array[Double](numTopics)
     var i = 0
     while (i < numTopics) {
@@ -830,7 +832,7 @@ class LightLDA extends LDAWordByWord {
     topicCounters: BDV[Count],
     numTopics: Int,
     alphaRatio: Double,
-    alphaAS: Double): Unit = topicCounters.synchronized {
+    alphaAS: Double): Unit = {
     val probs = new Array[Double](numTopics)
     var i = 0
     while (i < numTopics) {
@@ -880,34 +882,27 @@ abstract class LDADocByDoc extends LDAAlgorithm {
       var pos = offset
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
-        var termTuple = results(di)
-        if (termTuple == null && !inferenceOnly) {
-          if (marks.getAndDecrement(di) == 0) {
-            termTuple = (l2g(di), BSV.zeros[Count](numTopics))
-            results(di) = termTuple
-            marks.set(di, Int.MaxValue)
-          } else {
-            while (marks.get(di) <= 0) {}
-            termTuple = results(di)
-          }
-        }
-        var termTopics = if (!inferenceOnly) termTuple._2 else null
         val topics = data(pos)
         var i = 0
         while (i < topics.length) {
           val topic = topics(i)
           docTopics(topic) += 1
           if (!inferenceOnly) {
-            while (marks.getAndSet(di, -1) < 0) {}
-            termTopics match {
-              case v: BDV[Count] => v(topic) += 1
-              case v: BSV[Count] =>
-                v(topic) += 1
-                if (v.activeSize >= dscp) {
-                  termTuple = (l2g(di), toBDV(v))
-                  results(di) = termTuple
-                  termTopics = termTuple._2
-                }
+            if (marks.getAndDecrement(di) == 0) {
+              val counter = BSV.zeros[Count](numTopics)
+              counter(topic) += 1
+              val termTuple = (l2g(di), counter)
+              results(di) = termTuple
+            } else {
+              while (marks.get(di) <= 0) {}
+              results(di)._2 match {
+                case v: BDV[Count] => v(topic) += 1
+                case v: BSV[Count] =>
+                  v(topic) += 1
+                  if (v.activeSize >= dscp) {
+                    results(di) = (l2g(di), toBDV(v))
+                  }
+              }
             }
             marks.set(di, Int.MaxValue)
           }
@@ -918,6 +913,8 @@ abstract class LDADocByDoc extends LDAAlgorithm {
     }))
     Await.ready(all, 1.hour)
     es.shutdown()
+    val ac = results.iterator.count(_ != null)
+    assert(ac == ep.vertexAttrs.length, s"ac=$ac, indexSize=${ep.vertexAttrs.length}")
     results.iterator.filter(_ != null)
   }
 

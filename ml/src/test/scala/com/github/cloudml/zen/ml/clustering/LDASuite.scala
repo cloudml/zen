@@ -88,6 +88,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
 
     val data = sc.parallelize(corpus, 2)
+    sc.getConf.set(cs_numThreads, "4")
     data.cache()
     val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, storageLevel)
     val pps = new Array[Double](incrementalLearning)
@@ -121,7 +122,9 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
 
     val data = sc.parallelize(corpus, 2)
-    sc.getConf.set(cs_numThreads, "4")
+    val conf = sc.getConf
+    conf.set(cs_LDAAlgorithm, "sparselda")
+    // conf.set(cs_numThreads, "4")
     data.cache()
     val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, storageLevel)
     val pps = new Array[Double](incrementalLearning)
