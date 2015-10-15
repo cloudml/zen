@@ -60,8 +60,7 @@ object MovieLensMVM extends Logging {
         .text(s"stepSize, default: ${defaultParams.stepSize}")
         .action((x, c) => c.copy(stepSize = x))
       opt[Double]("regular")
-        .text(
-          s"L2 regularization, default: ${defaultParams.regular}")
+        .text(s"L2 regularization, default: ${defaultParams.regular}")
         .action((x, c) => c.copy(regular = x))
       opt[Unit]("adagrad")
         .text("use AdaGrad")

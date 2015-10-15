@@ -36,6 +36,7 @@ object MovieLensBSFM extends Logging {
     regular: String = "0.01,0.01,0.01",
     rank: Int = 20,
     useAdaGrad: Boolean = false,
+    useWeightedLambda: Boolean = false,
     useSVDPlusPlus: Boolean = false,
     kryo: Boolean = true) extends AbstractParams[Params]
 
@@ -68,6 +69,9 @@ object MovieLensBSFM extends Logging {
       opt[Unit]("adagrad")
         .text("use AdaGrad")
         .action((_, c) => c.copy(useAdaGrad = true))
+      opt[Unit]("weightedLambda")
+        .text("use weighted lambda regularization")
+        .action((_, c) => c.copy(useWeightedLambda = true))
       opt[Unit]("svdPlusPlus")
         .text("use SVD++")
         .action((_, c) => c.copy(useSVDPlusPlus = true))
@@ -100,7 +104,7 @@ object MovieLensBSFM extends Logging {
 
   def run(params: Params): Unit = {
     val Params(input, out, numIterations, numPartitions, stepSize, regular, rank,
-    useAdaGrad, useSVDPlusPlus, kryo) = params
+    useAdaGrad, useWeightedLambda, useSVDPlusPlus, kryo) = params
     val storageLevel = if (useSVDPlusPlus) StorageLevel.DISK_ONLY else StorageLevel.MEMORY_AND_DISK
     val regs = regular.split(",").map(_.toDouble)
     val l2 = (regs(0), regs(1), regs(2))
@@ -121,7 +125,7 @@ object MovieLensBSFM extends Logging {
     }
 
     val lfm = new BSFMRegression(trainSet, stepSize, views, l2, rank,
-      useAdaGrad, 1.0, storageLevel)
+      useAdaGrad, useWeightedLambda, 1.0, storageLevel)
     var iter = 0
     var model: BSFMModel = null
     while (iter < numIterations) {
