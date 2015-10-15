@@ -37,11 +37,10 @@ class LDASuite extends FunSuite with SharedSparkContext {
   test("FastLDA || Gibbs sampling") {
     val model = generateRandomLDAModel(numTopics, numTerms)
     val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
-    sc.getConf.set(cs_numThreads, "4")
 
     val data = sc.parallelize(corpus, 2)
     data.cache()
-    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, storageLevel)
+    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, reverse=false, storageLevel)
     val pps = new Array[Double](incrementalLearning)
     val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new FastLDA, storageLevel)
     var i = 0
@@ -88,9 +87,8 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
 
     val data = sc.parallelize(corpus, 2)
-    sc.getConf.set(cs_numThreads, "4")
     data.cache()
-    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, storageLevel)
+    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, reverse=false, storageLevel)
     val pps = new Array[Double](incrementalLearning)
     val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new LightLDA, storageLevel)
     var i = 0
@@ -122,11 +120,8 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
 
     val data = sc.parallelize(corpus, 2)
-    val conf = sc.getConf
-    conf.set(cs_LDAAlgorithm, "sparselda")
-    // conf.set(cs_numThreads, "4")
     data.cache()
-    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, storageLevel)
+    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, reverse=true, storageLevel)
     val pps = new Array[Double](incrementalLearning)
     val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new SparseLDA, storageLevel)
     var i = 0

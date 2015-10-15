@@ -192,7 +192,7 @@ class DistributedLDAModel(@transient val termTopicsRDD: RDD[(VertexId, TC)],
     burnIn: Int = 22): RDD[(VertexId, BSV[Double])] = {
     require(burnIn > 0, "burnIn is less than 1")
     require(runIter > 0, "runIter is less than 1")
-    val docs = LDA.initializeCorpusEdges(bowDocs, "bow", numTopics, storageLevel)
+    val docs = LDA.initializeCorpusEdges(bowDocs, "bow", numTopics, reverse=false, storageLevel)
     val lda = LDA(this, docs, algo)
     for (i <- 1 to burnIn) {
       lda.gibbsSampling(i, inferenceOnly=true)

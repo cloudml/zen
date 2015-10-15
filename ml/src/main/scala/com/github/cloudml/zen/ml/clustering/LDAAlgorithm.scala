@@ -194,7 +194,7 @@ abstract class LDAAlgorithm extends Serializable {
 
   @inline def sum_abDense(alphak_denoms: BDV[Double],
     beta: Double): Double = {
-    sum(alphak_denoms :*= beta)
+    sum(alphak_denoms.copy :*= beta)
   }
 
   def calc_denoms(topicCounters: BDV[Count],
@@ -862,7 +862,6 @@ abstract class LDADocByDoc extends LDAAlgorithm {
     numTopics: Int,
     inferenceOnly: Boolean)
     (ep: EdgePartition[TA, TC]): Iterator[(VertexId, TC)] = {
-    val dscp = numTopics >>> 3
     val totalSize = ep.size
     val lcSrcIds = ep.localSrcIds
     val lcDstIds = ep.localDstIds
@@ -870,15 +869,12 @@ abstract class LDADocByDoc extends LDAAlgorithm {
     val vattrs = ep.vertexAttrs
     val data = ep.data
     val vertSize = vattrs.length
-    val results = new Array[(VertexId, TC)](vertSize)
-    val marks = new AtomicIntegerArray(vertSize)
+    val results = Array.tabulate(vertSize)(vi => (l2g(vi), BSV.zeros[Count](numTopics)))
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
     val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
       val si = lcSrcIds(offset)
-      val docTuple = (l2g(si), BSV.zeros[Count](numTopics))
-      results(si) = docTuple
-      val docTopics = docTuple._2
+      val docTopics = results(si)._2
       var pos = offset
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
@@ -888,23 +884,10 @@ abstract class LDADocByDoc extends LDAAlgorithm {
           val topic = topics(i)
           docTopics(topic) += 1
           if (!inferenceOnly) {
-            if (marks.getAndDecrement(di) == 0) {
-              val counter = BSV.zeros[Count](numTopics)
-              counter(topic) += 1
-              val termTuple = (l2g(di), counter)
-              results(di) = termTuple
-            } else {
-              while (marks.get(di) <= 0) {}
-              results(di)._2 match {
-                case v: BDV[Count] => v(topic) += 1
-                case v: BSV[Count] =>
-                  v(topic) += 1
-                  if (v.activeSize >= dscp) {
-                    results(di) = (l2g(di), toBDV(v))
-                  }
-              }
+            val termTopics = results(di)._2
+            termTopics.synchronized {
+              termTopics(topic) += 1
             }
-            marks.set(di, Int.MaxValue)
           }
           i += 1
         }
@@ -913,8 +896,6 @@ abstract class LDADocByDoc extends LDAAlgorithm {
     }))
     Await.ready(all, 1.hour)
     es.shutdown()
-    val ac = results.iterator.count(_ != null)
-    assert(ac == ep.vertexAttrs.length, s"ac=$ac, indexSize=${ep.vertexAttrs.length}")
     results.iterator.filter(_ != null)
   }
 
@@ -930,19 +911,15 @@ abstract class LDADocByDoc extends LDAAlgorithm {
     val alphaSum = alpha * numTopics
     val betaSum = beta * numTerms
     val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
-    val alphaK = (convert(topicCounters, Double) :+= alphaAS) :*= alphaRatio
+    val alphaks = (convert(topicCounters, Double) :+= alphaAS) :*= alphaRatio
     val denoms = calc_denoms(topicCounters, betaSum)
     val alphak_denoms = calc_alphak_denoms(denoms, alphaAS, betaSum, alphaRatio)
-    val beta_denoms = denoms.copy :*= beta
     val abDenseSum = sum_abDense(alphak_denoms, beta)
     val totalSize = ep.size
     val lcSrcIds = ep.localSrcIds
     val lcDstIds = ep.localDstIds
     val vattrs = ep.vertexAttrs
     val data = ep.data
-    val vertSize = vattrs.length
-    val doc_denoms = new Array[Double](vertSize)
-    val marks = new AtomicIntegerArray(vertSize)
     @volatile var llhs = 0D
     @volatile var wllhs = 0D
     @volatile var dllhs = 0D
@@ -971,7 +948,7 @@ abstract class LDADocByDoc extends LDAAlgorithm {
         while (i < topics.length) {
           val topic = topics(i)
           // wllhs_th += Math.log(termBeta_denoms(topic))
-          dllhs_th += Math.log((termTopics(topic) + alphaK(topic)) * doc_denom)
+          dllhs_th += Math.log((termTopics(topic) + alphaks(topic)) * doc_denom)
           i += 1
         }
         pos += 1
@@ -1003,7 +980,6 @@ abstract class LDADocByDoc extends LDAAlgorithm {
   def sum_dbSparse(nkd_denoms: BSV[Double],
     beta: Double): Double = {
     val used = nkd_denoms.used
-    val index = nkd_denoms.index
     val data = nkd_denoms.data
     var sum = 0.0
     var i = 0
@@ -1081,7 +1057,7 @@ abstract class LDADocByDoc extends LDAAlgorithm {
     val arr = new Array[Double](used)
     var i = 0
     while (i < used) {
-      arr(i) = data(i) * denoms(i)
+      arr(i) = data(i) * denoms(index(i))
       i += 1
     }
     new BSV(index, arr, used, denoms.length)

@@ -137,8 +137,9 @@ object LDADriver {
     val numTopics = conf.get(cs_numTopics).toInt
     val numPartitions = conf.get(cs_numPartitions).toInt
     val sr = conf.get(cs_sampleRate).toDouble
+    val reverse = conf.getOption(cs_LDAAlgorithm).exists(_.equals("sparselda"))
     val rawDocs = sc.textFile(inputPath, numPartitions).sample(false, sr)
-    LDA.initializeCorpusEdges(rawDocs, "raw", numTopics, storageLevel)
+    LDA.initializeCorpusEdges(rawDocs, "raw", numTopics, reverse, storageLevel)
   }
 
   def parseArgs(args: Array[String]): OptionMap = {
