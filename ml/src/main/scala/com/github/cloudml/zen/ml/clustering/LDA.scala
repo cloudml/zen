@@ -377,10 +377,18 @@ object LDA {
     val partCorpus = conf.get(cs_partStrategy, "dbh") match {
       case "byterm" =>
         println("partition corpus by terms.")
-        initCorpus.partitionBy(PartitionStrategy.EdgePartition1D)
+        if (reverse) {
+          EdgeDstPartitioner.partitionByEDP[TC, TA](initCorpus, storageLevel)
+        } else {
+          initCorpus.partitionBy(PartitionStrategy.EdgePartition1D)
+        }
       case "bydoc" =>
         println("partition corpus by docs.")
-        EdgeDstPartitioner.partitionByEDP[TC, TA](initCorpus, storageLevel)
+        if (reverse) {
+          initCorpus.partitionBy(PartitionStrategy.EdgePartition1D)
+        } else {
+          EdgeDstPartitioner.partitionByEDP[TC, TA](initCorpus, storageLevel)
+        }
       case "edge2d" =>
         println("using Edge2D partition strategy.")
         initCorpus.partitionBy(PartitionStrategy.EdgePartition2D)

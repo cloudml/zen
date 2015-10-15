@@ -27,7 +27,7 @@ class LDAPerplexity(val pplx: Double, val wpplx: Double, val dpplx: Double) exte
 
   @inline def getDocPerplexity: Double = dpplx
 
-  def output(writer: String => Unit) = {
+  def output(writer: String => Unit): Unit = {
     val o = s"perplexity=$pplx, word pplx=$wpplx, doc pplx=$dpplx"
     writer(o)
   }

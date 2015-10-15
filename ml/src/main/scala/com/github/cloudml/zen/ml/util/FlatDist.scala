@@ -51,7 +51,7 @@ class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](dim: Int,
       var cdf = ev.zero
       var found = false
       do {
-        cdf = ev.plus(cdf, _dist(i))
+        cdf = ev.plus(cdf, _dist.valueAt(i))
         if (ev.lt(base, cdf)) {
           found = true
         } else {

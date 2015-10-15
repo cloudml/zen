@@ -947,8 +947,8 @@ abstract class LDADocByDoc extends LDAAlgorithm {
         var i = 0
         while (i < topics.length) {
           val topic = topics(i)
-          // wllhs_th += Math.log(termBeta_denoms(topic))
-          dllhs_th += Math.log((termTopics(topic) + alphaks(topic)) * doc_denom)
+          wllhs_th += Math.log((termTopics(topic) + beta) * denoms(topic))
+          dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * doc_denom)
           i += 1
         }
         pos += 1
