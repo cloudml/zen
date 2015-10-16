@@ -54,9 +54,13 @@ abstract class LDAAlgorithm extends Serializable {
     val numPartitions = edges.partitions.length
     val spf = samplePartition(numThreads, accelMethod, numPartitions, sampIter, seed,
       topicCounters, numTokens, numTopics, numTerms, alpha, alphaAS, beta)_
-    val partRDD = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) =>
-      (pid, spf(pid, ep))
-    )), preservesPartitioning=true)
+    val partRDD = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) => {
+      val startedAt = System.nanoTime()
+      val result = spf(pid, ep)
+      val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
+      println(s"Partition sampling $sampIter takes: $elapsedSeconds secs")
+      (pid, result)
+    })), preservesPartitioning=true)
     GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
   }
 

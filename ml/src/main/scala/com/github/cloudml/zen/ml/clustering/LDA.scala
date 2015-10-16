@@ -171,9 +171,12 @@ class LDA(@transient var corpus: Graph[TC, TA],
       }
     }
     corpus.persist(storageLevel)
+    val startedAt = System.nanoTime()
     corpus.edges.setName(s"edges-$sampIter").count()
     corpus.vertices.setName(s"vertices-$sampIter")
     collectTopicCounters()
+    val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
+    println(s"Sampling & update paras $sampIter takes: $elapsedSeconds secs")
     prevCorpus.unpersist(blocking=false)
   }
 
