@@ -21,6 +21,7 @@ import java.util.Random
 
 import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, SparseVector => BSV, argmax => brzArgMax,
 axpy => brzAxpy, max => brzMax, norm => brzNorm, sum => brzSum}
+import breeze.numerics.signum
 import com.github.cloudml.zen.ml.linalg.BLAS
 import com.github.cloudml.zen.ml.util.SparkUtils
 import com.github.cloudml.zen.ml.optimization._
@@ -115,16 +116,31 @@ class MLP(
 
   protected[ml] def computeGradient(
     x: BDM[Double],
-    label: BDM[Double]): (Array[(BDM[Double], BDV[Double])], Double, Double) = {
-    val (out, delta) = computeDelta(x, label)
-    val grads = computeGradientGivenDelta(x, out, delta)
+    label: BDM[Double],
+    epsilon: Double = 0.0): (Array[(BDM[Double], BDV[Double])], Double, Double) = {
+    var input = x
+    var (out, delta) = computeDelta(x, label)
 
+    // Improving Back-Propagation by Adding an Adversarial Gradient
+    // URL: http://arxiv.org/abs/1510.04189
+    if (epsilon > 0.0) {
+      var sign: BDM[Double] = innerLayers.head.weight.t * delta.head
+      sign = signum(sign)
+      sign :*= epsilon
+      sign :+= x
+      val t = computeDelta(sign, label)
+      out = t._1
+      delta = t._2
+      input = sign
+    }
+
+    val grads = computeGradientGivenDelta(input, out, delta)
     val cost = if (innerLayers.last.layerType == "SoftMax") {
       NNUtil.crossEntropy(out.last, label)
     } else {
       NNUtil.meanSquaredError(out.last, label)
     }
-    (grads, cost, x.cols.toDouble)
+    (grads, cost, input.cols.toDouble)
   }
 
   protected[ml] def computeGradientGivenDelta(
@@ -219,7 +235,7 @@ object MLP extends Logging {
     runSGD(data, nn, batchSize, maxNumIterations, fraction, learningRate, weightCost, 1 - 1e-2, 1e-8)
   }
 
-  def runSGD(
+  private[ml] def runSGD(
     data: RDD[(SV, SV)],
     mlp: MLP,
     batchSize: Int,
@@ -388,7 +404,6 @@ object MLP extends Logging {
     }
     layers
   }
-
 
   private[ml] def initLayers(
     params: Array[(BDM[Double], BDV[Double])],
