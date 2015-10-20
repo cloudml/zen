@@ -312,13 +312,13 @@ object LDA {
     alphaAS: Double,
     storageLevel: StorageLevel): DistributedLDAModel = {
     val conf = docs.context.getConf
-    val algo: LDAAlgorithm = conf.get(cs_LDAAlgorithm, "fastlda") match {
+    val algo: LDAAlgorithm = conf.get(cs_LDAAlgorithm, "zenlda") match {
+      case "zenlda" =>
+        println("using ZenLDA sampling algorithm.")
+        new ZenLDA
       case "lightlda" =>
         println("using LightLDA sampling algorithm.")
         new LightLDA
-      case "fastlda" =>
-        println("using FastLDA sampling algorithm.")
-        new FastLDA
       case "sparselda" =>
         println("using SparseLDA sampling algorithm")
         new SparseLDA
@@ -335,13 +335,13 @@ object LDA {
     totalIter: Int,
     storageLevel: StorageLevel): DistributedLDAModel = {
     val conf = docs.context.getConf
-    val algo: LDAAlgorithm = conf.get(cs_LDAAlgorithm, "fastlda") match {
+    val algo: LDAAlgorithm = conf.get(cs_LDAAlgorithm, "zenlda") match {
+      case "zenlda" =>
+        println("using ZenLDA sampling algorithm.")
+        new ZenLDA
       case "lightlda" =>
         println("using LightLDA sampling algorithm.")
         new LightLDA
-      case "fastlda" =>
-        println("using FastLDA sampling algorithm.")
-        new FastLDA
       case "sparselda" =>
         println("using SparseLDA sampling algorithm")
         new SparseLDA

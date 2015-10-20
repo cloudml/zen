@@ -479,7 +479,7 @@ abstract class LDAWordByWord extends LDAAlgorithm {
   }
 }
 
-class FastLDA extends LDAWordByWord {
+class ZenLDA extends LDAWordByWord {
   override def samplePartition(numThreads: Int,
     accelMethod: String,
     numPartitions: Int,

@@ -34,7 +34,7 @@ import org.scalatest.FunSuite
 class LDASuite extends FunSuite with SharedSparkContext {
   import LDASuite._
 
-  test("FastLDA || Gibbs sampling") {
+  test("ZenLDA || Gibbs sampling") {
     val model = generateRandomLDAModel(numTopics, numTerms)
     val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
 
@@ -42,7 +42,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     data.cache()
     val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, reverse=false, storageLevel)
     val pps = new Array[Double](incrementalLearning)
-    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new FastLDA, storageLevel)
+    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new ZenLDA, storageLevel)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
