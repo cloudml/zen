@@ -23,173 +23,25 @@ import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, SparseVector => BS
 axpy => brzAxpy, max => brzMax, norm => brzNorm, sum => brzSum}
 import breeze.numerics.signum
 import com.github.cloudml.zen.ml.linalg.BLAS
-import com.github.cloudml.zen.ml.util.SparkUtils
+import com.github.cloudml.zen.ml.util.{LoaderUtils, SparkUtils}
 import com.github.cloudml.zen.ml.optimization._
-import org.apache.spark.Logging
+import org.apache.spark.{SparkContext, Logging}
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, Vector => SV}
+import org.apache.spark.mllib.util.{Loader, Saveable}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
+import org.json4s.DefaultFormats
+import org.json4s.JsonDSL._
+import org.json4s.jackson.JsonMethods._
 
 @Experimental
-class MLP(
-  val innerLayers: Array[Layer],
-  val dropout: Array[Double]) extends Logging with Serializable {
-  def this(topology: Array[Int],
-    inputDropout: Double,
-    hiddenDropout: Double) {
-    this(MLP.initLayers(topology),
-      MLP.initDropout(topology.length - 1, Array(hiddenDropout, inputDropout)))
+object MLP extends Logging with Loader[MLPModel] {
+
+  override def load(sc: SparkContext, path: String): MLPModel = {
+    SaveLoadV1_0.load(sc, path)
   }
 
-  def this(topology: Array[Int]) {
-    this(MLP.initLayers(topology), MLP.initDropout(topology.length - 1, Array(0.2, 0.5)))
-  }
-
-  require(innerLayers.length > 0)
-  require(dropout.forall(t => t >= 0 && t < 1))
-  require(dropout.last == 0D)
-  require(innerLayers.length == dropout.length)
-
-  @transient protected lazy val rand: Random = new Random()
-
-  def topology: Array[Int] = {
-    val topology = new Array[Int](numLayer + 1)
-    topology(0) = numInput
-    for (i <- 1 to numLayer) {
-      topology(i) = innerLayers(i - 1).numOut
-    }
-    topology
-  }
-
-  def numLayer: Int = innerLayers.length
-
-  def numInput: Int = innerLayers.head.numIn
-
-  def numOut: Int = innerLayers.last.numOut
-
-  def predict(x: BDM[Double]): BDM[Double] = {
-    var output = x
-    for (layer <- 0 until numLayer) {
-      output = innerLayers(layer).forward(output)
-      val dropoutRate = dropout(layer)
-      if (dropoutRate > 0D) {
-        output :*= (1D - dropoutRate)
-      }
-    }
-    output
-  }
-
-  protected[ml] def computeDelta(
-    x: BDM[Double],
-    label: BDM[Double]): (Array[BDM[Double]], Array[BDM[Double]]) = {
-    val batchSize = x.cols
-    val out = new Array[BDM[Double]](numLayer)
-    val delta = new Array[BDM[Double]](numLayer)
-    val dropOutMasks: Array[BDM[Double]] = dropOutMask(batchSize)
-
-    for (layer <- 0 until numLayer) {
-      val output = innerLayers(layer).forward(if (layer == 0) x else out(layer - 1))
-      if (dropOutMasks(layer) != null) {
-        assert(output.rows == dropOutMasks(layer).rows)
-        output :*= dropOutMasks(layer)
-      }
-      out(layer) = output
-    }
-
-    for (layer <- (0 until numLayer).reverse) {
-      val output = out(layer)
-      val currentLayer = innerLayers(layer)
-      delta(layer) = if (layer == numLayer - 1) {
-        currentLayer.outputError(output, label)
-      } else {
-        val nextLayer = innerLayers(layer + 1)
-        val nextDelta = delta(layer + 1)
-        nextLayer.previousError(output, currentLayer, nextDelta)
-      }
-      if (dropOutMasks(layer) != null) {
-        delta(layer) :*= dropOutMasks(layer)
-      }
-    }
-    (out, delta)
-  }
-
-  protected[ml] def computeGradient(
-    x: BDM[Double],
-    label: BDM[Double],
-    epsilon: Double = 0.0): (Array[(BDM[Double], BDV[Double])], Double, Double) = {
-    var input = x
-    var (out, delta) = computeDelta(x, label)
-
-    // Improving Back-Propagation by Adding an Adversarial Gradient
-    // URL: http://arxiv.org/abs/1510.04189
-    if (epsilon > 0.0) {
-      var sign: BDM[Double] = innerLayers.head.weight.t * delta.head
-      sign = signum(sign)
-      sign :*= epsilon
-      sign :+= x
-      val t = computeDelta(sign, label)
-      out = t._1
-      delta = t._2
-      input = sign
-    }
-
-    val grads = computeGradientGivenDelta(input, out, delta)
-    val cost = if (innerLayers.last.layerType == "SoftMax") {
-      NNUtil.crossEntropy(out.last, label)
-    } else {
-      NNUtil.meanSquaredError(out.last, label)
-    }
-    (grads, cost, input.cols.toDouble)
-  }
-
-  protected[ml] def computeGradientGivenDelta(
-    x: BDM[Double],
-    out: Array[BDM[Double]],
-    delta: Array[BDM[Double]]): Array[(BDM[Double], BDV[Double])] = {
-    val grads = new Array[(BDM[Double], BDV[Double])](numLayer)
-    for (i <- 0 until numLayer) {
-      val input = if (i == 0) x else out(i - 1)
-      grads(i) = innerLayers(i).backward(input, delta(i))
-    }
-    grads
-  }
-
-  protected[ml] def dropOutMask(cols: Int): Array[BDM[Double]] = {
-    val masks = new Array[BDM[Double]](numLayer)
-    for (layer <- 0 until numLayer) {
-      val dropoutRate = dropout(layer)
-      masks(layer) = if (dropoutRate > 0) {
-        val rows = innerLayers(layer).numOut
-        val mask = BDM.zeros[Double](rows, cols)
-        for (i <- 0 until rows) {
-          for (j <- 0 until cols) {
-            mask(i, j) = if (rand.nextDouble() > dropoutRate) 1D else 0D
-          }
-        }
-        mask
-      } else {
-        null
-      }
-    }
-    masks
-  }
-
-  protected[neuralNetwork] def assign(newNN: MLP): MLP = {
-    innerLayers.zip(newNN.innerLayers).foreach { case (oldLayer, newLayer) =>
-      oldLayer.weight := newLayer.weight
-      oldLayer.bias := newLayer.bias
-    }
-    this
-  }
-
-  def setSeed(seed: Long): Unit = {
-    rand.setSeed(seed)
-  }
-}
-
-@Experimental
-object MLP extends Logging {
   def train(
     data: RDD[(SV, SV)],
     batchSize: Int,
@@ -197,18 +49,18 @@ object MLP extends Logging {
     topology: Array[Int],
     fraction: Double,
     learningRate: Double,
-    weightCost: Double): MLP = {
-    train(data, batchSize, numIteration, new MLP(topology), fraction, learningRate, weightCost)
+    weightCost: Double): MLPModel = {
+    train(data, batchSize, numIteration, new MLPModel(topology), fraction, learningRate, weightCost)
   }
 
   def train(
     data: RDD[(SV, SV)],
     batchSize: Int,
     numIteration: Int,
-    nn: MLP,
+    nn: MLPModel,
     fraction: Double,
     learningRate: Double,
-    weightCost: Double): MLP = {
+    weightCost: Double): MLPModel = {
     runSGD(data, nn, batchSize, numIteration, fraction, learningRate, weightCost)
   }
 
@@ -219,35 +71,36 @@ object MLP extends Logging {
     maxNumIterations: Int,
     fraction: Double,
     learningRate: Double,
-    weightCost: Double): MLP = {
-    val nn = new MLP(topology)
+    weightCost: Double): MLPModel = {
+    val nn = new MLPModel(topology)
     runSGD(trainingRDD, nn, batchSize, maxNumIterations, fraction, learningRate, weightCost)
   }
 
   def runSGD(
     data: RDD[(SV, SV)],
-    nn: MLP,
+    nn: MLPModel,
     batchSize: Int,
     maxNumIterations: Int,
     fraction: Double,
     learningRate: Double,
-    weightCost: Double): MLP = {
-    runSGD(data, nn, batchSize, maxNumIterations, fraction, learningRate, weightCost, 1 - 1e-2, 1e-8)
+    weightCost: Double): MLPModel = {
+    val updater = new MLPEquilibratedUpdater(nn.topology, 1e-6, 1e-2, 0)
+    runSGD(data, nn, updater, batchSize, maxNumIterations, fraction, learningRate, weightCost)
   }
 
-  private[ml] def runSGD(
+  @Experimental
+  def runSGD(
     data: RDD[(SV, SV)],
-    mlp: MLP,
+    mlp: MLPModel,
+    updater: Updater,
     batchSize: Int,
     maxNumIterations: Int,
     fraction: Double,
     learningRate: Double,
-    weightCost: Double,
-    rho: Double,
-    epsilon: Double): MLP = {
+    weightCost: Double): MLPModel = {
     val gradient = new MLPGradient(mlp.topology, mlp.innerLayers.map(_.layerType),
       mlp.dropout, batchSize)
-    val updater = new MLPEquilibratedUpdater(mlp.topology, epsilon, 1e-2, 0)
+
     val optimizer = new GradientDescent(gradient, updater).
       setMiniBatchFraction(fraction).
       setNumIterations(maxNumIterations).
@@ -262,25 +115,26 @@ object MLP extends Logging {
     mlp
   }
 
+
   def runLBFGS(
     trainingRDD: RDD[(SV, SV)],
     topology: Array[Int],
     batchSize: Int,
     maxNumIterations: Int,
     convergenceTol: Double,
-    weightCost: Double): MLP = {
-    val nn = new MLP(topology)
+    weightCost: Double): MLPModel = {
+    val nn = new MLPModel(topology)
     runLBFGS(trainingRDD, nn, batchSize, maxNumIterations,
       convergenceTol, weightCost)
   }
 
   def runLBFGS(
     data: RDD[(SV, SV)],
-    mlp: MLP,
+    mlp: MLPModel,
     batchSize: Int,
     maxNumIterations: Int,
     convergenceTol: Double,
-    weightCost: Double): MLP = {
+    weightCost: Double): MLPModel = {
     val gradient = new MLPGradient(mlp.topology, mlp.innerLayers.map(_.layerType), mlp.dropout, batchSize)
     val updater = new MLPUpdater(mlp.topology)
     val optimizer = new LBFGS(gradient, updater).
@@ -296,7 +150,7 @@ object MLP extends Logging {
     mlp
   }
 
-  private[ml] def fromVector(mlp: MLP, weights: SV): Unit = {
+  private[ml] def fromVector(mlp: MLPModel, weights: SV): Unit = {
     val structure = vectorToStructure(mlp.topology, weights)
     val layers: Array[Layer] = mlp.innerLayers
     for (i <- structure.indices) {
@@ -307,7 +161,7 @@ object MLP extends Logging {
     }
   }
 
-  private[ml] def toVector(nn: MLP): SV = {
+  private[ml] def toVector(nn: MLPModel): SV = {
     structureToVector(nn.innerLayers.map(l => (l.weight, l.bias)))
   }
 
@@ -347,7 +201,7 @@ object MLP extends Logging {
     grads
   }
 
-  def error(data: RDD[(SV, SV)], nn: MLP, batchSize: Int): Double = {
+  def error(data: RDD[(SV, SV)], nn: MLPModel, batchSize: Int): Double = {
     val count = data.count()
     val dataBatches = batchMatrix(data, batchSize, nn.numInput, nn.numOut)
     val sumError = dataBatches.map { case (x, y) =>
@@ -457,6 +311,54 @@ object MLP extends Logging {
       regParam
     }
   }
+
+  private[ml] object SaveLoadV1_0 {
+    val formatVersionV1_0 = "1.0"
+    val classNameV1_0 = "com.github.cloudml.zen.ml.neuralNetwork.MLPModel"
+
+    def load(sc: SparkContext, path: String): MLPModel = {
+      val (loadedClassName, version, metadata) = LoaderUtils.loadMetadata(sc, path)
+      val versionV1_0 = SaveLoadV1_0.formatVersionV1_0
+      val classNameV1_0 = SaveLoadV1_0.classNameV1_0
+      if (loadedClassName == classNameV1_0 && version == versionV1_0) {
+        implicit val formats = DefaultFormats
+        val topology = (metadata \ "topology").extract[String].split(",").map(_.toInt)
+        val dropout = (metadata \ "dropout").extract[String].split(",").map(_.toDouble)
+        val layerType = (metadata \ "layerType").extract[String].split(",")
+        val dataPath = LoaderUtils.dataPath(path)
+        val data = sc.objectFile[SV](dataPath).first()
+        val structures = MLP.vectorToStructure(topology, data)
+        val layers = layerType.indices.map { index =>
+          val (weight, bias) = structures(index)
+          Layer.initializeLayer(weight, bias, layerType(index))
+        }
+        new MLPModel(layers.toArray, dropout)
+      } else {
+        throw new Exception(
+          s"MLP.load did not recognize model with (className, format version):" +
+            s"($loadedClassName, $version).  Supported:\n" +
+            s"  ($classNameV1_0, 1.0)")
+      }
+
+    }
+
+    def save(
+      sc: SparkContext,
+      path: String,
+      mlp: MLPModel): Unit = {
+      val data = MLP.toVector(mlp)
+      val topology = mlp.topology
+      val dropout = mlp.dropout
+      val layerType = mlp.innerLayers.map(_.layerType)
+      val metadata = compact(render
+      (("class" -> classNameV1_0) ~ ("version" -> formatVersionV1_0) ~
+        ("topology" -> topology.mkString(",")) ~ ("dropout" -> dropout.mkString(",")) ~
+        ("layerType" -> layerType.mkString(","))))
+      sc.parallelize(Seq(metadata), 1).saveAsTextFile(LoaderUtils.metadataPath(path))
+      sc.parallelize(Seq(data), 1).saveAsObjectFile(LoaderUtils.dataPath(path))
+    }
+  }
+
 }
 
 private[ml] class MLPGradient(
@@ -467,7 +369,7 @@ private[ml] class MLPGradient(
 
   override def compute(data: SV, label: Double, weights: SV): (SV, Double) = {
     val layers = MLP.initLayers(MLP.vectorToStructure(topology, weights), layerTypes)
-    val mlp = new MLP(layers, dropoutRate)
+    val mlp = new MLPModel(layers, dropoutRate)
     val numIn = mlp.numInput
     val numLabel = mlp.numOut
     assert(data.size == numIn + numLabel)
@@ -493,7 +395,7 @@ private[ml] class MLPGradient(
     weights: SV,
     cumGradient: SV): (Long, Double) = {
     val layers = MLP.initLayers(MLP.vectorToStructure(topology, weights), layerTypes)
-    val mlp = new MLP(layers, dropoutRate)
+    val mlp = new MLPModel(layers, dropoutRate)
     val numIn = mlp.numInput
     val numLabel = mlp.numOut
     var loss = 0D
@@ -532,12 +434,12 @@ private[ml] class MLPUpdater(val topology: Array[Int]) extends Updater {
 }
 
 @Experimental
-private[ml] class MLPAdaGradUpdater(
+class MLPAdaGradUpdater(
   val topology: Array[Int],
   rho: Double = 1 - 1e-2,
   epsilon: Double = 1e-2,
   gamma: Double = 1e-1,
-  momentum: Double = 0.9) extends AdaGradUpdater(rho, epsilon, gamma, momentum) {
+  momentum: Double = 0.0) extends AdaGradUpdater(rho, epsilon, gamma, momentum) {
   override protected def l2(
     weightsOld: SV,
     gradient: SV,
@@ -549,11 +451,11 @@ private[ml] class MLPAdaGradUpdater(
 }
 
 @Experimental
-private[ml] class MLPEquilibratedUpdater(
+class MLPEquilibratedUpdater(
   val topology: Array[Int],
   _epsilon: Double = 1e-6,
   _gamma: Double = 1e-2,
-  _momentum: Double = 0.9) extends EquilibratedUpdater(_epsilon, _gamma, _momentum) {
+  _momentum: Double = 0.0) extends EquilibratedUpdater(_epsilon, _gamma, _momentum) {
   override protected def l2(
     weightsOld: SV,
     gradient: SV,
@@ -565,11 +467,11 @@ private[ml] class MLPEquilibratedUpdater(
 }
 
 @Experimental
-private[ml] class MLPAdaDeltaUpdater(
+class MLPAdaDeltaUpdater(
   val topology: Array[Int],
   rho: Double = 0.99,
   epsilon: Double = 1e-8,
-  momentum: Double = 0.9) extends AdaDeltaUpdater(rho, epsilon, momentum) {
+  momentum: Double = 0.0) extends AdaDeltaUpdater(rho, epsilon, momentum) {
   override protected def l2(
     weightsOld: SV,
     gradient: SV,
@@ -581,7 +483,7 @@ private[ml] class MLPAdaDeltaUpdater(
 }
 
 @Experimental
-private[ml] class MLPMomentumUpdater(
+class MLPMomentumUpdater(
   val topology: Array[Int],
   momentum: Double = 0.9) extends MomentumUpdater(momentum) {
   override protected def l2(

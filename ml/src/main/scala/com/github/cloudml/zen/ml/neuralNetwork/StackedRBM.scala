@@ -26,7 +26,7 @@ import org.apache.spark.mllib.linalg.{DenseMatrix => SDM, DenseVector => SDV, Ma
 import org.apache.spark.rdd.RDD
 
 @Experimental
-class StackedRBM(val innerRBMs: Array[RBM])
+class StackedRBM(val innerRBMs: Array[RBMModel])
   extends Logging with Serializable {
   def this(topology: Array[Int]) {
     this(StackedRBM.initializeRBMs(topology))
@@ -59,12 +59,12 @@ class StackedRBM(val innerRBMs: Array[RBM])
     topology
   }
 
-  def toMLP(): MLP = {
+  def toMLP(): MLPModel = {
     val layers = new Array[Layer](numLayer)
     for (layer <- 0 until numLayer) {
       layers(layer) = innerRBMs(layer).hiddenLayer
     }
-    new MLP(layers, innerRBMs.map(_.dropoutRate))
+    new MLPModel(layers, innerRBMs.map(_.dropoutRate))
   }
 }
 
@@ -125,9 +125,9 @@ object StackedRBM extends Logging {
     }
   }
 
-  def initializeRBMs(topology: Array[Int]): Array[RBM] = {
+  def initializeRBMs(topology: Array[Int]): Array[RBMModel] = {
     val numLayer = topology.length - 1
-    val innerRBMs: Array[RBM] = new Array[RBM](numLayer)
+    val innerRBMs = new Array[RBMModel](numLayer)
     for (layer <- 0 until numLayer) {
       val dropout = if (layer == 0) {
         0.2
@@ -136,7 +136,7 @@ object StackedRBM extends Logging {
       } else {
         0.0
       }
-      innerRBMs(layer) = new RBM(topology(layer), topology(layer + 1), dropout)
+      innerRBMs(layer) = new RBMModel(topology(layer), topology(layer + 1), dropout)
       println(s"innerRBMs($layer) = ${innerRBMs(layer).numIn} * ${innerRBMs(layer).numOut}")
     }
     innerRBMs

@@ -159,6 +159,6 @@ object NNUtil {
   def crossEntropy(output: BDM[Double], label: BDM[Double]): Double = {
     require(label.rows == output.rows)
     require(label.cols == output.cols)
-    0 - brzSum(label :* brzLog(output))
+    0.0 - brzSum(label :* brzLog(output))
   }
 }

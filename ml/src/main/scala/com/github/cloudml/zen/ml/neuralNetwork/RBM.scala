@@ -17,137 +17,28 @@
 
 package com.github.cloudml.zen.ml.neuralNetwork
 
-import java.util.Random
-
 import breeze.linalg.{Axis => BrzAxis, DenseMatrix => BDM, DenseVector => BDV, axpy => brzAxpy, sum => brzSum}
 import com.github.cloudml.zen.ml.linalg.BLAS
 import com.github.cloudml.zen.ml.util._
 import com.github.cloudml.zen.ml.optimization._
-import org.apache.commons.math3.random.JDKRandomGenerator
-import org.apache.spark.Logging
+import org.apache.spark.mllib.util.Loader
+import org.apache.spark.{SparkContext, Logging}
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.mllib.linalg.{DenseVector => SDV, Vector => SV}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
+import org.json4s.DefaultFormats
+import org.json4s.JsonDSL._
+import org.json4s.jackson.JsonMethods._
+
 
 @Experimental
-class RBM(
-  val weight: BDM[Double],
-  val visibleBias: BDV[Double],
-  val hiddenBias: BDV[Double],
-  val dropoutRate: Double) extends Logging with Serializable {
+object RBM extends Logging with Loader[RBMModel] {
 
-  def this(
-    numIn: Int,
-    numOut: Int,
-    dropout: Double = 0.5D) {
-    this(NNUtil.initUniformDistWeight(numIn, numOut, math.sqrt(6D / (numIn + numOut))),
-      NNUtil.initializeBias(numIn),
-      NNUtil.initializeBias(numOut),
-      dropout)
+  override def load(sc: SparkContext, path: String): RBMModel = {
+    SaveLoadV1_0.load(sc, path)
   }
 
-  require(dropoutRate >= 0 && dropoutRate < 1)
-  @transient protected lazy val rand: Random = new JDKRandomGenerator()
-  @transient protected[ml] lazy val visibleLayer: Layer = {
-    new ReLuLayer(weight.t, visibleBias)
-  }
-
-  @transient protected[ml] lazy val hiddenLayer: Layer = {
-    new ReLuLayer(weight, hiddenBias)
-  }
-
-  setSeed(Utils.random.nextInt())
-
-
-  def setSeed(seed: Long): Unit = {
-    rand.setSeed(seed)
-    visibleLayer.setSeed(rand.nextInt())
-    hiddenLayer.setSeed(rand.nextInt())
-  }
-
-  def cdK: Int = 1
-
-  def numOut: Int = weight.rows
-
-  def numIn: Int = weight.cols
-
-  def forward(visible: BDM[Double]): BDM[Double] = {
-    val hidden = activateHidden(visible)
-    if (dropoutRate > 0) {
-      hidden :*= (1 - dropoutRate)
-    }
-    hidden
-  }
-
-  protected def activateHidden(visible: BDM[Double]): BDM[Double] = {
-    require(visible.rows == weight.cols)
-    hiddenLayer.forward(visible)
-  }
-
-  protected def sampleHidden(hiddenMean: BDM[Double]): BDM[Double] = {
-    hiddenLayer.sample(hiddenMean)
-  }
-
-  protected def sampleVisible(visibleMean: BDM[Double]): BDM[Double] = {
-    visibleLayer.sample(visibleMean)
-  }
-
-  protected def activateVisible(hidden: BDM[Double]): BDM[Double] = {
-    require(hidden.rows == weight.rows)
-    visibleLayer.forward(hidden)
-  }
-
-  protected def dropOutMask(cols: Int): BDM[Double] = {
-    val mask = BDM.zeros[Double](numOut, cols)
-    for (i <- 0 until numOut) {
-      for (j <- 0 until cols) {
-        mask(i, j) = if (rand.nextDouble() > dropoutRate) 1D else 0D
-      }
-    }
-    mask
-  }
-
-  def learn(input: BDM[Double]): (BDM[Double], BDV[Double], BDV[Double], Double, Double) = {
-    val batchSize = input.cols
-    val mask: BDM[Double] = if (dropoutRate > 0) {
-      this.dropOutMask(batchSize)
-    } else {
-      null
-    }
-
-    val h1Mean = activateHidden(input)
-    val h1Sample = sampleHidden(h1Mean)
-
-    var vKMean: BDM[Double] = null
-    var vKSample: BDM[Double] = null
-    var hKMean: BDM[Double] = null
-    var hKSample: BDM[Double] = h1Sample
-    if (dropoutRate > 0) {
-      hKSample :*= mask
-    }
-
-    for (i <- 0 until cdK) {
-      vKMean = activateVisible(hKSample)
-      hKMean = activateHidden(vKMean)
-      hKSample = sampleHidden(hKMean)
-      if (dropoutRate > 0) {
-        hKSample :*= mask
-      }
-    }
-
-    val gradWeight: BDM[Double] = hKMean * vKMean.t - h1Mean * input.t
-    val gradVisibleBias = brzSum(vKMean - input, BrzAxis._1)
-    val gradHiddenBias = brzSum(hKMean - h1Mean, BrzAxis._1)
-
-    val mse = NNUtil.meanSquaredError(input, vKMean)
-    (gradWeight, gradVisibleBias, gradHiddenBias, mse, batchSize.toDouble)
-  }
-
-}
-
-@Experimental
-object RBM extends Logging {
   def train(
     data: RDD[SV],
     batchSize: Int,
@@ -156,8 +47,8 @@ object RBM extends Logging {
     numHidden: Int,
     fraction: Double,
     learningRate: Double,
-    weightCost: Double): RBM = {
-    val rbm = new RBM(numVisible, numHidden)
+    weightCost: Double): RBMModel = {
+    val rbm = new RBMModel(numVisible, numHidden)
     train(data, batchSize, numIteration, rbm, fraction, learningRate, weightCost)
   }
 
@@ -165,10 +56,10 @@ object RBM extends Logging {
     data: RDD[SV],
     batchSize: Int,
     numIteration: Int,
-    rbm: RBM,
+    rbm: RBMModel,
     fraction: Double,
     learningRate: Double,
-    weightCost: Double): RBM = {
+    weightCost: Double): RBMModel = {
     runSGD(data, rbm, batchSize, numIteration, fraction, learningRate, weightCost)
   }
 
@@ -180,35 +71,36 @@ object RBM extends Logging {
     maxNumIterations: Int,
     fraction: Double,
     learningRate: Double,
-    weightCost: Double): RBM = {
-    val rbm = new RBM(numVisible, numHidden)
+    weightCost: Double): RBMModel = {
+    val rbm = new RBMModel(numVisible, numHidden)
     runSGD(trainingRDD, rbm, batchSize, maxNumIterations, fraction, learningRate, weightCost)
   }
 
   def runSGD(
     data: RDD[SV],
-    rbm: RBM,
+    rbm: RBMModel,
     batchSize: Int,
     maxNumIterations: Int,
     fraction: Double,
     learningRate: Double,
-    weightCost: Double): RBM = {
+    weightCost: Double): RBMModel = {
     runSGD(data, rbm, batchSize, maxNumIterations, fraction, learningRate, weightCost, 1 - 1e-2, 1e-8)
   }
 
-  def runSGD(
+  private[ml] def runSGD(
     data: RDD[SV],
-    rbm: RBM,
+    rbm: RBMModel,
     batchSize: Int,
     maxNumIterations: Int,
     fraction: Double,
     learningRate: Double,
     weightCost: Double,
     rho: Double,
-    epsilon: Double): RBM = {
+    epsilon: Double): RBMModel = {
     val numVisible = rbm.numIn
     val numHidden = rbm.numOut
-    val gradient = new RBMGradient(rbm.numIn, rbm.numOut, rbm.dropoutRate, batchSize)
+    val gradient = new RBMGradient(rbm.numIn, rbm.numOut, rbm.dropoutRate, batchSize,
+      rbm.visibleLayerType, rbm.hiddenLayerType)
     val updater = new RBMAdaDeltaUpdater(numVisible, numHidden, rho, epsilon)
     val optimizer = new GradientDescent(gradient, updater).
       setMiniBatchFraction(fraction).
@@ -224,14 +116,14 @@ object RBM extends Logging {
     rbm
   }
 
-  private[ml] def fromVector(rbm: RBM, weights: SV): Unit = {
+  private[ml] def fromVector(rbm: RBMModel, weights: SV): Unit = {
     val (weight, visibleBias, hiddenBias) = vectorToStructure(rbm.numIn, rbm.numOut, weights)
     rbm.weight := weight
     rbm.visibleBias := visibleBias
     rbm.hiddenBias := hiddenBias
   }
 
-  private[ml] def toVector(rbm: RBM): SV = {
+  private[ml] def toVector(rbm: RBMModel): SV = {
     structureToVector(rbm.weight, rbm.visibleBias, rbm.hiddenBias)
   }
 
@@ -286,8 +178,7 @@ object RBM extends Logging {
     regParam: Double): Double = {
     if (regParam > 0D) {
       val (weight, _, _) = RBM.vectorToStructure(numVisible, numHidden, weightsOld)
-      val (gradWeight, _, _) =
-        RBM.vectorToStructure(numVisible, numHidden, gradient)
+      val (gradWeight, _, _) = RBM.vectorToStructure(numVisible, numHidden, gradient)
       brzAxpy(regParam, weight, gradWeight)
       var norm = 0D
       for (i <- 0 until weight.rows) {
@@ -300,16 +191,66 @@ object RBM extends Logging {
       regParam
     }
   }
+
+  private[ml] object SaveLoadV1_0 {
+    val formatVersionV1_0 = "1.0"
+    val classNameV1_0 = "com.github.cloudml.zen.ml.neuralNetwork.RBMModel"
+
+    def load(sc: SparkContext, path: String): RBMModel = {
+      val (loadedClassName, version, metadata) = LoaderUtils.loadMetadata(sc, path)
+      val versionV1_0 = SaveLoadV1_0.formatVersionV1_0
+      val classNameV1_0 = SaveLoadV1_0.classNameV1_0
+      if (loadedClassName == classNameV1_0 && version == versionV1_0) {
+        implicit val formats = DefaultFormats
+        val dropoutRate = (metadata \ "dropoutRate").extract[Double]
+        val visibleLayerType = (metadata \ "visibleLayerType").extract[String]
+        val hiddenLayerType = (metadata \ "hiddenLayerType").extract[String]
+        val numVisible = (metadata \ "numVisible").extract[Int]
+        val numHidden = (metadata \ "numHidden").extract[Int]
+        val dataPath = LoaderUtils.dataPath(path)
+        val data = sc.objectFile[SV](dataPath).first()
+        val (weight, visibleBias, hiddenBias) = RBM.vectorToStructure(numVisible, numHidden, data)
+        new RBMModel(weight, visibleBias, hiddenBias, dropoutRate, visibleLayerType, hiddenLayerType)
+      } else {
+        throw new Exception(
+          s"RBM.load did not recognize model with (className, format version):" +
+            s"($loadedClassName, $version).  Supported:\n" +
+            s"  ($classNameV1_0, 1.0)")
+      }
+
+    }
+
+    def save(
+      sc: SparkContext,
+      path: String,
+      rbm: RBMModel): Unit = {
+      val data = RBM.toVector(rbm)
+      val numVisible: Int = rbm.numIn
+      val numHidden: Int = rbm.numOut
+      val dropoutRate = rbm.dropoutRate
+      val visibleLayerType: String = rbm.visibleLayerType
+      val hiddenLayerType: String = rbm.hiddenLayerType
+      val metadata = compact(render
+      (("class" -> classNameV1_0) ~ ("version" -> formatVersionV1_0) ~
+        ("dropoutRate" -> dropoutRate) ~ ("visibleLayerType" -> visibleLayerType) ~
+        ("hiddenLayerType" -> hiddenLayerType) ~ ("numVisible" -> numVisible) ~ ("numHidden" -> numHidden)))
+      sc.parallelize(Seq(metadata), 1).saveAsTextFile(LoaderUtils.metadataPath(path))
+      sc.parallelize(Seq(data), 1).saveAsObjectFile(LoaderUtils.dataPath(path))
+    }
+  }
+
 }
 
 private[ml] class RBMGradient(
   val numIn: Int,
   val numOut: Int,
   val dropoutRate: Double,
-  val batchSize: Int) extends Gradient {
+  val batchSize: Int,
+  val visibleLayerType: String,
+  val hiddenLayerType: String) extends Gradient {
   override def compute(data: SV, label: Double, weights: SV): (SV, Double) = {
     val (weight, visibleBias, hiddenBias) = RBM.vectorToStructure(numIn, numOut, weights)
-    val rbm = new RBM(weight, visibleBias, hiddenBias, dropoutRate)
+    val rbm = new RBMModel(weight, visibleBias, hiddenBias, dropoutRate, visibleLayerType, hiddenLayerType)
     val input = new BDM(numIn, 1, data.toArray)
     val (gradWeight, gradVisibleBias, gradHiddenBias, error, _) = rbm.learn(input)
     (RBM.structureToVector(gradWeight, gradVisibleBias, gradHiddenBias), error)
@@ -330,7 +271,7 @@ private[ml] class RBMGradient(
     weights: SV,
     cumGradient: SV): (Long, Double) = {
     val (weight, visibleBias, hiddenBias) = RBM.vectorToStructure(numIn, numOut, weights)
-    val rbm = new RBM(weight, visibleBias, hiddenBias, dropoutRate)
+    val rbm = new RBMModel(weight, visibleBias, hiddenBias, dropoutRate, visibleLayerType, hiddenLayerType)
     var loss = 0D
     var count = 0L
     iter.map(_._2).grouped(batchSize).foreach { seq =>

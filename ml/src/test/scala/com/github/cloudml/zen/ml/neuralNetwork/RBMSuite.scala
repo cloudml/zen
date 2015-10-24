@@ -23,8 +23,15 @@ import org.scalatest.{FunSuite, Matchers}
 class RBMSuite extends FunSuite with MnistDatasetSuite with Matchers {
 
   ignore("RBM") {
+    val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
+    val checkpoint = s"$sparkHome/target/tmp/rmb/${System.currentTimeMillis()}"
+    sc.setCheckpointDir(checkpoint)
     val (data, numVisible) = mnistTrainDataset(2500)
     val rbm = RBM.train(data.map(_._1), 100, 1000, numVisible, 256, 0.1, 0.05, 0.0)
+    val modelPath = s"$checkpoint/model"
+    rbm.save(sc, modelPath)
+    val newRBM = RBM.load(sc, modelPath)
+    assert(rbm.equals(newRBM))
   }
 
 }

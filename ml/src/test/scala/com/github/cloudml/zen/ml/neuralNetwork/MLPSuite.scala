@@ -17,7 +17,13 @@
 
 package com.github.cloudml.zen.ml.neuralNetwork
 
-import com.github.cloudml.zen.ml.util.MnistDatasetSuite
+
+import com.github.cloudml.zen.ml.util.{Utils, SparkUtils, MnistDatasetSuite}
+import breeze.linalg.{DenseVector => BDV, DenseMatrix => BDM}
+import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
+import org.apache.spark.mllib.linalg.{Vector => SV}
+import org.apache.spark.mllib.regression.LabeledPoint
+import org.apache.spark.mllib.util.MLUtils
 import org.scalatest.{FunSuite, Matchers}
 
 class MLPSuite extends FunSuite with MnistDatasetSuite with Matchers {
@@ -33,4 +39,40 @@ class MLPSuite extends FunSuite with MnistDatasetSuite with Matchers {
     val (dataTest, _) = mnistTrainDataset(10000, 5000)
     println("Error: " + MLP.error(dataTest, nn, 100))
   }
+
+  ignore("binary classification") {
+    val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
+    val dataSetFile = s"$sparkHome/data/a5a"
+    val checkpoint = s"$sparkHome/target/tmp"
+    sc.setCheckpointDir(checkpoint)
+    val data = MLUtils.loadLibSVMFile(sc, dataSetFile).map {
+      case LabeledPoint(label, features) =>
+        val y = BDV.zeros[Double](2)
+        y := 0.04 / y.length
+        y(if (label > 0) 0 else 1) += 0.96
+        (features, SparkUtils.fromBreeze(y))
+    }.persist()
+    val trainSet = data.filter(_._1.hashCode().abs % 5 == 3).persist()
+    val testSet = data.filter(_._1.hashCode().abs % 5 != 3).persist()
+
+    val numVisible = trainSet.first()._1.size
+    val topology = Array(numVisible, 30, 2)
+    var nn = MLP.train(trainSet, 100, 1000, topology, fraction = 0.02,
+      learningRate = 0.05, weightCost = 0.0)
+
+    val modelPath = s"$checkpoint/model"
+    nn.save(sc, modelPath)
+    nn = MLP.load(sc, modelPath)
+    val scoreAndLabels = testSet.map { case (features, label) =>
+      val out = nn.predict(SparkUtils.toBreeze(features).toDenseVector.asDenseMatrix.t)
+      // Utils.random.nextInt(2).toDouble
+      (out(0, 0), if (label(0) > 0.5) 1.0 else 0.0)
+    }.persist()
+    scoreAndLabels.repartition(1).map(t => s"${t._1}\t${t._2}").
+      saveAsTextFile(s"$checkpoint/mlp/${System.currentTimeMillis()}")
+    val testAccuracy = new BinaryClassificationMetrics(scoreAndLabels).areaUnderROC()
+    println(f"Test AUC = $testAccuracy%1.6f")
+
+  }
+
 }

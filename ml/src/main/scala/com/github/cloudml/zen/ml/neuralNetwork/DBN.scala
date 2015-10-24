@@ -25,7 +25,7 @@ import org.apache.spark.rdd.RDD
 @Experimental
 class DBN(val stackedRBM: StackedRBM)
   extends Logging with Serializable {
-  lazy val mlp: MLP = {
+  lazy val mlp: MLPModel = {
     val nn = stackedRBM.toMLP()
     val lastLayer = nn.innerLayers(nn.numLayer - 1)
     NNUtil.initUniformDistWeight(lastLayer.weight, 0.01)
