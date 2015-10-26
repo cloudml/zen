@@ -27,7 +27,7 @@ import org.apache.spark.mllib.util.MLUtils
 import org.scalatest.{FunSuite, Matchers}
 
 class MLPSuite extends FunSuite with MnistDatasetSuite with Matchers {
-  test("MLP") {
+  ignore("MLP") {
     val (data, numVisible) = mnistTrainDataset(5000)
     val topology = Array(numVisible, 500, 10)
     val nn = MLP.train(data, 20, 1000, topology, fraction = 0.02,

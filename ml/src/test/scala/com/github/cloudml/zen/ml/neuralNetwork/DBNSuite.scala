@@ -22,7 +22,7 @@ import org.scalatest.{FunSuite, Matchers}
 
 class DBNSuite extends FunSuite with MnistDatasetSuite with Matchers {
 
-  test("DBN") {
+  ignore("DBN") {
     val (data, numVisible) = mnistTrainDataset(2500)
     val dbn = new DBN(Array(numVisible, 500, 10))
     DBN.pretrain(data, 100, 1000, dbn, 0.1, 0.05, 0.0)
