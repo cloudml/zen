@@ -22,8 +22,8 @@ import java.util.{Random => JavaRandom}
 import com.github.cloudml.zen.ml.DBHPartitioner
 import com.github.cloudml.zen.ml.recommendation.FM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
-import com.github.cloudml.zen.ml.util.Utils
-import org.apache.spark.Logging
+import com.github.cloudml.zen.ml.util.{XORShiftRandom, Utils}
+import org.apache.spark.{SparkContext, Logging}
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.impl.{EdgeRDDImpl, GraphImpl}
 import org.apache.spark.mllib.regression.LabeledPoint
@@ -551,12 +551,12 @@ object FM {
     sampleId: Long,
     iter: Int,
     mod: Int): Boolean = {
-    random.setSeed(seed * sampleId)
+    random.setSeed((iter + 117) / mod + sampleId)
     random.nextInt(mod) == iter % mod
   }
 
   @inline private[ml] def genRandom(mod: Int, iter: Int): JavaRandom = {
-    val random: JavaRandom = new JavaRandom()
+    val random: JavaRandom = new XORShiftRandom()
     random.setSeed(17425170 - iter / mod)
     random
   }

@@ -60,8 +60,7 @@ object MovieLensMVM extends Logging {
         .text(s"stepSize, default: ${defaultParams.stepSize}")
         .action((x, c) => c.copy(stepSize = x))
       opt[Double]("regular")
-        .text(
-          s"L2 regularization, default: ${defaultParams.regular}")
+        .text(s"L2 regularization, default: ${defaultParams.regular}")
         .action((x, c) => c.copy(regular = x))
       opt[Unit]("adagrad")
         .text("use AdaGrad")
@@ -114,8 +113,7 @@ object MovieLensMVM extends Logging {
     SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensMVM")
     val (trainSet, testSet, views) = if (useSVDPlusPlus) {
       MovieLensUtils.genSamplesSVDPlusPlus(sc, input, numPartitions, storageLevel)
-    }
-    else {
+    } else {
       MovieLensUtils.genSamplesWithTime(sc, input, numPartitions, storageLevel)
     }
     val lfm = new MVMRegression(trainSet, stepSize, views, regular, 0.0, rank,

@@ -20,6 +20,7 @@ package com.github.cloudml.zen.examples.ml
 import com.github.cloudml.zen.ml.regression.LogisticRegression
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.graphx.GraphXUtils
+import org.apache.spark.mllib.classification.LogisticRegressionModel
 import org.apache.spark.mllib.util.MLUtils
 import org.apache.spark.{SparkConf, SparkContext}
 
@@ -81,7 +82,7 @@ object BinaryClassification {
 
     parser.parse(args, defaultParams).map { params =>
       run(params)
-    }.getOrElse {
+    } getOrElse {
       System.exit(1)
     }
   }
@@ -93,11 +94,11 @@ object BinaryClassification {
       GraphXUtils.registerKryoClasses(conf)
       // conf.set("spark.kryoserializer.buffer.mb", "8")
     }
-    Logger.getRootLogger.setLevel(Level.WARN)
     val sc = new SparkContext(conf)
     val dataSet = MLUtils.loadLibSVMFile(sc, input).zipWithUniqueId().map(_.swap).cache()
     val model = LogisticRegression.trainMIS(dataSet, numIterations, stepSize, l1, epsilon, useAdaGrad)
-    model.save(sc, out)
+    val lm = new LogisticRegressionModel(model.weights, model.intercept, model.weights.size, 2)
+    lm.save(sc, out)
     sc.stop()
   }
 

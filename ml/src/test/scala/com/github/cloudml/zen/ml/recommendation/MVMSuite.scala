@@ -17,21 +17,19 @@
 
 package com.github.cloudml.zen.ml.recommendation
 
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum => brzSum}
 import com.github.cloudml.zen.ml.util._
-import org.apache.spark.mllib.regression.LabeledPoint
 import com.google.common.io.Files
+import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, Vector => SV}
+import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.mllib.util.MLUtils
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum => brzSum, Vector => BV}
-import org.apache.spark.mllib.linalg.{DenseVector => SDV, Vector => SV, SparseVector => SSV}
-import org.apache.spark.storage.StorageLevel
-
-import org.scalatest.{Matchers, FunSuite}
+import org.scalatest.{FunSuite, Matchers}
 
 class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
-  ignore("binary classification") {
+  test("binary classification") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
     val dataSetFile = s"$sparkHome/data/binary_classification_data.txt"
-    val checkpoint = s"$sparkHome/tmp"
+    val checkpoint = s"$sparkHome/target/tmp"
     sc.setCheckpointDir(checkpoint)
     val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile).zipWithIndex().map {
       case (LabeledPoint(label, features), id) =>
@@ -76,7 +74,7 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
   ignore("url_combined classification") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
     val dataSetFile = s"$sparkHome/data/binary_classification_data.txt"
-    val checkpointDir = s"$sparkHome/tmp"
+    val checkpointDir = s"$sparkHome/target/tmp"
     sc.setCheckpointDir(checkpointDir)
     val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile).zipWithIndex().map {
       case (LabeledPoint(label, features), id) =>
