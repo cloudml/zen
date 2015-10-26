@@ -25,7 +25,7 @@ import org.apache.spark.rdd.RDD
 @Experimental
 class DBN(val stackedRBM: StackedRBM)
   extends Logging with Serializable {
-  lazy val mlp: MLP = {
+  lazy val mlp: MLPModel = {
     val nn = stackedRBM.toMLP()
     val lastLayer = nn.innerLayers(nn.numLayer - 1)
     NNUtil.initUniformDistWeight(lastLayer.weight, 0.01)
@@ -42,19 +42,21 @@ class DBN(val stackedRBM: StackedRBM)
 object DBN extends Logging {
   def train(
     data: RDD[(SV, SV)],
+    batchSize: Int,
     numIteration: Int,
     topology: Array[Int],
     fraction: Double,
     learningRate: Double,
     weightCost: Double): DBN = {
     val dbn = new DBN(topology)
-    pretrain(data, numIteration, dbn, fraction, learningRate, weightCost)
-    finetune(data, numIteration, dbn, fraction, learningRate, weightCost)
+    pretrain(data, batchSize, numIteration, dbn, fraction, learningRate, weightCost)
+    finetune(data, batchSize, numIteration, dbn, fraction, learningRate, weightCost)
     dbn
   }
 
   def pretrain(
     data: RDD[(SV, SV)],
+    batchSize: Int,
     numIteration: Int,
     dbn: DBN,
     fraction: Double,
@@ -62,18 +64,19 @@ object DBN extends Logging {
     weightCost: Double): DBN = {
     val stackedRBM = dbn.stackedRBM
     val numLayer = stackedRBM.innerRBMs.length
-    StackedRBM.train(data.map(_._1), numIteration, stackedRBM,
+    StackedRBM.train(data.map(_._1), batchSize, numIteration, stackedRBM,
       fraction, learningRate, weightCost, numLayer - 1)
     dbn
   }
 
   def finetune(data: RDD[(SV, SV)],
+    batchSize: Int,
     numIteration: Int,
     dbn: DBN,
     fraction: Double,
     learningRate: Double,
     weightCost: Double): DBN = {
-    MLP.train(data, numIteration, dbn.mlp,
+    MLP.train(data, batchSize, numIteration, dbn.mlp,
       fraction, learningRate, weightCost)
     dbn
   }
