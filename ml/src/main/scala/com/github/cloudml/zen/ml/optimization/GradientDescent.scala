@@ -205,7 +205,7 @@ object GradientDescent extends Logging {
          * and regVal is the regularization value computed in the previous iteration as well.
          */
         stochasticLossHistory.append(lossSum / miniBatchSize + regVal)
-        println(s"loss $i: ${lossSum / miniBatchSize}")
+        // println(s"loss $i: ${lossSum / miniBatchSize}")
         BLAS.scal(1.0 / miniBatchSize, gradientSum)
         val update = updater.compute(weights, gradientSum, stepSize, i, regParam)
         weights = update._1

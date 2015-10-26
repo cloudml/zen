@@ -238,8 +238,6 @@ object LBFGS extends Logging {
 
       val loss = lossSum / numExamples + regVal
 
-      println(s"loss $loss")
-
       /**
        * It will return the gradient part of regularization using updater.
        *
