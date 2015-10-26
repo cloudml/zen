@@ -84,24 +84,24 @@ object RBM extends Logging with Loader[RBMModel] {
     fraction: Double,
     learningRate: Double,
     weightCost: Double): RBMModel = {
-    runSGD(data, rbm, batchSize, maxNumIterations, fraction, learningRate, weightCost, 1 - 1e-2, 1e-8)
+    val numVisible = rbm.numIn
+    val numHidden = rbm.numOut
+    val updater = new RBMAdaGradUpdater(numVisible, numHidden, 0D, 1E-6)
+    runSGD(data, rbm, updater, batchSize, maxNumIterations, fraction, learningRate, weightCost)
   }
 
-  private[ml] def runSGD(
+  @Experimental
+  def runSGD(
     data: RDD[SV],
     rbm: RBMModel,
+    updater: Updater,
     batchSize: Int,
     maxNumIterations: Int,
     fraction: Double,
     learningRate: Double,
-    weightCost: Double,
-    rho: Double,
-    epsilon: Double): RBMModel = {
-    val numVisible = rbm.numIn
-    val numHidden = rbm.numOut
+    weightCost: Double): RBMModel = {
     val gradient = new RBMGradient(rbm.numIn, rbm.numOut, rbm.dropoutRate, batchSize,
       rbm.visibleLayerType, rbm.hiddenLayerType)
-    val updater = new RBMAdaDeltaUpdater(numVisible, numHidden, rho, epsilon)
     val optimizer = new GradientDescent(gradient, updater).
       setMiniBatchFraction(fraction).
       setNumIterations(maxNumIterations).
@@ -292,13 +292,14 @@ private[ml] class RBMGradient(
   }
 }
 
-private[ml] class RBMAdaGradUpdater(
+@Experimental
+class RBMAdaGradUpdater(
   val numIn: Int,
   val numOut: Int,
   rho: Double = 0,
-  epsilon: Double = 1e-2,
+  epsilon: Double = 1e-6,
   gamma: Double = 1e-1,
-  momentum: Double = 0.9) extends AdaGradUpdater(rho, epsilon, gamma, momentum) {
+  momentum: Double = 0.0) extends AdaGradUpdater(rho, epsilon, gamma, momentum) {
 
   override protected def l2(
     weightsOld: SV,
@@ -310,11 +311,12 @@ private[ml] class RBMAdaGradUpdater(
   }
 }
 
-private[ml] class RBMAdaDeltaUpdater(
+@Experimental
+class RBMAdaDeltaUpdater(
   val numIn: Int,
   val numOut: Int,
-  rho: Double = 0.99,
-  epsilon: Double = 1e-8,
+  rho: Double = 0.95,
+  epsilon: Double = 1e-6,
   momentum: Double = 0.0) extends AdaDeltaUpdater(rho, epsilon, momentum) {
 
   override protected def l2(
@@ -327,7 +329,8 @@ private[ml] class RBMAdaDeltaUpdater(
   }
 }
 
-private[ml] class RBMMomentumUpdater(
+@Experimental
+class RBMMomentumUpdater(
   val numIn: Int,
   val numOut: Int,
   momentum: Double = 0.9) extends MomentumUpdater(momentum) {
