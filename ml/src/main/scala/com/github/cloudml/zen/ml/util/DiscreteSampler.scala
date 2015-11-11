@@ -32,4 +32,32 @@ trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
   def deltaUpdate(state: Int, delta: => T): Unit
   def resetDist(probs: Array[T], space: Array[Int], psize: Int): DiscreteSampler[T]
   def resetDist(distIter: Iterator[(Int, T)], psize: Int): DiscreteSampler[T]
+
+  def resampleRandom(gen: Random,
+    state: Int,
+    residualRate: Double,
+    numResampling: Int = 2)(implicit gev: spNum[T]): Int = {
+    val newState = sampleRandom(gen)
+    if (newState == state && numResampling >= 0 && used > 1) {
+      if (residualRate >= 1.0 || gen.nextDouble() < residualRate) {
+        return resampleRandom(gen, state, residualRate, numResampling - 1)
+      }
+    }
+    newState
+  }
+
+  def resampleFrom(base: T,
+    gen: Random,
+    state: Int,
+    residualRate: Double,
+    numResampling: Int = 2)(implicit gev: spNum[T]): Int = {
+    val newState = sampleFrom(base, gen)
+    if (newState == state && numResampling >= 0 && used > 1) {
+      if (residualRate >= 1.0 || gen.nextDouble() < residualRate) {
+        val newBase = gev.fromDouble(gen.nextDouble() * gev.toDouble(norm))
+        return resampleFrom(newBase, gen, state, residualRate, numResampling - 1)
+      }
+    }
+    newState
+  }
 }

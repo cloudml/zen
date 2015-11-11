@@ -21,10 +21,9 @@
   <parent>
     <groupId>com.github.cloudml.zen</groupId>
     <artifactId>zen-parent_2.10</artifactId>
-    <version>0.2-SNAPSHOT</version>
+    <version>0.3</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
-  <groupId>com.github.cloudml.zen</groupId>
   <artifactId>zen-assembly_2.10</artifactId>
   <name>Zen Project Assembly</name>
   <url>https://github.com/cloudml/zen/</url>

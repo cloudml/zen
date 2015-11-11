@@ -50,7 +50,7 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
   val alphaAS: Double) extends Serializable {
 
   @transient val topicCounters = collectTopicCounters()
-  @transient val algo = new FastLDA
+  @transient val algo = new ZenLDA
 
   @transient val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
   @transient val betaSum = beta * numTerms
@@ -178,7 +178,7 @@ class DistributedLDAModel(@transient val termTopicsRDD: RDD[(VertexId, TC)],
 
   @transient val totalTopicCounter = termTopicsRDD.map(_._2)
     .aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
-  @transient val algo = new FastLDA
+  @transient val algo = new ZenLDA
 
   /**
    * inference interface

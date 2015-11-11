@@ -31,7 +31,6 @@ import com.github.cloudml.zen.ml.util._
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum, convert}
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.{EdgePartition, GraphImpl}
-import spire.math.{Numeric => spNum}
 
 
 abstract class LDAAlgorithm extends Serializable {
@@ -170,41 +169,6 @@ abstract class LDAAlgorithm extends Serializable {
     alphaAS: Double,
     beta: Double)
     (ep: EdgePartition[TA, TC]): (Double, Double, Double)
-
-  def resampleTable[@specialized(Double, Int, Float, Long) T: spNum](gen: Random,
-    table: AliasTable[T],
-    state: Int,
-    cnt: Int,
-    numSampling: Int = 0): Int = {
-    val newState = table.sampleRandom(gen)
-    if (newState == state && numSampling < 16) {
-      // discard it if the newly sampled topic is current topic
-      if ((cnt == 1 && table.used > 1) ||
-        /* the sampled topic that contains current token and other tokens */
-        (cnt > 1 && gen.nextDouble() < 1.0 / cnt)
-      /* the sampled topic has 1/cnt probability that belongs to current token */ ) {
-        return resampleTable(gen, table, state, cnt, numSampling + 1)
-      }
-    }
-    newState
-  }
-
-  def resampleCdf(genSum:Double,
-    gen: Random,
-    cdf: CumulativeDist[Double],
-    state: Int,
-    cnt: Int,
-    rr: Double,
-    numSampling: Int = 0): Int = {
-    val newState = cdf.sampleFrom(genSum, gen)
-    if (newState == state && numSampling < 2) {
-      if ((cnt == 1 && cdf.used > 1) || (cnt > 1 && gen.nextDouble() < rr)) {
-        val newSum = gen.nextDouble() * cdf.norm
-        return resampleCdf(newSum, gen, cdf, state, cnt, rr, numSampling + 1)
-      }
-    }
-    newState
-  }
 
   def resetDist_abDense(ab: DiscreteSampler[Double],
     alphak_denoms: BDV[Double],
@@ -455,7 +419,7 @@ abstract class LDAWordByWord extends LDAAlgorithm {
     dwb
   }
 
-  def resetDist_dwbSparse_wa(dwb: CumulativeDist[Double],
+  def resetDist_dwbSparse_withAdjust(dwb: CumulativeDist[Double],
     denoms: BDV[Double],
     termBeta_denoms: BDV[Double],
     docTopics: BSV[Count],
@@ -524,7 +488,7 @@ abstract class LDAWordByWord extends LDAAlgorithm {
   }
 }
 
-class FastLDA extends LDAWordByWord {
+class ZenLDA extends LDAWordByWord {
   override def samplePartition(numThreads: Int,
     accelMethod: String,
     numPartitions: Int,
@@ -592,14 +556,14 @@ class FastLDA extends LDAWordByWord {
         val occur = topics.length
         if (occur == 1) {
           val topic = topics(0)
-          resetDist_dwbSparse_wa(cdfDist, denoms, termBeta_denoms, docTopics, topic)
+          resetDist_dwbSparse_withAdjust(cdfDist, denoms, termBeta_denoms, docTopics, topic)
           topics(0) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
         } else {
           resetDist_dwbSparse(cdfDist, termBeta_denoms, docTopics)
           var i = 0
           while (i < occur) {
             val topic = topics(i)
-            topics(i) = tokenSampling2(gen, global, termDist, cdfDist, denoms, denseTermTopics, docTopics, topic)
+            topics(i) = tokenResampling(gen, global, termDist, cdfDist, denseTermTopics, docTopics, topic, beta)
             i += 1
           }
         }
@@ -625,31 +589,36 @@ class FastLDA extends LDAWordByWord {
     if (genSum < dwbSum) {
       dwb.sampleFrom(genSum, gen)
     } else if (genSum < sum23) wa match {
-      case wt: AliasTable[Double] => resampleTable(gen, wt, topic, termTopics(topic))
+      case wt: AliasTable[Double] =>
+        val rr = 1.0 / termTopics(topic)
+        wt.resampleFrom(genSum - dwbSum, gen, topic, rr)
       case wf: FTree[Double] => wf.sampleFrom(genSum - dwbSum, gen)
     } else {
       ab.sampleFrom(genSum - sum23, gen)
     }
   }
 
-  def tokenSampling2(gen: Random,
+  def tokenResampling(gen: Random,
     ab: DiscreteSampler[Double],
     wa: DiscreteSampler[Double],
     dwb: CumulativeDist[Double],
-    denoms: BDV[Double],
     termTopics: BDV[Count],
     docTopics: BSV[Count],
-    topic: Int): Int = {
+    topic: Int,
+    beta: Double): Int = {
     val dwbSum = dwb.norm
     val sum23 = dwbSum + wa.norm
     val distSum = sum23 + ab.norm
     val genSum = gen.nextDouble() * distSum
     if (genSum < dwbSum) {
-      val cnt = docTopics(topic)
-      val rr = (cnt + termTopics(topic) - 0.09) * denoms(topic) / dwb.norm
-      resampleCdf(genSum, gen, dwb, topic, cnt, rr)
+      val nkd = docTopics(topic)
+      val nkw_beta = termTopics(topic) + beta
+      val rr = 1.0 / nkd + 1.0 / nkw_beta - 1.0 / nkd / nkw_beta
+      dwb.resampleFrom(genSum, gen, topic, rr)
     } else if (genSum < sum23) wa match {
-      case wt: AliasTable[Double] => resampleTable(gen, wt, topic, termTopics(topic))
+      case wt: AliasTable[Double] =>
+        val rr = 1.0 / termTopics(topic)
+        wt.resampleFrom(genSum - dwbSum, gen, topic, rr)
       case wf: FTree[Double] => wf.sampleFrom(genSum - dwbSum, gen)
     } else {
       ab.sampleFrom(genSum - sum23, gen)
@@ -734,7 +703,8 @@ class LightLDA extends LDAWordByWord {
               if (gen.nextDouble() * dPropSum < aSum) {
                 proposalTopic = alphaDist.sampleRandom(gen)
               } else {
-                proposalTopic = resampleTable(gen, docDist, topic, docTopics(topic))
+                val rr = 1.0 / docTopics(topic)
+                proposalTopic = docDist.resampleRandom(gen, topic, rr)
               }
               dPFun
             } else {
