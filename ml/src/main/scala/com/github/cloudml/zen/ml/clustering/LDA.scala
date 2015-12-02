@@ -76,7 +76,9 @@ class LDA(@transient var corpus: Graph[TC, TA],
 
   def docVertices: VertexRDD[TC] = corpus.vertices.filter(t => isDocId(t._1))
 
-  private def scConf = corpus.edges.context.getConf
+  @inline private def scContext = corpus.edges.context
+
+  @inline private def scConf = scContext.getConf
 
   def init(computedModel: Option[RDD[(VertexId, TC)]] = None): Unit = {
     corpus = algo.updateVertexCounters(corpus, numTopics)
@@ -145,12 +147,11 @@ class LDA(@transient var corpus: Graph[TC, TA],
         LDAPerplexity(this).output(println)
       }
       if (saveIntv > 0 && iter % saveIntv == 0) {
-        val sc = corpus.edges.context
         val model = toLDAModel()
         val savPath = new Path(scConf.get(cs_outputpath) + s"-iter$iter")
         val fs = SparkUtils.getFileSystem(scConf, savPath)
         fs.delete(savPath, true)
-        model.save(sc, savPath.toString, isTransposed=true)
+        model.save(scContext, savPath.toString, isTransposed=true)
         println(s"Model saved after Iteration $iter")
       }
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
@@ -161,20 +162,28 @@ class LDA(@transient var corpus: Graph[TC, TA],
 
   def gibbsSampling(sampIter: Int, inferenceOnly: Boolean = false): Unit = {
     val chkptIntv = scConf.getInt(cs_chkptInterval, 0)
+    val needChkpt = chkptIntv > 0 && sampIter % chkptIntv == 1 && scContext.getCheckpointDir.isDefined
     val prevCorpus = corpus
+    val startedAt = System.nanoTime()
+
     val sampledCorpus = algo.sampleGraph(corpus, topicCounters, seed, sampIter,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
-    corpus = algo.updateVertexCounters(sampledCorpus, numTopics, inferenceOnly)
-    if (chkptIntv > 0 && sampIter % chkptIntv == 1) {
-      if (corpus.edges.context.getCheckpointDir.isDefined) {
-        corpus.checkpoint()
-      }
+    val newEdges = sampledCorpus.edges
+    newEdges.persist(storageLevel)
+    if (needChkpt) {
+      newEdges.checkpoint()
     }
-    corpus.persist(storageLevel)
-    val startedAt = System.nanoTime()
-    corpus.edges.setName(s"edges-$sampIter").count()
-    corpus.vertices.setName(s"vertices-$sampIter")
+    newEdges.setName(s"edges-$sampIter").count()
+
+    corpus = algo.updateVertexCounters(sampledCorpus, numTopics, inferenceOnly)
+    val newVertices = corpus.vertices
+    newVertices.persist(storageLevel)
+    if (needChkpt) {
+      newVertices.checkpoint()
+    }
+    newVertices.setName(s"vertices-$sampIter")
     collectTopicCounters()
+
     val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
     println(s"Sampling & update paras $sampIter takes: $elapsedSeconds secs")
     prevCorpus.unpersist(blocking=false)
