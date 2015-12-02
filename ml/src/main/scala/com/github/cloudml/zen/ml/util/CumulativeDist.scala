@@ -22,15 +22,15 @@ import scala.reflect.ClassTag
 
 import CumulativeDist._
 
-import breeze.linalg.{Vector => BV}
+import breeze.linalg.StorageVector
 import spire.math.{Numeric => spNum}
 
 
-class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int)
-  (implicit ev: spNum[T]) extends DiscreteSampler[T] with Serializable {
-  var _cdf = new Array[T](dataSize)
-  var _space = new Array[Int](dataSize)
-  var _used: Int = dataSize
+class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](implicit ev: spNum[T])
+  extends DiscreteSampler[T] with Serializable {
+  var _cdf: Array[T] = _
+  var _space: Array[Int] = _
+  var _used: Int = _
 
   def length: Int = _cdf.length
 
@@ -84,7 +84,7 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSiz
   }
 
   private def reset(newSize: Int): CumulativeDist[T] = {
-    if (_cdf.length < newSize) {
+    if (_cdf == null || _cdf.length < newSize) {
       _cdf = new Array[T](newSize)
       _space = new Array[Int](newSize)
     }
@@ -96,9 +96,10 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](dataSiz
 }
 
 object CumulativeDist {
-  def generateCdf[@specialized(Double, Int, Float, Long) T: ClassTag: spNum](sv: BV[T]): CumulativeDist[T] = {
+  def generateCdf[@specialized(Double, Int, Float, Long) T: ClassTag: spNum]
+  (sv: StorageVector[T]): CumulativeDist[T] = {
     val used = sv.activeSize
-    val cdf = new CumulativeDist[T](used)
+    val cdf = new CumulativeDist[T]
     cdf.resetDist(sv.activeIterator, used)
   }
 

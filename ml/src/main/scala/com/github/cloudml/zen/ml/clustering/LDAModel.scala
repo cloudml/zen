@@ -24,7 +24,7 @@ import java.util.Random
 import LDADefines._
 import com.github.cloudml.zen.ml.util._
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, StorageVector, sum}
 import com.google.common.base.Charsets
 import com.google.common.io.Files
 import org.apache.hadoop.io.{NullWritable, Text}
@@ -61,7 +61,7 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
   @transient lazy val termDistCache = new AppendOnlyMap[Int,
     SoftReference[AliasTable[Double]]](numTerms / 2)
   @transient lazy val global = {
-    val table = new AliasTable[Double](numTopics)
+    val table = new AliasTable[Double]
     algo.resetDist_abDense(table, alphak_denoms, beta)
   }
 
@@ -86,7 +86,7 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
     val tokens = vector2Array(doc)
     val topics = new Array[Int](tokens.length)
     var docTopics = uniformDistSampler(gen, tokens, topics, numTopics)
-    val docCdf = new CumulativeDist[Double](numTopics)
+    val docCdf = new CumulativeDist[Double]
     for (i <- 1 to burnIn + runIter) {
       docTopics = sampleDoc(gen, docTopics, tokens, topics, docCdf)
       if (i > burnIn) topicDist :+= docTopics
@@ -144,7 +144,7 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
     if (termTopics.activeSize == 0) return null
     var w = cacheMap(termId)
     if (w == null || w.get() == null) {
-      val table = new AliasTable[Double](termTopics.activeSize)
+      val table = new AliasTable[Double]
       algo.resetDist_waSparse(table, alphaK_denoms, termTopics)
       w = new SoftReference(table)
       cacheMap.update(termId, w)
@@ -248,7 +248,7 @@ class DistributedLDAModel(@transient val termTopicsRDD: RDD[(VertexId, TC)],
         agg
       }, _ :+= _)
     } else {
-      termTopicsRDD
+      termTopicsRDD.asInstanceOf[RDD[(Long, BV[Count])]]
     }
     rdd.persist(storageLevel)
 
@@ -339,16 +339,17 @@ object LDAModel extends Loader[DistributedLDAModel] {
           vector.activeIterator.map {
             case (term, cnt) => (term.toLong, (topic, cnt))
           }
-      }.aggregateByKey[BV[Count]](BSV.zeros[Count](numTopics), partitioner)((agg, t) => {
+      }.aggregateByKey(BSV.zeros[Count](numTopics), partitioner)((agg, t) => {
         agg(t._1) += t._2
         agg
       }, _ :+= _)
     } else {
-      rdd.asInstanceOf[RDD[(Long, BV[Count])]]
+      rdd
     }
     val storageLevel = StorageLevel.MEMORY_AND_DISK
     termCnts.persist(storageLevel)
-    new DistributedLDAModel(termCnts, numTopics, numTerms, numTokens, alpha, beta, alphaAS, storageLevel)
+    new DistributedLDAModel(termCnts.asInstanceOf[RDD[(VertexId, TC)]], numTopics, numTerms, numTokens,
+      alpha, beta, alphaAS, storageLevel)
   }
 
   def loadLocalLDAModel(filePath: String): LocalLDAModel = {

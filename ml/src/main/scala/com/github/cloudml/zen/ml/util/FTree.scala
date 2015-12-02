@@ -23,17 +23,16 @@ import scala.reflect.ClassTag
 
 import FTree._
 
-import breeze.linalg.{Vector=>BV, SparseVector=>BSV, DenseVector=>BDV}
+import breeze.linalg.{SparseVector => brSV, DenseVector => brDV, StorageVector}
 import spire.math.{Numeric => spNum}
 
 
-class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
-  val isSparse: Boolean)
+class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Boolean)
   (implicit ev: spNum[T]) extends DiscreteSampler[T] with Serializable {
-  var _regLen: Int = regularLen(dataSize)
-  var _tree: Array[T] = new Array[T](_regLen << 1)
-  var _space: Array[Int] = if (!isSparse) null else new Array[Int](_regLen)
-  var _used: Int = dataSize
+  var _regLen: Int = _
+  var _tree: Array[T] = _
+  var _space: Array[Int] = _
+  var _used: Int = _
 
   def length: Int = _tree.length
 
@@ -198,12 +197,11 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
   }
 
   private def reset(newDataSize: Int): FTree[T] = {
-    val regLen = regularLen(newDataSize)
-    if (regLen > (_tree.length >> 1)) {
-      _tree = new Array[T](regLen << 1)
-      _space = if (!isSparse) null else new Array[Int](regLen)
+    _regLen = regularLen(newDataSize)
+    if (_tree == null || _regLen > (_tree.length >> 1)) {
+      _tree = new Array[T](_regLen << 1)
+      _space = if (!isSparse) null else new Array[Int](_regLen)
     }
-    _regLen = regLen
     _used = newDataSize
     var i = 0
     while (i < _regLen) {
@@ -216,11 +214,12 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](dataSize: Int,
 }
 
 object FTree {
-  def generateFTree[@specialized(Double, Int, Float, Long) T: ClassTag: spNum](sv: BV[T]): FTree[T] = {
+  def generateFTree[@specialized(Double, Int, Float, Long) T: ClassTag: spNum]
+  (sv: StorageVector[T]): FTree[T] = {
     val used = sv.activeSize
     val ftree = sv match {
-      case v: BDV[T] => new FTree[T](used, isSparse=false)
-      case v: BSV[T] => new FTree[T](used, isSparse=true)
+      case v: brDV[T] => new FTree[T](isSparse=false)
+      case v: brSV[T] => new FTree[T](isSparse=true)
     }
     ftree.resetDist(sv.activeIterator, used)
   }

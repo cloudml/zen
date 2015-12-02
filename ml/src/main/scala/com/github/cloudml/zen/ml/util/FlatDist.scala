@@ -25,13 +25,12 @@ import breeze.storage.Zero
 import spire.math.{Numeric => spNum}
 
 
-class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](dim: Int,
-  val isSparse: Boolean)
+class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Boolean)
   (implicit ev: spNum[T]) extends DiscreteSampler[T] with Serializable {
-  var _dist = initDist()
-  var _norm = ev.zero
+  var _dist: StorageVector[T] = _
+  var _norm: T = _
 
-  @inline def length: Int = dim
+  @inline def length: Int = _dist.length
 
   @inline def used: Int = _dist.activeSize
 
@@ -79,7 +78,7 @@ class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](dim: Int,
   def resetDist(probs: Array[T], space: Array[Int], psize: Int): FlatDist[T] = synchronized {
     implicit val zero = Zero(ev.zero)
     _dist = if (isSparse) {
-      new brSV[T](space, probs, psize, dim)
+      new brSV[T](space, probs, psize, probs.length)
     } else {
       new brDV[T](probs)
     }
@@ -93,7 +92,7 @@ class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](dim: Int,
   }
 
   def resetDist(distIter: Iterator[(Int, T)], psize: Int): FlatDist[T] = synchronized {
-    reset()
+    reset(psize)
     var sum = ev.zero
     while (distIter.hasNext) {
       val (state, prob) = distIter.next()
@@ -104,19 +103,29 @@ class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](dim: Int,
     this
   }
 
-  private def reset(): FlatDist[T] = {
-    _dist = initDist()
+  private def reset(newSize: Int): FlatDist[T] = {
+    if (_dist == null || _dist.length < newSize) {
+      implicit val zero = Zero(ev.zero)
+      _dist = if (isSparse) brSV.zeros[T](newSize) else brDV.zeros[T](newSize)
+    }
     _norm = ev.zero
     this
-  }
-
-  private def initDist(): StorageVector[T] = {
-    implicit val zero = Zero(ev.zero)
-    if (isSparse) brSV.zeros[T](dim) else brDV.zeros[T](dim)
   }
 
   private def setNorm(norm: T): FlatDist[T] = {
     _norm = norm
     this
+  }
+}
+
+object FlatDist {
+  def generateFlat[@specialized(Double, Int, Float, Long) T: ClassTag: spNum]
+  (sv: StorageVector[T]): FlatDist[T] = {
+    val used = sv.activeSize
+    val flat = sv match {
+      case v: brDV[T] => new FlatDist[T](isSparse=false)
+      case v: brSV[T] => new FlatDist[T](isSparse=true)
+    }
+    flat.resetDist(sv.activeIterator, used)
   }
 }

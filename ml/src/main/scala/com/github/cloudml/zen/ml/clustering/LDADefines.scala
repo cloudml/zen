@@ -109,6 +109,19 @@ object LDADefines {
     bdv
   }
 
+  def addIntoBV[@specialized(Int, Double, Float) V](a: BV[V], b: BV[V]): BV[V] = {
+    a match {
+      case u: BDV[Count] => b match {
+        case v: BDV[Count] => u :+= v
+        case v: BSV[Count] => u :+= v
+      }
+      case u: BSV[Count] => b match {
+        case v: BDV[Count] => v :+= u
+        case v: BSV[Count] => u :+= v
+      }
+    }
+  }
+
   def refreshEdgeAssociations[VD: ClassTag, ED: ClassTag](graph: Graph[VD, ED]): GraphImpl[VD, ED] = {
     val gimpl = graph.asInstanceOf[GraphImpl[VD, ED]]
     val vertices = gimpl.vertices

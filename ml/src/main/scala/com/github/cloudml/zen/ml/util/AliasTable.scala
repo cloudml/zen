@@ -20,18 +20,18 @@ package com.github.cloudml.zen.ml.util
 import java.util.Random
 import scala.reflect.ClassTag
 
-import breeze.linalg.{Vector => BV}
+import breeze.linalg.StorageVector
 import com.github.fommil.netlib.BLAS.{getInstance => blas}
 import spire.math.{Numeric => spNum}
 
 
-class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: Int)
-  (implicit ev: spNum[T]) extends DiscreteSampler[T] {
-  var _l: Array[Int] = new Array[Int](initUsed)
-  var _h: Array[Int] = new Array[Int](initUsed)
-  var _p: Array[T] = new Array[T](initUsed)
-  var _used = initUsed
-  var _norm = ev.zero
+class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](implicit ev: spNum[T])
+  extends DiscreteSampler[T] {
+  var _l: Array[Int] = _
+  var _h: Array[Int] = _
+  var _p: Array[T] = _
+  var _used: Int = _
+  var _norm: T = _
 
   def used: Int = _used
 
@@ -147,7 +147,7 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
   }
 
   private def reset(newSize: Int): AliasTable[T] = {
-    if (_l.length < newSize) {
+    if (_l == null || _l.length < newSize) {
       _l = new Array[Int](newSize)
       _h = new Array[Int](newSize)
       _p = new Array[T](newSize)
@@ -164,9 +164,10 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](initUsed: I
 }
 
 object AliasTable {
-  def generateAlias[@specialized(Double, Int, Float, Long) T: ClassTag: spNum](sv: BV[T]): AliasTable[T] = {
+  def generateAlias[@specialized(Double, Int, Float, Long) T: ClassTag: spNum]
+  (sv: StorageVector[T]): AliasTable[T] = {
     val used = sv.activeSize
-    val table = new AliasTable[T](used)
+    val table = new AliasTable[T]
     table.resetDist(sv.activeIterator, used)
   }
 }
