@@ -39,12 +39,12 @@ trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
     residualRate: Double,
     numResampling: Int = 2)(implicit gev: spNum[T]): Int = {
     val newState = sampleRandom(gen)
-    if (newState == state && numResampling >= 0 && used > 1) {
-      if (residualRate >= 1.0 || gen.nextDouble() < residualRate) {
-        return resampleRandom(gen, state, residualRate, numResampling - 1)
-      }
+    if (newState == state && numResampling >= 0 && used > 1 &&
+      (residualRate >= 1.0 || gen.nextDouble() < residualRate)) {
+      resampleRandom(gen, state, residualRate, numResampling - 1)
+    } else {
+      newState
     }
-    newState
   }
 
   @tailrec final def resampleFrom(base: T,
@@ -53,12 +53,12 @@ trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
     residualRate: Double,
     numResampling: Int = 2)(implicit gev: spNum[T]): Int = {
     val newState = sampleFrom(base, gen)
-    if (newState == state && numResampling >= 0 && used > 1) {
-      if (residualRate >= 1.0 || gen.nextDouble() < residualRate) {
-        val newBase = gev.fromDouble(gen.nextDouble() * gev.toDouble(norm))
-        return resampleFrom(newBase, gen, state, residualRate, numResampling - 1)
-      }
+    if (newState == state && numResampling >= 0 && used > 1 &&
+      (residualRate >= 1.0 || gen.nextDouble() < residualRate)) {
+      val newBase = gev.fromDouble(gen.nextDouble() * gev.toDouble(norm))
+      resampleFrom(newBase, gen, state, residualRate, numResampling - 1)
+    } else {
+      newState
     }
-    newState
   }
 }
