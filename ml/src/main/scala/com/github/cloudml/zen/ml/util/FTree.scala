@@ -18,6 +18,7 @@
 package com.github.cloudml.zen.ml.util
 
 import java.util.Random
+import scala.annotation.tailrec
 import scala.reflect.ClassTag
 
 import FTree._
@@ -239,7 +240,7 @@ object FTree {
 
   def binarySearch[@specialized(Double, Int, Float, Long) T](arr: Array[T],
     key: T, start: Int, end: Int)(implicit ev: spNum[T]): Int = {
-    def seg(s: Int, e: Int): Int = {
+    @tailrec def seg(s: Int, e: Int): Int = {
       if (s > e) return -1
       val mid = (s + e) >> 1
       mid match {

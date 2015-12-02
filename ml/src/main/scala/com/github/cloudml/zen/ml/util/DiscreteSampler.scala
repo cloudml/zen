@@ -18,6 +18,7 @@
 package com.github.cloudml.zen.ml.util
 
 import java.util.Random
+import scala.annotation.tailrec
 
 import spire.math.{Numeric => spNum}
 
@@ -33,7 +34,7 @@ trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
   def resetDist(probs: Array[T], space: Array[Int], psize: Int): DiscreteSampler[T]
   def resetDist(distIter: Iterator[(Int, T)], psize: Int): DiscreteSampler[T]
 
-  def resampleRandom(gen: Random,
+  @tailrec final def resampleRandom(gen: Random,
     state: Int,
     residualRate: Double,
     numResampling: Int = 2)(implicit gev: spNum[T]): Int = {
@@ -46,7 +47,7 @@ trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
     newState
   }
 
-  def resampleFrom(base: T,
+  @tailrec final def resampleFrom(base: T,
     gen: Random,
     state: Int,
     residualRate: Double,
