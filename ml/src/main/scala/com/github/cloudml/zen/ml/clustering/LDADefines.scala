@@ -23,7 +23,7 @@ import scala.concurrent._
 import scala.concurrent.duration._
 import scala.reflect.ClassTag
 
-import com.github.cloudml.zen.ml.util._
+import com.github.cloudml.zen.ml.sampler._
 
 import breeze.collection.mutable.SparseArray
 import breeze.linalg.{Vector => BV, SparseVector => BSV, DenseVector => BDV}

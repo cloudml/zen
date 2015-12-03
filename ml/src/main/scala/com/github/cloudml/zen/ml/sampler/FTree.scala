@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.github.cloudml.zen.ml.util
+package com.github.cloudml.zen.ml.sampler
 
 import java.util.Random
 import scala.annotation.tailrec
@@ -23,7 +23,7 @@ import scala.reflect.ClassTag
 
 import FTree._
 
-import breeze.linalg.{SparseVector => brSV, DenseVector => brDV, StorageVector}
+import breeze.linalg.{SparseVector => brSV, DenseVector => brDV, Vector => brV}
 import spire.math.{Numeric => spNum}
 
 
@@ -100,7 +100,7 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Bo
     }
   }
 
-  def update(state: Int, value: => T): Unit = synchronized {
+  def update(state: Int, value: => T): Unit = {
     assert(ev.lteqv(value, ev.zero))
     var pos = toTreePos(state)
     if (pos < leafOffset) {
@@ -116,7 +116,7 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Bo
     }
   }
 
-  def deltaUpdate(state: Int, delta: => T): Unit = synchronized {
+  def deltaUpdate(state: Int, delta: => T): Unit = {
     var pos = toTreePos(state)
     if (pos < leafOffset) {
       pos = addState()
@@ -163,11 +163,11 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Bo
     updateAncestors(pos, ev.negate(p))
   }
 
-  def resetDist(probs: Array[T], space: Array[Int], psize: Int): FTree[T] = synchronized {
+  def resetDist(probs: Array[T], space: Array[Int], psize: Int): FTree[T] = {
     resetDist(space.iterator.zip(probs.iterator), psize)
   }
 
-  def resetDist(distIter: Iterator[(Int, T)], psize: Int): FTree[T] = synchronized {
+  def resetDist(distIter: Iterator[(Int, T)], psize: Int): FTree[T] = {
     reset(psize)
     if (!isSparse) {
       while (distIter.hasNext) {
@@ -196,13 +196,13 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Bo
     this
   }
 
-  private def reset(newDataSize: Int): FTree[T] = {
-    _regLen = regularLen(newDataSize)
+  def reset(newSize: Int): FTree[T] = {
+    _regLen = regularLen(newSize)
     if (_tree == null || _regLen > (_tree.length >> 1)) {
       _tree = new Array[T](_regLen << 1)
       _space = if (!isSparse) null else new Array[Int](_regLen)
     }
-    _used = newDataSize
+    _used = newSize
     var i = 0
     while (i < _regLen) {
       setLeaf(i, ev.zero)
@@ -215,7 +215,7 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Bo
 
 object FTree {
   def generateFTree[@specialized(Double, Int, Float, Long) T: ClassTag: spNum]
-  (sv: StorageVector[T]): FTree[T] = {
+  (sv: brV[T]): FTree[T] = {
     val used = sv.activeSize
     val ftree = sv match {
       case v: brDV[T] => new FTree[T](isSparse=false)

@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.github.cloudml.zen.ml.util
+package com.github.cloudml.zen.ml.sampler
 
 import java.util.Random
 import scala.reflect.ClassTag
@@ -65,11 +65,11 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](implici
 
   def deltaUpdate(state: Int, delta: => T): Unit = {}
 
-  def resetDist(probs: Array[T], space: Array[Int], psize: Int): CumulativeDist[T] = synchronized {
+  def resetDist(probs: Array[T], space: Array[Int], psize: Int): CumulativeDist[T] = {
     resetDist(space.iterator.zip(probs.iterator), psize)
   }
 
-  def resetDist(distIter: Iterator[(Int, T)], psize: Int): CumulativeDist[T] = synchronized {
+  def resetDist(distIter: Iterator[(Int, T)], psize: Int): CumulativeDist[T] = {
     reset(psize)
     var sum = ev.zero
     var i = 0
@@ -83,7 +83,7 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](implici
     this
   }
 
-  private def reset(newSize: Int): CumulativeDist[T] = {
+  def reset(newSize: Int): CumulativeDist[T] = {
     if (_cdf == null || _cdf.length < newSize) {
       _cdf = new Array[T](newSize)
       _space = new Array[Int](newSize)

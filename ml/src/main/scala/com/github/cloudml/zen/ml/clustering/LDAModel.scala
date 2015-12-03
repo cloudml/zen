@@ -22,9 +22,10 @@ import java.lang.ref.SoftReference
 import java.util.Random
 
 import LDADefines._
+import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util._
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, StorageVector, sum}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum}
 import com.google.common.base.Charsets
 import com.google.common.io.Files
 import org.apache.hadoop.io.{NullWritable, Text}
@@ -87,6 +88,7 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
     val topics = new Array[Int](tokens.length)
     var docTopics = uniformDistSampler(gen, tokens, topics, numTopics)
     val docCdf = new CumulativeDist[Double]
+    docCdf.reset(numTopics)
     for (i <- 1 to burnIn + runIter) {
       docTopics = sampleDoc(gen, docTopics, tokens, topics, docCdf)
       if (i > burnIn) topicDist :+= docTopics
@@ -248,7 +250,7 @@ class DistributedLDAModel(@transient val termTopicsRDD: RDD[(VertexId, TC)],
         agg
       }, _ :+= _)
     } else {
-      termTopicsRDD.asInstanceOf[RDD[(Long, BV[Count])]]
+      termTopicsRDD
     }
     rdd.persist(storageLevel)
 

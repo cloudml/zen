@@ -26,7 +26,8 @@ import scala.concurrent._
 import scala.concurrent.duration._
 
 import LDADefines._
-import com.github.cloudml.zen.ml.util._
+import com.github.cloudml.zen.ml.sampler._
+import com.github.cloudml.zen.ml.util.XORShiftRandom
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum, convert}
 import org.apache.spark.graphx2._
@@ -537,6 +538,8 @@ class ZenLDA extends LDAWordByWord {
           case "ftree" | "hybrid" => new FTree(isSparse=true)
         }
         cdfDists(thid) = new CumulativeDist[Double]
+        termDists(thid).reset(numTopics)
+        cdfDists(thid).reset(numTopics)
       }
       val termDist = termDists(thid)
       val si = lcSrcIds(offset)
@@ -669,6 +672,7 @@ class LightLDA extends LDAWordByWord {
         gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
         gens(thid) = gen
         termDists(thid) = new AliasTable[Double]
+        termDists(thid).reset(numTopics)
       }
       val termDist = termDists(thid)
       val si = lcSrcIds(offset)
@@ -838,7 +842,9 @@ class LightLDA extends LDAWordByWord {
       probs(i) = beta / (topicCounters(i) + betaSum)
       i += 1
     }
-    b.resetDist(probs, null, numTopics)
+    b.synchronized {
+      b.resetDist(probs, null, numTopics)
+    }
   }
 
   /**
@@ -889,7 +895,9 @@ class LightLDA extends LDAWordByWord {
       probs(i) = alphaRatio * (topicCounters(i) + alphaAS)
       i += 1
     }
-    a.resetDist(probs, null, numTopics)
+    a.synchronized {
+      a.resetDist(probs, null, numTopics)
+    }
   }
 
   def dSparseCached(updatePred: SoftReference[AliasTable[Count]] => Boolean,
@@ -900,8 +908,7 @@ class LightLDA extends LDAWordByWord {
     if (!updatePred(docCache)) {
       docCache.get
     } else {
-      val table = new AliasTable[Count]
-      table.resetDist(docTopics.activeIterator, docTopics.activeSize)
+      val table = AliasTable.generateAlias(docTopics)
       cacheArray(lcDocId) = new SoftReference(table)
       table
     }
@@ -1168,6 +1175,8 @@ class SparseLDA extends LDADocByDoc {
         gens(thid) = gen
         docDists(thid) = new FlatDist[Double](isSparse=true)
         mainDists(thid) = new FlatDist[Double](isSparse=true)
+        docDists(thid).reset(numTopics)
+        mainDists(thid).reset(numTopics)
       }
       val docDist = docDists(thid)
       val si = lcSrcIds(offset)

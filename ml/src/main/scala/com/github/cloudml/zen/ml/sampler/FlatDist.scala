@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-package com.github.cloudml.zen.ml.util
+package com.github.cloudml.zen.ml.sampler
 
 import java.util.Random
 import scala.reflect.ClassTag
 
-import breeze.linalg.{SparseVector => brSV, DenseVector => brDV, StorageVector}
+import breeze.linalg.{SparseVector => brSV, DenseVector => brDV, StorageVector, Vector => brV}
 import breeze.storage.Zero
 import spire.math.{Numeric => spNum}
 
@@ -62,20 +62,20 @@ class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse:
     _dist.indexAt(idx)
   }
 
-  def update(state: Int, value: => T): Unit = synchronized {
+  def update(state: Int, value: => T): Unit = {
     val prev = _dist(state)
     _dist(state) = value
     val newNorm = ev.plus(_norm, ev.minus(value, prev))
     setNorm(newNorm)
   }
 
-  def deltaUpdate(state: Int, delta: => T): Unit = synchronized {
+  def deltaUpdate(state: Int, delta: => T): Unit = {
     _dist(state) = ev.plus(_dist(state), delta)
     val newNorm = ev.plus(_norm, delta)
     setNorm(newNorm)
   }
 
-  def resetDist(probs: Array[T], space: Array[Int], psize: Int): FlatDist[T] = synchronized {
+  def resetDist(probs: Array[T], space: Array[Int], psize: Int): FlatDist[T] = {
     implicit val zero = Zero(ev.zero)
     _dist = if (isSparse) {
       new brSV[T](space, probs, psize, probs.length)
@@ -91,7 +91,7 @@ class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse:
     setNorm(sum)
   }
 
-  def resetDist(distIter: Iterator[(Int, T)], psize: Int): FlatDist[T] = synchronized {
+  def resetDist(distIter: Iterator[(Int, T)], psize: Int): FlatDist[T] = {
     reset(psize)
     var sum = ev.zero
     while (distIter.hasNext) {
@@ -103,7 +103,7 @@ class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse:
     this
   }
 
-  private def reset(newSize: Int): FlatDist[T] = {
+  def reset(newSize: Int): FlatDist[T] = {
     if (_dist == null || _dist.length < newSize) {
       implicit val zero = Zero(ev.zero)
       _dist = if (isSparse) brSV.zeros[T](newSize) else brDV.zeros[T](newSize)
@@ -120,7 +120,7 @@ class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse:
 
 object FlatDist {
   def generateFlat[@specialized(Double, Int, Float, Long) T: ClassTag: spNum]
-  (sv: StorageVector[T]): FlatDist[T] = {
+  (sv: brV[T]): FlatDist[T] = {
     val used = sv.activeSize
     val flat = sv match {
       case v: brDV[T] => new FlatDist[T](isSparse=false)

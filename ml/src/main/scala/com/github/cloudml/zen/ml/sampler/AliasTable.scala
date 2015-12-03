@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-package com.github.cloudml.zen.ml.util
+package com.github.cloudml.zen.ml.sampler
 
 import java.util.Random
 import scala.reflect.ClassTag
 
-import breeze.linalg.StorageVector
+import breeze.linalg.{Vector => brV}
 import com.github.fommil.netlib.BLAS.{getInstance => blas}
 import spire.math.{Numeric => spNum}
 
@@ -65,7 +65,7 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](implicit ev
 
   def deltaUpdate(state: Int, delta: => T): Unit = {}
 
-  def resetDist(probs: Array[T], space: Array[Int], psize: Int): AliasTable[T] = synchronized {
+  def resetDist(probs: Array[T], space: Array[Int], psize: Int): AliasTable[T] = {
     // @inline def isClose(a: Double, b: Double): Boolean = math.abs(a - b) <= (1e-8 + math.abs(a) * 1e-6)
     reset(psize)
     var sum = ev.zero
@@ -140,13 +140,13 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](implicit ev
     setNorm(sum)
   }
 
-  def resetDist(distIter: Iterator[(Int, T)], psize: Int): AliasTable[T] = synchronized {
+  def resetDist(distIter: Iterator[(Int, T)], psize: Int): AliasTable[T] = {
     val (space, probs) = distIter.toArray.unzip
     assert(probs.length == psize)
     resetDist(probs.toArray, space.toArray, psize)
   }
 
-  private def reset(newSize: Int): AliasTable[T] = {
+  def reset(newSize: Int): AliasTable[T] = {
     if (_l == null || _l.length < newSize) {
       _l = new Array[Int](newSize)
       _h = new Array[Int](newSize)
@@ -165,7 +165,7 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](implicit ev
 
 object AliasTable {
   def generateAlias[@specialized(Double, Int, Float, Long) T: ClassTag: spNum]
-  (sv: StorageVector[T]): AliasTable[T] = {
+  (sv: brV[T]): AliasTable[T] = {
     val used = sv.activeSize
     val table = new AliasTable[T]
     table.resetDist(sv.activeIterator, used)

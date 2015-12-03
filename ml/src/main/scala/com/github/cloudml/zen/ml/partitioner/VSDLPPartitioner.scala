@@ -21,7 +21,8 @@ import scala.reflect.ClassTag
 
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import breeze.linalg.{DenseMatrix, SparseVector => BSV}
-import com.github.cloudml.zen.ml.util.{FTree, XORShiftRandom}
+import com.github.cloudml.zen.ml.sampler.FTree
+import com.github.cloudml.zen.ml.util.XORShiftRandom
 import org.apache.spark.Partitioner
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.GraphImpl

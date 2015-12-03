@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.github.cloudml.zen.ml.util
+package com.github.cloudml.zen.ml.sampler
 
 import java.util.Random
 import scala.annotation.tailrec
@@ -33,6 +33,7 @@ trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
   def deltaUpdate(state: Int, delta: => T): Unit
   def resetDist(probs: Array[T], space: Array[Int], psize: Int): DiscreteSampler[T]
   def resetDist(distIter: Iterator[(Int, T)], psize: Int): DiscreteSampler[T]
+  def reset(newSize: Int): DiscreteSampler[T]
 
   @tailrec final def resampleRandom(gen: Random,
     state: Int,
