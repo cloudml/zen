@@ -169,24 +169,24 @@ class LDA(@transient var corpus: Graph[TC, TA],
     val sampledCorpus = algo.sampleGraph(corpus, topicCounters, seed, sampIter,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
     val newEdges = sampledCorpus.edges
-    newEdges.persist(storageLevel)
+    newEdges.persist(storageLevel).setName(s"edges-$sampIter")
     if (needChkpt) {
       newEdges.checkpoint()
     }
-    newEdges.setName(s"edges-$sampIter").count()
+    newEdges.count()
+    prevCorpus.edges.unpersist(blocking=false)
 
     corpus = algo.updateVertexCounters(sampledCorpus, numTopics, inferenceOnly)
     val newVertices = corpus.vertices
-    newVertices.persist(storageLevel)
+    newVertices.persist(storageLevel).setName(s"vertices-$sampIter")
     if (needChkpt) {
       newVertices.checkpoint()
     }
-    newVertices.setName(s"vertices-$sampIter")
     collectTopicCounters()
+    prevCorpus.vertices.unpersist(blocking=false)
 
     val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
     println(s"Sampling & update paras $sampIter takes: $elapsedSeconds secs")
-    prevCorpus.unpersist(blocking=false)
   }
 
   /**
