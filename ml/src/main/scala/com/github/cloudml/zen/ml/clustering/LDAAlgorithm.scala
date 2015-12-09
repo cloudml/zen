@@ -78,7 +78,9 @@ abstract class LDAAlgorithm extends Serializable {
       cpf(ep)
     ))).partitionBy(vertices.partitioner.get)
 
-    val partRDD = vertices.partitionsRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
+    // Below identical map is used to isolate the impact of locality of CheckpointRDD
+    val isoRDD = vertices.partitionsRDD.mapPartitions(iter => iter, preservesPartitioning=true)
+    val partRDD = isoRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
       (svpIter, cntsIter) => svpIter.map(svp => {
         val results = svp.values
         val index = svp.index

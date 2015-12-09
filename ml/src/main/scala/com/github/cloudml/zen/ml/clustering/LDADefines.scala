@@ -21,6 +21,7 @@ import java.util.Random
 import java.util.concurrent.Executors
 import scala.concurrent._
 import scala.concurrent.duration._
+import scala.language.existentials
 import scala.reflect.ClassTag
 
 import com.github.cloudml.zen.ml.sampler._
@@ -109,23 +110,10 @@ object LDADefines {
     bdv
   }
 
-  def addIntoBV[@specialized(Int, Double, Float) V](a: BV[V], b: BV[V]): BV[V] = {
-    a match {
-      case u: BDV[Count] => b match {
-        case v: BDV[Count] => u :+= v
-        case v: BSV[Count] => u :+= v
-      }
-      case u: BSV[Count] => b match {
-        case v: BDV[Count] => v :+= u
-        case v: BSV[Count] => u :+= v
-      }
-    }
-  }
-
   def refreshEdgeAssociations[VD: ClassTag, ED: ClassTag](graph: Graph[VD, ED]): GraphImpl[VD, ED] = {
     val gimpl = graph.asInstanceOf[GraphImpl[VD, ED]]
     val vertices = gimpl.vertices
-    val edges = gimpl.edges.asInstanceOf[EdgeRDDImpl[ED, _]]
+    val edges = gimpl.edges.asInstanceOf[EdgeRDDImpl[ED, VDO] forSome { type VDO }]
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
     val shippedVerts = vertices.partitionsRDD.mapPartitions(_.flatMap(svp => {
       val rt = svp.routingTable
@@ -145,7 +133,9 @@ object LDADefines {
       }
     })).partitionBy(edges.partitioner.get)
 
-    val partRDD = edges.partitionsRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
+    // Below identical map is used to isolate the impact of locality of CheckpointRDD
+    val isoRDD = edges.partitionsRDD.mapPartitions(iter => iter, preservesPartitioning=true)
+    val partRDD = isoRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
       (epIter, vabsIter) => epIter.map(Function.tupled((pid, ep) => {
         val g2l = ep.global2local
         val results = new Array[VD](ep.vertexAttrs.length)

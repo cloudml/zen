@@ -172,9 +172,8 @@ class LDA(@transient var corpus: Graph[TC, TA],
     newEdges.persist(storageLevel).setName(s"edges-$sampIter")
     if (needChkpt) {
       newEdges.checkpoint()
+      newEdges.partitionsRDD.count()
     }
-    newEdges.count()
-    prevCorpus.edges.unpersist(blocking=false)
 
     corpus = algo.updateVertexCounters(sampledCorpus, numTopics, inferenceOnly)
     val newVertices = corpus.vertices
@@ -183,6 +182,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
       newVertices.checkpoint()
     }
     collectTopicCounters()
+    prevCorpus.edges.unpersist(blocking=false)
     prevCorpus.vertices.unpersist(blocking=false)
 
     val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
