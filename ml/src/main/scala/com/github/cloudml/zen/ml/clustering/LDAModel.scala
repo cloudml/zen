@@ -28,8 +28,7 @@ import com.github.cloudml.zen.ml.util._
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum}
 import com.google.common.base.Charsets
 import com.google.common.io.Files
-import org.apache.hadoop.io.{NullWritable, Text}
-import org.apache.hadoop.mapred.TextOutputFormat
+import org.apache.hadoop.fs.{FileUtil, Path}
 import org.apache.spark.Partitioner._
 import org.apache.spark.graphx2._
 import org.apache.spark.mllib.util.{Loader, Saveable}
@@ -178,7 +177,7 @@ class DistributedLDAModel(@transient val termTopicsRDD: RDD[(VertexId, TC)],
   val alphaAS: Double,
   var storageLevel: StorageLevel) extends Serializable with Saveable {
 
-  @transient val totalTopicCounter = termTopicsRDD.map(_._2)
+  @transient lazy val totalTopicCounter = termTopicsRDD.map(_._2)
     .aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
   @transient val algo = new ZenLDA
 
@@ -255,24 +254,35 @@ class DistributedLDAModel(@transient val termTopicsRDD: RDD[(VertexId, TC)],
     rdd.persist(storageLevel)
 
     val saveAsSolid = sc.getConf.getBoolean(cs_saveAsSolid, false)
+    val savPath = if (saveAsSolid) new Path(path + ".sav") else new Path(path)
+    val savDir = savPath.toUri.toString
+    val metaDir = LoaderUtils.metadataPath(savDir)
+    val dataDir = LoaderUtils.dataPath(savDir)
+    val fs = SparkUtils.getFileSystem(sc.getConf, savPath)
+
+    fs.delete(savPath, true)
+    sc.parallelize(Seq(metadata), 1).saveAsTextFile(metaDir)
+    // save model with the topic or word-term descending order
+    rdd.map { case (id, vector) =>
+      val list = vector.activeIterator.toList.sortWith(_._2 > _._2)
+        .map(t => s"${t._1}:${t._2}").mkString("\t")
+      s"$id\t$list"
+    }.saveAsTextFile(dataDir)
     if (saveAsSolid) {
-      val metadata_line = metadata.replaceAll("\n", "")
-      val rdd_txt = rdd.map {
-        case (id, vector) =>
-          val list = vector.activeIterator.toList.sortWith(_._2 > _._2)
-            .map(t => s"${t._1}:${t._2}").mkString("\t")
-          id.toString + "\t" + list
+      val cpmgPath = new Path(path + ".cpmg")
+      fs.delete(cpmgPath, true)
+      var suc = fs.rename(new Path(metaDir + "/part-00000"), new Path(dataDir + "/_meta"))
+      if (suc) {
+        suc = FileUtil.copyMerge(fs, new Path(dataDir), fs, cpmgPath, false, sc.hadoopConfiguration, null)
       }
-      LoaderUtils.RDD2HDFSFile[String](sc, rdd_txt, path, metadata_line, t => t)
-    } else {
-      sc.parallelize(Seq(metadata), 1).saveAsTextFile(LoaderUtils.metadataPath(path))
-      // save model with the topic or word-term descending order
-      rdd.map {
-        case (id, vector) =>
-          val list = vector.activeIterator.toList.sortWith(_._2 > _._2)
-            .map(t => s"${t._1}:${t._2}").mkString("\t")
-          (NullWritable.get(), new Text(id + "\t" + list))
-      }.saveAsHadoopFile[TextOutputFormat[NullWritable, Text]](LoaderUtils.dataPath(path))
+      if (suc) {
+        suc = fs.rename(cpmgPath, new Path(path))
+      }
+      fs.delete(savPath, true)
+      fs.delete(cpmgPath, true)
+      if (!suc) {
+        throw new IOException("Save model error!")
+      }
     }
   }
 

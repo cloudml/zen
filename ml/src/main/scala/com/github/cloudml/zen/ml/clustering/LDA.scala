@@ -148,7 +148,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
       if (pplx) {
         LDAPerplexity(this).output(println)
       }
-      if (saveIntv > 0 && iter % saveIntv == 0) {
+      if (saveIntv > 0 && iter % saveIntv == 0 && iter < totalIter) {
         val model = toLDAModel()
         val savPath = new Path(scConf.get(cs_outputpath) + s"-iter$iter")
         val fs = SparkUtils.getFileSystem(scConf, savPath)
