@@ -47,8 +47,10 @@ class LDA(@transient var corpus: Graph[TC, TA],
   val algo: LDAAlgorithm,
   var storageLevel: StorageLevel) extends Serializable {
 
-  @transient var topicCounters: BDV[Count] = null
+  @transient var topicCounters: BDV[Count] = _
   @transient lazy val seed = new XORShiftRandom().nextInt()
+  @transient var edgeCpFile: String = _
+  @transient var vertCpFile: String = _
 
   def setAlpha(alpha: Double): this.type = {
     this.alpha = alpha
@@ -185,6 +187,13 @@ class LDA(@transient var corpus: Graph[TC, TA],
     prevCorpus.edges.unpersist(blocking=false)
     prevCorpus.vertices.unpersist(blocking=false)
 
+    if (needChkpt) {
+      if (edgeCpFile != null && vertCpFile != null) {
+        SparkUtils.deleteChkptDirs(scConf, Array(edgeCpFile, vertCpFile))
+      }
+      edgeCpFile = corpus.edges.getCheckpointFile.get
+      vertCpFile = corpus.vertices.getCheckpointFile.get
+    }
     val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
     println(s"Sampling & update paras $sampIter takes: $elapsedSeconds secs")
   }
