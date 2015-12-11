@@ -47,8 +47,10 @@ class LDA(@transient var corpus: Graph[TC, TA],
   val algo: LDAAlgorithm,
   var storageLevel: StorageLevel) extends Serializable {
 
-  @transient var topicCounters: BDV[Count] = null
+  @transient var topicCounters: BDV[Count] = _
   @transient lazy val seed = new XORShiftRandom().nextInt()
+  @transient var edgeCpFile: String = _
+  @transient var vertCpFile: String = _
 
   def setAlpha(alpha: Double): this.type = {
     this.alpha = alpha
@@ -76,7 +78,9 @@ class LDA(@transient var corpus: Graph[TC, TA],
 
   def docVertices: VertexRDD[TC] = corpus.vertices.filter(t => isDocId(t._1))
 
-  private def scConf = corpus.edges.context.getConf
+  @inline private def scContext = corpus.edges.context
+
+  @inline private def scConf = scContext.getConf
 
   def init(computedModel: Option[RDD[(VertexId, TC)]] = None): Unit = {
     corpus = algo.updateVertexCounters(corpus, numTopics)
@@ -144,13 +148,12 @@ class LDA(@transient var corpus: Graph[TC, TA],
       if (pplx) {
         LDAPerplexity(this).output(println)
       }
-      if (saveIntv > 0 && iter % saveIntv == 0) {
-        val sc = corpus.edges.context
+      if (saveIntv > 0 && iter % saveIntv == 0 && iter < totalIter) {
         val model = toLDAModel()
         val savPath = new Path(scConf.get(cs_outputpath) + s"-iter$iter")
         val fs = SparkUtils.getFileSystem(scConf, savPath)
         fs.delete(savPath, true)
-        model.save(sc, savPath.toString, isTransposed=true)
+        model.save(scContext, savPath.toString, isTransposed=true)
         println(s"Model saved after Iteration $iter")
       }
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
@@ -161,23 +164,38 @@ class LDA(@transient var corpus: Graph[TC, TA],
 
   def gibbsSampling(sampIter: Int, inferenceOnly: Boolean = false): Unit = {
     val chkptIntv = scConf.getInt(cs_chkptInterval, 0)
+    val needChkpt = chkptIntv > 0 && sampIter % chkptIntv == 1 && scContext.getCheckpointDir.isDefined
     val prevCorpus = corpus
+    val startedAt = System.nanoTime()
+
     val sampledCorpus = algo.sampleGraph(corpus, topicCounters, seed, sampIter,
       numTokens, numTopics, numTerms, alpha, alphaAS, beta)
-    corpus = algo.updateVertexCounters(sampledCorpus, numTopics, inferenceOnly)
-    if (chkptIntv > 0 && sampIter % chkptIntv == 1) {
-      if (corpus.edges.context.getCheckpointDir.isDefined) {
-        corpus.checkpoint()
-      }
+    val newEdges = sampledCorpus.edges
+    newEdges.persist(storageLevel).setName(s"edges-$sampIter")
+    if (needChkpt) {
+      newEdges.checkpoint()
+      newEdges.partitionsRDD.count()
     }
-    corpus.persist(storageLevel)
-    val startedAt = System.nanoTime()
-    corpus.edges.setName(s"edges-$sampIter").count()
-    corpus.vertices.setName(s"vertices-$sampIter")
+
+    corpus = algo.updateVertexCounters(sampledCorpus, numTopics, inferenceOnly)
+    val newVertices = corpus.vertices
+    newVertices.persist(storageLevel).setName(s"vertices-$sampIter")
+    if (needChkpt) {
+      newVertices.checkpoint()
+    }
     collectTopicCounters()
+    prevCorpus.edges.unpersist(blocking=false)
+    prevCorpus.vertices.unpersist(blocking=false)
+
+    if (needChkpt) {
+      if (edgeCpFile != null && vertCpFile != null) {
+        SparkUtils.deleteChkptDirs(scConf, Array(edgeCpFile, vertCpFile))
+      }
+      edgeCpFile = corpus.edges.getCheckpointFile.get
+      vertCpFile = corpus.vertices.getCheckpointFile.get
+    }
     val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
     println(s"Sampling & update paras $sampIter takes: $elapsedSeconds secs")
-    prevCorpus.unpersist(blocking=false)
   }
 
   /**
@@ -377,6 +395,7 @@ object LDA {
     }
     val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdges(docs, storageLevel)
     initCorpus.persist(storageLevel)
+    initCorpus.edges.setName("rawEdges").count()
     val partCorpus = conf.get(cs_partStrategy, "dbh") match {
       case "byterm" =>
         println("partition corpus by terms.")
@@ -423,7 +442,7 @@ object LDA {
       val gen = new XORShiftRandom(pid + 117)
       var pidMark = pid.toLong << 48
       iter.flatMap(line => {
-        val tokens = line.split(raw"\t|\s+")
+        val tokens = line.split(raw"\t|\s+").view
         val docId = if (ignDid) {
           pidMark += 1
           pidMark

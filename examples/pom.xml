@@ -21,7 +21,7 @@
   <parent>
     <groupId>com.github.cloudml.zen</groupId>
     <artifactId>zen-parent_2.10</artifactId>
-    <version>0.3</version>
+    <version>0.3-SNAPSHOT</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
   <artifactId>zen-examples_2.10</artifactId>

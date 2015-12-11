@@ -17,6 +17,8 @@
 
 package com.github.cloudml.zen.examples.ml
 
+import scala.annotation.tailrec
+
 import com.github.cloudml.zen.ml.clustering.LDA
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.util.SparkHacker
@@ -164,7 +166,7 @@ object LDADriver {
       System.exit(1)
     }
     val arglist = args.toList
-    def nextOption(map: OptionMap, list: List[String]): OptionMap = {
+    @tailrec def nextOption(map: OptionMap, list: List[String]): OptionMap = {
       def isSwitch(s: String) = s(0) == '-'
       list match {
         case Nil => map

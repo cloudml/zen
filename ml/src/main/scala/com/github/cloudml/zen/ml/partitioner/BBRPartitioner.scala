@@ -20,7 +20,8 @@ package com.github.cloudml.zen.ml.partitioner
 import scala.reflect.ClassTag
 
 import com.github.cloudml.zen.ml.clustering.LDADefines._
-import com.github.cloudml.zen.ml.util.{AliasTable, XORShiftRandom}
+import com.github.cloudml.zen.ml.sampler.AliasTable
+import com.github.cloudml.zen.ml.util.XORShiftRandom
 import breeze.linalg.{SparseVector => BSV}
 import org.apache.spark.Partitioner
 import org.apache.spark.graphx2._

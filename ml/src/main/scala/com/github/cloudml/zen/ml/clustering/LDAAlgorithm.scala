@@ -26,12 +26,12 @@ import scala.concurrent._
 import scala.concurrent.duration._
 
 import LDADefines._
-import com.github.cloudml.zen.ml.util._
+import com.github.cloudml.zen.ml.sampler._
+import com.github.cloudml.zen.ml.util.XORShiftRandom
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum, convert}
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.{EdgePartition, GraphImpl}
-import spire.math.{Numeric => spNum}
 
 
 abstract class LDAAlgorithm extends Serializable {
@@ -78,7 +78,9 @@ abstract class LDAAlgorithm extends Serializable {
       cpf(ep)
     ))).partitionBy(vertices.partitioner.get)
 
-    val partRDD = vertices.partitionsRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
+    // Below identical map is used to isolate the impact of locality of CheckpointRDD
+    val isoRDD = vertices.partitionsRDD.mapPartitions(iter => iter, preservesPartitioning=true)
+    val partRDD = isoRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
       (svpIter, cntsIter) => svpIter.map(svp => {
         val results = svp.values
         val index = svp.index
@@ -170,24 +172,6 @@ abstract class LDAAlgorithm extends Serializable {
     alphaAS: Double,
     beta: Double)
     (ep: EdgePartition[TA, TC]): (Double, Double, Double)
-
-  def resampleTable[@specialized(Double, Int, Float, Long) T: spNum](gen: Random,
-    table: AliasTable[T],
-    state: Int,
-    cnt: Int = 0,
-    numSampling: Int = 0): Int = {
-    val newState = table.sampleRandom(gen)
-    if (newState == state && numSampling < 16) {
-      // discard it if the newly sampled topic is current topic
-      if ((cnt == 1 && table.used > 1) ||
-        /* the sampled topic that contains current token and other tokens */
-        (cnt > 1 && gen.nextDouble() < 1.0 / cnt)
-      /* the sampled topic has 1/cnt probability that belongs to current token */ ) {
-        return resampleTable(gen, table, state, cnt, numSampling + 1)
-      }
-    }
-    newState
-  }
 
   def resetDist_abDense(ab: DiscreteSampler[Double],
     alphak_denoms: BDV[Double],
@@ -438,6 +422,34 @@ abstract class LDAWordByWord extends LDAAlgorithm {
     dwb
   }
 
+  def resetDist_dwbSparse_withAdjust(dwb: CumulativeDist[Double],
+    denoms: BDV[Double],
+    termBeta_denoms: BDV[Double],
+    docTopics: BSV[Count],
+    curTopic: Int): CumulativeDist[Double] = {
+    val used = docTopics.used
+    val index = docTopics.index
+    val data = docTopics.data
+    // DANGER operations for performance
+    dwb._used = used
+    val cdf = dwb._cdf
+    var sum = 0.0
+    var i = 0
+    while (i < used) {
+      val topic = index(i)
+      val prob = if (topic == curTopic) {
+        (termBeta_denoms(topic) - denoms(topic)) * (data(i) - 1)
+      } else {
+        termBeta_denoms(topic) * data(i)
+      }
+      sum += prob
+      cdf(i) = sum
+      i += 1
+    }
+    dwb._space = index
+    dwb
+  }
+
   def sum_dwbSparse(termBeta_denoms: BDV[Double],
     docTopics: BSV[Count]): Double = {
     val used = docTopics.used
@@ -508,8 +520,8 @@ class ZenLDA extends LDAWordByWord {
     // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
     // so, use below simple cache to avoid calculating table each time
     val global: DiscreteSampler[Double] = accelMethod match {
-      case "ftree" => new FTree[Double](numTopics, isSparse=false)
-      case "alias" | "hybrid" => new AliasTable(numTopics)
+      case "ftree" => new FTree[Double](isSparse=false)
+      case "alias" | "hybrid" => new AliasTable
     }
     val gens = new Array[XORShiftRandom](numThreads)
     val termDists = new Array[DiscreteSampler[Double]](numThreads)
@@ -524,10 +536,12 @@ class ZenLDA extends LDAWordByWord {
         gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
         gens(thid) = gen
         termDists(thid) = accelMethod match {
-          case "alias" => new AliasTable[Double](numTopics)
-          case "ftree" | "hybrid" => new FTree(numTopics, isSparse=true)
+          case "alias" => new AliasTable[Double]
+          case "ftree" | "hybrid" => new FTree(isSparse=true)
         }
-        cdfDists(thid) = new CumulativeDist[Double](numTopics)
+        cdfDists(thid) = new CumulativeDist[Double]
+        termDists(thid).reset(numTopics)
+        cdfDists(thid).reset(numTopics)
       }
       val termDist = termDists(thid)
       val si = lcSrcIds(offset)
@@ -543,13 +557,20 @@ class ZenLDA extends LDAWordByWord {
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
         val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
-        resetDist_dwbSparse(cdfDist, termBeta_denoms, docTopics)
         val topics = data(pos)
-        var i = 0
-        while (i < topics.length) {
-          val topic = topics(i)
-          topics(i) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
-          i += 1
+        val occur = topics.length
+        if (occur == 1) {
+          val topic = topics(0)
+          resetDist_dwbSparse_withAdjust(cdfDist, denoms, termBeta_denoms, docTopics, topic)
+          topics(0) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
+        } else {
+          resetDist_dwbSparse(cdfDist, termBeta_denoms, docTopics)
+          var i = 0
+          while (i < occur) {
+            val topic = topics(i)
+            topics(i) = tokenResampling(gen, global, termDist, cdfDist, denseTermTopics, docTopics, topic, beta)
+            i += 1
+          }
         }
         pos += 1
       }
@@ -573,7 +594,36 @@ class ZenLDA extends LDAWordByWord {
     if (genSum < dwbSum) {
       dwb.sampleFrom(genSum, gen)
     } else if (genSum < sum23) wa match {
-      case wt: AliasTable[Double] => resampleTable(gen, wt, topic, termTopics(topic))
+      case wt: AliasTable[Double] =>
+        val rr = 1.0 / termTopics(topic)
+        wt.resampleFrom(genSum - dwbSum, gen, topic, rr)
+      case wf: FTree[Double] => wf.sampleFrom(genSum - dwbSum, gen)
+    } else {
+      ab.sampleFrom(genSum - sum23, gen)
+    }
+  }
+
+  def tokenResampling(gen: Random,
+    ab: DiscreteSampler[Double],
+    wa: DiscreteSampler[Double],
+    dwb: CumulativeDist[Double],
+    termTopics: BDV[Count],
+    docTopics: BSV[Count],
+    topic: Int,
+    beta: Double): Int = {
+    val dwbSum = dwb.norm
+    val sum23 = dwbSum + wa.norm
+    val distSum = sum23 + ab.norm
+    val genSum = gen.nextDouble() * distSum
+    if (genSum < dwbSum) {
+      val nkd = docTopics(topic)
+      val nkw_beta = termTopics(topic) + beta
+      val rr = 1.0 / nkd + 1.0 / nkw_beta - 1.0 / nkd / nkw_beta
+      dwb.resampleFrom(genSum, gen, topic, rr)
+    } else if (genSum < sum23) wa match {
+      case wt: AliasTable[Double] =>
+        val rr = 1.0 / termTopics(topic)
+        wt.resampleFrom(genSum - dwbSum, gen, topic, rr)
       case wf: FTree[Double] => wf.sampleFrom(genSum - dwbSum, gen)
     } else {
       ab.sampleFrom(genSum - sum23, gen)
@@ -605,8 +655,8 @@ class LightLDA extends LDAWordByWord {
     val vertSize = vattrs.length
     val thq = new ConcurrentLinkedQueue(0 until numThreads)
 
-    val alphaDist = new AliasTable[Double](numTopics)
-    val betaDist = new AliasTable[Double](numTopics)
+    val alphaDist = new AliasTable[Double]
+    val betaDist = new AliasTable[Double]
     val docCache = new Array[SoftReference[AliasTable[Count]]](vertSize)
     val gens = new Array[XORShiftRandom](numThreads)
     val termDists = new Array[AliasTable[Double]](numThreads)
@@ -623,7 +673,8 @@ class LightLDA extends LDAWordByWord {
       if (gen == null) {
         gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
         gens(thid) = gen
-        termDists(thid) = new AliasTable[Double](numTopics)
+        termDists(thid) = new AliasTable[Double]
+        termDists(thid).reset(numTopics)
       }
       val termDist = termDists(thid)
       val si = lcSrcIds(offset)
@@ -658,7 +709,8 @@ class LightLDA extends LDAWordByWord {
               if (gen.nextDouble() * dPropSum < aSum) {
                 proposalTopic = alphaDist.sampleRandom(gen)
               } else {
-                proposalTopic = resampleTable(gen, docDist, topic, docTopics(topic))
+                val rr = 1.0 / docTopics(topic)
+                proposalTopic = docDist.resampleRandom(gen, topic, rr)
               }
               dPFun
             } else {
@@ -792,7 +844,9 @@ class LightLDA extends LDAWordByWord {
       probs(i) = beta / (topicCounters(i) + betaSum)
       i += 1
     }
-    b.resetDist(probs, null, numTopics)
+    b.synchronized {
+      b.resetDist(probs, null, numTopics)
+    }
   }
 
   /**
@@ -843,7 +897,9 @@ class LightLDA extends LDAWordByWord {
       probs(i) = alphaRatio * (topicCounters(i) + alphaAS)
       i += 1
     }
-    a.resetDist(probs, null, numTopics)
+    a.synchronized {
+      a.resetDist(probs, null, numTopics)
+    }
   }
 
   def dSparseCached(updatePred: SoftReference[AliasTable[Count]] => Boolean,
@@ -1109,7 +1165,7 @@ class SparseLDA extends LDADocByDoc {
     val mainDists = new Array[FlatDist[Double]](numThreads)
     val denoms = calc_denoms(topicCounters, betaSum)
     val alphak_denoms = calc_alphak_denoms(denoms, alphaAS, betaSum, alphaRatio)
-    val global = new FlatDist[Double](numTopics, isSparse=false)
+    val global = new FlatDist[Double](isSparse=false)
     resetDist_abDense(global, alphak_denoms, beta)
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
@@ -1119,8 +1175,10 @@ class SparseLDA extends LDADocByDoc {
       if (gen == null) {
         gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
         gens(thid) = gen
-        docDists(thid) = new FlatDist[Double](numTopics, isSparse=true)
-        mainDists(thid) = new FlatDist[Double](numTopics, isSparse=true)
+        docDists(thid) = new FlatDist[Double](isSparse=true)
+        mainDists(thid) = new FlatDist[Double](isSparse=true)
+        docDists(thid).reset(numTopics)
+        mainDists(thid).reset(numTopics)
       }
       val docDist = docDists(thid)
       val si = lcSrcIds(offset)

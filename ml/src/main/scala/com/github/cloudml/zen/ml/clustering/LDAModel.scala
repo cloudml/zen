@@ -22,13 +22,13 @@ import java.lang.ref.SoftReference
 import java.util.Random
 
 import LDADefines._
+import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util._
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum}
 import com.google.common.base.Charsets
 import com.google.common.io.Files
-import org.apache.hadoop.io.{NullWritable, Text}
-import org.apache.hadoop.mapred.TextOutputFormat
+import org.apache.hadoop.fs.{FileUtil, Path}
 import org.apache.spark.Partitioner._
 import org.apache.spark.graphx2._
 import org.apache.spark.mllib.util.{Loader, Saveable}
@@ -61,7 +61,7 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
   @transient lazy val termDistCache = new AppendOnlyMap[Int,
     SoftReference[AliasTable[Double]]](numTerms / 2)
   @transient lazy val global = {
-    val table = new AliasTable[Double](numTopics)
+    val table = new AliasTable[Double]
     algo.resetDist_abDense(table, alphak_denoms, beta)
   }
 
@@ -86,7 +86,8 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
     val tokens = vector2Array(doc)
     val topics = new Array[Int](tokens.length)
     var docTopics = uniformDistSampler(gen, tokens, topics, numTopics)
-    val docCdf = new CumulativeDist[Double](numTopics)
+    val docCdf = new CumulativeDist[Double]
+    docCdf.reset(numTopics)
     for (i <- 1 to burnIn + runIter) {
       docTopics = sampleDoc(gen, docTopics, tokens, topics, docCdf)
       if (i > burnIn) topicDist :+= docTopics
@@ -144,7 +145,7 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
     if (termTopics.activeSize == 0) return null
     var w = cacheMap(termId)
     if (w == null || w.get() == null) {
-      val table = new AliasTable[Double](termTopics.activeSize)
+      val table = new AliasTable[Double]
       algo.resetDist_waSparse(table, alphaK_denoms, termTopics)
       w = new SoftReference(table)
       cacheMap.update(termId, w)
@@ -176,7 +177,7 @@ class DistributedLDAModel(@transient val termTopicsRDD: RDD[(VertexId, TC)],
   val alphaAS: Double,
   var storageLevel: StorageLevel) extends Serializable with Saveable {
 
-  @transient val totalTopicCounter = termTopicsRDD.map(_._2)
+  @transient lazy val totalTopicCounter = termTopicsRDD.map(_._2)
     .aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
   @transient val algo = new ZenLDA
 
@@ -253,24 +254,35 @@ class DistributedLDAModel(@transient val termTopicsRDD: RDD[(VertexId, TC)],
     rdd.persist(storageLevel)
 
     val saveAsSolid = sc.getConf.getBoolean(cs_saveAsSolid, false)
+    val savPath = if (saveAsSolid) new Path(path + ".sav") else new Path(path)
+    val savDir = savPath.toUri.toString
+    val metaDir = LoaderUtils.metadataPath(savDir)
+    val dataDir = LoaderUtils.dataPath(savDir)
+    val fs = SparkUtils.getFileSystem(sc.getConf, savPath)
+
+    fs.delete(savPath, true)
+    sc.parallelize(Seq(metadata), 1).saveAsTextFile(metaDir)
+    // save model with the topic or word-term descending order
+    rdd.map { case (id, vector) =>
+      val list = vector.activeIterator.toList.sortWith(_._2 > _._2)
+        .map(t => s"${t._1}:${t._2}").mkString("\t")
+      s"$id\t$list"
+    }.saveAsTextFile(dataDir)
     if (saveAsSolid) {
-      val metadata_line = metadata.replaceAll("\n", "")
-      val rdd_txt = rdd.map {
-        case (id, vector) =>
-          val list = vector.activeIterator.toList.sortWith(_._2 > _._2)
-            .map(t => s"${t._1}:${t._2}").mkString("\t")
-          id.toString + "\t" + list
+      val cpmgPath = new Path(path + ".cpmg")
+      fs.delete(cpmgPath, true)
+      var suc = fs.rename(new Path(metaDir + "/part-00000"), new Path(dataDir + "/_meta"))
+      if (suc) {
+        suc = FileUtil.copyMerge(fs, new Path(dataDir), fs, cpmgPath, false, sc.hadoopConfiguration, null)
       }
-      LoaderUtils.RDD2HDFSFile[String](sc, rdd_txt, path, metadata_line, t => t)
-    } else {
-      sc.parallelize(Seq(metadata), 1).saveAsTextFile(LoaderUtils.metadataPath(path))
-      // save model with the topic or word-term descending order
-      rdd.map {
-        case (id, vector) =>
-          val list = vector.activeIterator.toList.sortWith(_._2 > _._2)
-            .map(t => s"${t._1}:${t._2}").mkString("\t")
-          (NullWritable.get(), new Text(id + "\t" + list))
-      }.saveAsHadoopFile[TextOutputFormat[NullWritable, Text]](LoaderUtils.dataPath(path))
+      if (suc) {
+        suc = fs.rename(cpmgPath, new Path(path))
+      }
+      fs.delete(savPath, true)
+      fs.delete(cpmgPath, true)
+      if (!suc) {
+        throw new IOException("Save model error!")
+      }
     }
   }
 
@@ -339,16 +351,17 @@ object LDAModel extends Loader[DistributedLDAModel] {
           vector.activeIterator.map {
             case (term, cnt) => (term.toLong, (topic, cnt))
           }
-      }.aggregateByKey[BV[Count]](BSV.zeros[Count](numTopics), partitioner)((agg, t) => {
+      }.aggregateByKey(BSV.zeros[Count](numTopics), partitioner)((agg, t) => {
         agg(t._1) += t._2
         agg
       }, _ :+= _)
     } else {
-      rdd.asInstanceOf[RDD[(Long, BV[Count])]]
+      rdd
     }
     val storageLevel = StorageLevel.MEMORY_AND_DISK
     termCnts.persist(storageLevel)
-    new DistributedLDAModel(termCnts, numTopics, numTerms, numTokens, alpha, beta, alphaAS, storageLevel)
+    new DistributedLDAModel(termCnts.asInstanceOf[RDD[(VertexId, TC)]], numTopics, numTerms, numTokens,
+      alpha, beta, alphaAS, storageLevel)
   }
 
   def loadLocalLDAModel(filePath: String): LocalLDAModel = {

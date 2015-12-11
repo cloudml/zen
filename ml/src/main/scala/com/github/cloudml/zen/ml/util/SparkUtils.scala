@@ -108,4 +108,11 @@ private[zen] object SparkUtils {
     }
     path.getFileSystem(hadoopConf)
   }
+
+  def deleteChkptDirs(conf: SparkConf, dirs: Array[String]): Unit = {
+    val fs = getFileSystem(conf, new Path(dirs(0)))
+    dirs.foreach(dir => {
+      fs.delete(new Path(dir), true)
+    })
+  }
 }
