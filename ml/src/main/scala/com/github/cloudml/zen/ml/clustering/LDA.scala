@@ -386,6 +386,7 @@ object LDA {
     }
     val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdges(docs, storageLevel)
     initCorpus.persist(storageLevel)
+    initCorpus.edges.setName("rawEdges").count()
     val partCorpus = conf.get(cs_partStrategy, "dbh") match {
       case "byterm" =>
         println("partition corpus by terms.")
@@ -432,7 +433,7 @@ object LDA {
       val gen = new XORShiftRandom(pid + 117)
       var pidMark = pid.toLong << 48
       iter.flatMap(line => {
-        val tokens = line.split(raw"\t|\s+")
+        val tokens = line.split(raw"\t|\s+").view
         val docId = if (ignDid) {
           pidMark += 1
           pidMark
