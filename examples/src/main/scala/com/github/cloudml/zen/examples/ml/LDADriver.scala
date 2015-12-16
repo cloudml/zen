@@ -73,6 +73,7 @@ object LDADriver {
     conf.set(cs_chkptInterval, options.getOrElse("chkptinterval", "10"))
     conf.set(cs_calcPerplexity, options.getOrElse("calcperplexity", "false"))
     conf.set(cs_saveInterval, options.getOrElse("saveinterval", "0"))
+    conf.set(cs_saveTransposed, options.getOrElse("savetransposed", "true"))
     conf.set(cs_saveAsSolid, options.getOrElse("saveassolid", "false"))
     conf.set(cs_ignoreDocId, options.getOrElse("ignoredocid", "false"))
 
@@ -128,7 +129,7 @@ object LDADriver {
     val termModel = LDA.train(docs, totalIter, numTopics, alpha, beta, alphaAS, storageLevel)
     val trainingEndedTime = System.currentTimeMillis()
     println("save the model in term-topic view")
-    termModel.save(isTransposed=true)
+    termModel.save()
     (trainingEndedTime - trainingStartedTime) / 1e3
   }
 
@@ -158,6 +159,7 @@ object LDADriver {
       "           -chkptInterval=<Int(*10)> (0 or negative disables checkpoint)\n" +
       "           -calcPerplexity=<true|*false>\n" +
       "           -saveInterval=<Int(*0)> (0 or negative disables save at intervals)\n" +
+      "           -saveTransposed=<*true|false>\n" +
       "           -saveAsSolid=<true|*false>\n" +
       "           -ignoreDocId=<true|*false>\n" +
       "           -useKryo=<true|*false>"

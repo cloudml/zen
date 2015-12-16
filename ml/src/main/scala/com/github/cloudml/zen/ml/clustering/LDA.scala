@@ -153,7 +153,7 @@ class LDA(@transient var corpus: Graph[TC, TA],
         val savPath = new Path(scConf.get(cs_outputpath) + s"-iter$iter")
         val fs = SparkUtils.getFileSystem(scConf, savPath)
         fs.delete(savPath, true)
-        model.save(scContext, savPath.toString, isTransposed=true)
+        model.save(scContext, savPath.toString)
         println(s"Model saved after Iteration $iter")
       }
       val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
