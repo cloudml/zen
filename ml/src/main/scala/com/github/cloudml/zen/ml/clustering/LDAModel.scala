@@ -265,7 +265,7 @@ class DistributedLDAModel(@transient val termTopicsRDD: RDD[(VertexId, TC)],
     sc.parallelize(Seq(metadata), 1).saveAsTextFile(metaDir)
     // save model with the topic or word-term descending order
     rdd.map { case (id, vector) =>
-      val list = vector.activeIterator.toSeq.sortWith(_._2 > _._2)
+      val list = vector.activeIterator.filter(_._2 > 0).toSeq.sortBy(_._2).reverse
         .map(t => s"${t._1}:${t._2}").mkString("\t")
       s"$id\t$list"
     }.saveAsTextFile(dataDir)
