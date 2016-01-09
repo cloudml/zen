@@ -38,8 +38,8 @@ object LDADefines {
   type DocId = VertexId
   type WordId = VertexId
   type Count = Int
-  type TC = BV[Count]
-  type TA = Array[Int]
+  type TC = Product
+  type TA = Int
   type BOW = (Long, BSV[Count])
 
   val sv_formatVersionV2_0 = "2.0"

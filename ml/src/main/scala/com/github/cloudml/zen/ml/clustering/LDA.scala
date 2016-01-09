@@ -272,7 +272,7 @@ object LDA {
     storageLevel: StorageLevel): LDA = {
     val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdgeRDD(docs, storageLevel)
     initCorpus.persist(storageLevel)
-    val numTokens = initCorpus.edges.map(_.attr.length.toLong).reduce(_ + _)
+    val numTokens = initCorpus.edges.count()
     println(s"tokens in the corpus: $numTokens")
     val vertices = initCorpus.vertices
     val numTerms = vertices.map(_._1).filter(isTermId).count().toInt
@@ -449,13 +449,16 @@ object LDA {
         } else {
           tokens.head.toLong
         }
-        val edger = toEdge(gen, docId, numTopics, reverse)_
-        tokens.tail.map(field => {
+        tokens.tail.flatMap(field => {
           val pairs = field.split(":")
           val termId = pairs(0).toInt
           val termCnt = if (pairs.length > 1) pairs(1).toInt else 1
-          (termId, termCnt)
-        }).filter(_._2 > 0).map(edger)
+          if (termCnt > 0) {
+            Range(0, termCnt).map(_ => Edge(termId, genNewDocId(docId), gen.nextInt(numTopics)))
+          } else {
+            Iterator.empty
+          }
+        })
       })
     })
   }
@@ -474,8 +477,9 @@ object LDA {
         } else {
           oDocId
         }
-        val edger = toEdge(gen, docId, numTopics, reverse)_
-        tokens.activeIterator.filter(_._2 > 0).map(edger)
+        tokens.activeIterator.filter(_._2 > 0).flatMap(Function.tupled((termId, termCnt) =>
+          Range(0, termCnt).map(_ => Edge(termId, genNewDocId(docId), gen.nextInt(numTopics)))
+        ))
       }))
     })
   }

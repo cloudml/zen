@@ -39,6 +39,11 @@
       <groupId>org.scalanlp</groupId>
       <artifactId>breeze_${scala.binary.version}</artifactId>
     </dependency>
+    <dependency>
+      <groupId>me.lemire.integercompression</groupId>
+      <artifactId>JavaFastPFOR</artifactId>
+      <version>0.1.6</version>
+    </dependency>
     <!-- test -->
     <dependency>
       <groupId>junit</groupId>

@@ -21,6 +21,9 @@ import java.lang.ref.SoftReference
 import java.util.Random
 import java.util.concurrent.atomic.AtomicIntegerArray
 import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
+import me.lemire.integercompression.IntCompressor
+import me.lemire.integercompression.differential.IntegratedIntCompressor
+
 import scala.collection.JavaConversions._
 import scala.concurrent._
 import scala.concurrent.duration._
@@ -29,7 +32,7 @@ import LDADefines._
 import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum, convert}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum, convert, Vector => BV}
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.{EdgePartition, GraphImpl}
 
@@ -82,7 +85,8 @@ abstract class LDAAlgorithm extends Serializable {
     val isoRDD = vertices.partitionsRDD.mapPartitions(iter => iter, preservesPartitioning=true)
     val partRDD = isoRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
       (svpIter, cntsIter) => svpIter.map(svp => {
-        val results = svp.values
+        val totalSize = svp.capacity
+        val results = new Array[BV[Count]](totalSize)
         val index = svp.index
         val marks = new AtomicIntegerArray(results.length)
         implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
@@ -115,6 +119,32 @@ abstract class LDAAlgorithm extends Serializable {
           }))
         })
         Await.ready(Future.sequence(all), 1.hour)
+
+
+        val mask = svp.mask
+        val values = svp.values
+        val sizePerthrd = {
+          val npt = totalSize / numThreads
+          if (npt * numThreads == totalSize) npt else npt + 1
+        }
+        val all2 = Range(0, numThreads).map(thid => Future {
+          val nic = new IntCompressor
+          val iic = new IntegratedIntCompressor
+          val startPos = sizePerthrd * thid
+          val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
+          var pos = mask.nextSetBit(startPos)
+          while (pos < endPos && pos >= 0) results(pos) match {
+            case v: BDV[Count] =>
+              val cdata = nic.compress(v.data)
+              results(pos) = (cdata,)
+            case v: BSV[Count] =>
+              val cdata = nic.compress(v.data)
+              val cindex = iic.compress(v.index)
+              results(pos) = (cdata, cindex)
+            pos = mask.nextSetBit(pos + 1)
+          }
+        })
+
         es.shutdown()
         svp.withValues(results)
       })
@@ -245,24 +275,19 @@ abstract class LDAWordByWord extends LDAAlgorithm {
           }
         }
         val docTopics = docTuple._2
-        val topics = data(pos)
-        var i = 0
-        while (i < topics.length) {
-          val topic = topics(i)
-          if (!inferenceOnly) termTopics match {
-            case v: BDV[Count] => v(topic) += 1
-            case v: BSV[Count] =>
-              v(topic) += 1
-              if (v.activeSize >= dscp) {
-                termTuple = (l2g(si), toBDV(v))
-                results(si) = termTuple
-                termTopics = termTuple._2
-              }
-          }
-          docTopics.synchronized {
-            docTopics(topic) += 1
-          }
-          i += 1
+        val topic = data(pos)
+        if (!inferenceOnly) termTopics match {
+          case v: BDV[Count] => v(topic) += 1
+          case v: BSV[Count] =>
+            v(topic) += 1
+            if (v.activeSize >= dscp) {
+              termTuple = (l2g(si), toBDV(v))
+              results(si) = termTuple
+              termTopics = termTuple._2
+            }
+        }
+        docTopics.synchronized {
+          docTopics(topic) += 1
         }
         pos += 1
       }
@@ -321,17 +346,12 @@ abstract class LDAWordByWord extends LDAAlgorithm {
           marks.set(di, 1)
         }
         val doc_denom = doc_denoms(di)
-        val topics = data(pos)
+        val topic = data(pos)
         val dwbSparseSum = sum_dwbSparse(termBeta_denoms, docTopics)
         val prob = (sum12 + dwbSparseSum) * doc_denom
-        llhs_th += Math.log(prob) * topics.length
-        var i = 0
-        while (i < topics.length) {
-          val topic = topics(i)
-          wllhs_th += Math.log(termBeta_denoms(topic))
-          dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * doc_denom)
-          i += 1
-        }
+        llhs_th += Math.log(prob)
+        wllhs_th += Math.log(termBeta_denoms(topic))
+        dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * doc_denom)
         pos += 1
       }
       llhs += llhs_th
@@ -557,21 +577,9 @@ class ZenLDA extends LDAWordByWord {
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
         val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
-        val topics = data(pos)
-        val occur = topics.length
-        if (occur == 1) {
-          val topic = topics(0)
-          resetDist_dwbSparse_withAdjust(cdfDist, denoms, termBeta_denoms, docTopics, topic)
-          topics(0) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
-        } else {
-          resetDist_dwbSparse(cdfDist, termBeta_denoms, docTopics)
-          var i = 0
-          while (i < occur) {
-            val topic = topics(i)
-            topics(i) = tokenResampling(gen, global, termDist, cdfDist, denseTermTopics, docTopics, topic, beta)
-            i += 1
-          }
-        }
+        val topic = data(pos)
+        resetDist_dwbSparse_withAdjust(cdfDist, denoms, termBeta_denoms, docTopics, topic)
+        data(pos) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
         pos += 1
       }
       thq.add(thid)
