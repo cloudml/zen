@@ -21,6 +21,7 @@ import java.io.File
 import java.util.Random
 
 import LDADefines._
+import com.github.cloudml.zen.ml.clustering.algorithm.{ZenLDA, SparseLDA, LightLDA}
 import com.github.cloudml.zen.ml.util.SharedSparkContext
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}

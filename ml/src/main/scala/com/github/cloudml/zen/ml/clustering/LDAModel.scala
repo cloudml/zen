@@ -22,6 +22,7 @@ import java.lang.ref.SoftReference
 import java.util.Random
 
 import LDADefines._
+import com.github.cloudml.zen.ml.clustering.algorithm.ZenLDA
 import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util._
 

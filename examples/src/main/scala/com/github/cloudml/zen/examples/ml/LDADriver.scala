@@ -21,6 +21,7 @@ import scala.annotation.tailrec
 
 import com.github.cloudml.zen.ml.clustering.LDA
 import com.github.cloudml.zen.ml.clustering.LDADefines._
+import com.github.cloudml.zen.ml.clustering.algorithm.LDATrainer
 import com.github.cloudml.zen.ml.util.SparkHacker
 import com.github.cloudml.zen.ml.util.SparkUtils
 
@@ -35,7 +36,7 @@ object LDADriver {
 
   def main(args: Array[String]) {
     val options = parseArgs(args)
-    val appStartedTime = System.currentTimeMillis()
+    val appStartedTime = System.nanoTime()
 
     val numTopics = options("numtopics").toInt
     val alpha = options("alpha").toDouble
@@ -64,9 +65,11 @@ object LDADriver {
     conf.set(cs_outputpath, outputPath)
     conf.set(cs_storageLevel, slvlStr)
 
+    val algoStr = options.getOrElse("ldaalgorithm", "zenlda")
+    conf.set(cs_LDAAlgorithm, algoStr)
+
     conf.set(cs_sampleRate, options.getOrElse("samplerate", "1.0"))
     conf.set(cs_numThreads, options.getOrElse("numthreads", "1"))
-    conf.set(cs_LDAAlgorithm, options.getOrElse("ldaalgorithm", "zenlda"))
     conf.set(cs_accelMethod, options.getOrElse("accelmethod", "alias"))
     conf.set(cs_partStrategy, options.getOrElse("partstrategy", "dbh"))
     conf.set(cs_initStrategy, options.getOrElse("initstrategy", "random"))
@@ -98,21 +101,23 @@ object LDADriver {
     val sc = new SparkContext(conf)
     try {
       sc.setCheckpointDir(checkpointPath)
-      println("start LDA on user profile")
+      println("start LDA training")
       println(s"appId: ${sc.applicationId}")
       println(s"numTopics = $numTopics, totalIteration = $totalIter")
       println(s"alpha = $alpha, beta = $beta, alphaAS = $alphaAS")
       println(s"inputDataPath = $inputPath")
+      println(s"outputPath = $outputPath")
 
-      val docs = loadCorpus(sc, storageLevel)
-      val trainingTime = runTraining(docs, numTopics, totalIter, alpha, beta, alphaAS, storageLevel)
+      val algo = LDATrainer.initAlgorithm(algoStr)
+      val docs = loadCorpus(sc, algo, storageLevel)
+      val trainingTime = runTraining(docs, numTopics, totalIter, alpha, beta, alphaAS, algo, storageLevel)
       println(s"Training time consumed: $trainingTime seconds")
 
     } finally {
       sc.stop()
       fs.deleteOnExit(new Path(checkpointPath))
-      val appEndedTime = System.currentTimeMillis()
-      println(s"Total time consumed: ${(appEndedTime - appStartedTime) / 1e3} seconds")
+      val appEndedTime = System.nanoTime()
+      println(s"Total time consumed: ${(appEndedTime - appStartedTime) / 1e9} seconds")
       fs.close()
     }
   }
@@ -123,26 +128,28 @@ object LDADriver {
     alpha: Double,
     beta: Double,
     alphaAS: Double,
+    algo: LDATrainer,
     storageLevel: StorageLevel): Double = {
     SparkHacker.gcCleaner(15 * 60, 15 * 60, "LDA_gcCleaner")
-    val trainingStartedTime = System.currentTimeMillis()
-    val termModel = LDA.train(docs, totalIter, numTopics, alpha, beta, alphaAS, storageLevel)
-    val trainingEndedTime = System.currentTimeMillis()
+    val trainingStartedTime = System.nanoTime()
+    val termModel = LDA.train(docs, totalIter, numTopics, alpha, beta, alphaAS, algo, storageLevel)
+    val trainingEndedTime = System.nanoTime()
     println("save the model in term-topic view")
     termModel.save()
-    (trainingEndedTime - trainingStartedTime) / 1e3
+    (trainingEndedTime - trainingStartedTime) / 1e9
   }
 
   def loadCorpus(sc: SparkContext,
+    algo: LDATrainer,
     storageLevel: StorageLevel): EdgeRDD[TA] = {
     val conf = sc.getConf
     val inputPath = conf.get(cs_inputPath)
     val numTopics = conf.get(cs_numTopics).toInt
     val numPartitions = conf.get(cs_numPartitions).toInt
     val sr = conf.get(cs_sampleRate).toDouble
-    val reverse = conf.getOption(cs_LDAAlgorithm).exists(_.equals("sparselda"))
-    val rawDocs = sc.textFile(inputPath, numPartitions).sample(false, sr)
-    LDA.initializeCorpusEdges(rawDocs, "raw", numTopics, reverse, storageLevel)
+    val rawDocs = sc.textFile(inputPath, numPartitions)
+    val sampledDocs = if (sr < 1.0) rawDocs.sample(false, sr) else rawDocs
+    LDA.initializeCorpusEdges(sampledDocs, "raw", numTopics, algo, storageLevel)
   }
 
   def parseArgs(args: Array[String]): OptionMap = {

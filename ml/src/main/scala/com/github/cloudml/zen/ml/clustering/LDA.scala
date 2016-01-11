@@ -19,6 +19,8 @@ package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
 import java.util.concurrent.Executors
+import com.github.cloudml.zen.ml.clustering.algorithm.{ZenLDA, SparseLDA, LightLDA, LDATrainer}
+
 import scala.concurrent._
 import scala.concurrent.duration._
 
@@ -37,15 +39,15 @@ import org.apache.spark.storage.StorageLevel
 
 
 class LDA(@transient var corpus: Graph[TC, TA],
-  val numTopics: Int,
-  val numTerms: Int,
-  val numDocs: Long,
-  val numTokens: Long,
-  var alpha: Double,
-  var beta: Double,
-  var alphaAS: Double,
-  val algo: LDAAlgorithm,
-  var storageLevel: StorageLevel) extends Serializable {
+          val numTopics: Int,
+          val numTerms: Int,
+          val numDocs: Long,
+          val numTokens: Long,
+          var alpha: Double,
+          var beta: Double,
+          var alphaAS: Double,
+          val algo: LDATrainer,
+          var storageLevel: StorageLevel) extends Serializable {
 
   @transient var topicCounters: BDV[Count] = _
   @transient lazy val seed = new XORShiftRandom().nextInt()
@@ -268,7 +270,7 @@ object LDA {
     alpha: Double,
     beta: Double,
     alphaAS: Double,
-    algo: LDAAlgorithm,
+    algo: LDATrainer,
     storageLevel: StorageLevel): LDA = {
     val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdgeRDD(docs, storageLevel)
     initCorpus.persist(storageLevel)
@@ -289,7 +291,7 @@ object LDA {
   // initialize LDA for inference or incremental training
   def apply(computedModel: DistributedLDAModel,
     docs: EdgeRDD[TA],
-    algo: LDAAlgorithm): LDA = {
+    algo: LDATrainer): LDA = {
     val numTopics = computedModel.numTopics
     val numTerms = computedModel.numTerms
     val numTokens = computedModel.numTokens
@@ -319,6 +321,7 @@ object LDA {
    * @param alpha      recommend to be (5.0 /numTopics)
    * @param beta       recommend to be in range 0.001 - 0.1
    * @param alphaAS    recommend to be in range 0.01 - 1.0
+   * @param algo       LDA training algorithm used
    * @param storageLevel StorageLevel that the LDA Model RDD uses
    * @return DistributedLDAModel
    */
@@ -328,21 +331,8 @@ object LDA {
     alpha: Double,
     beta: Double,
     alphaAS: Double,
+    algo: LDATrainer,
     storageLevel: StorageLevel): DistributedLDAModel = {
-    val conf = docs.context.getConf
-    val algo: LDAAlgorithm = conf.get(cs_LDAAlgorithm, "zenlda") match {
-      case "zenlda" =>
-        println("using ZenLDA sampling algorithm.")
-        new ZenLDA
-      case "lightlda" =>
-        println("using LightLDA sampling algorithm.")
-        new LightLDA
-      case "sparselda" =>
-        println("using SparseLDA sampling algorithm")
-        new SparseLDA
-      case _ =>
-        throw new NoSuchMethodException("No this algorithm or not implemented.")
-    }
     val lda = LDA(docs, numTopics, alpha, beta, alphaAS, algo, storageLevel)
     lda.runGibbsSampling(totalIter)
     lda.toLDAModel()
@@ -351,21 +341,8 @@ object LDA {
   def incrementalTrain(docs: EdgeRDD[TA],
     computedModel: DistributedLDAModel,
     totalIter: Int,
+    algo: LDATrainer,
     storageLevel: StorageLevel): DistributedLDAModel = {
-    val conf = docs.context.getConf
-    val algo: LDAAlgorithm = conf.get(cs_LDAAlgorithm, "zenlda") match {
-      case "zenlda" =>
-        println("using ZenLDA sampling algorithm.")
-        new ZenLDA
-      case "lightlda" =>
-        println("using LightLDA sampling algorithm.")
-        new LightLDA
-      case "sparselda" =>
-        println("using SparseLDA sampling algorithm")
-        new SparseLDA
-      case _ =>
-        throw new NoSuchMethodException("No this algorithm or not implemented.")
-    }
     val lda = LDA(computedModel, docs, algo)
     var iter = 1
     while (iter <= 15) {
@@ -385,13 +362,14 @@ object LDA {
   def initializeCorpusEdges(orgDocs: RDD[_],
     docType: String,
     numTopics: Int,
-    reverse: Boolean,
+    algo: LDATrainer,
     storageLevel: StorageLevel): EdgeRDD[TA] = {
     val conf = orgDocs.context.getConf
     val ignDid = conf.getBoolean(cs_ignoreDocId, false)
+    val byDoc = algo.isByDoc
     val docs = docType match {
-      case "raw" => convertRawDocs(orgDocs.asInstanceOf[RDD[String]], numTopics, ignDid, reverse)
-      case "bow" => convertBowDocs(orgDocs.asInstanceOf[RDD[BOW]], numTopics, ignDid, reverse)
+      case "raw" => convertRawDocs(orgDocs.asInstanceOf[RDD[String]], numTopics, ignDid, byDoc)
+      case "bow" => convertBowDocs(orgDocs.asInstanceOf[RDD[BOW]], numTopics, ignDid, byDoc)
     }
     val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdges(docs, storageLevel)
     initCorpus.persist(storageLevel)
@@ -399,14 +377,14 @@ object LDA {
     val partCorpus = conf.get(cs_partStrategy, "dbh") match {
       case "byterm" =>
         println("partition corpus by terms.")
-        if (reverse) {
+        if (byDoc) {
           EdgeDstPartitioner.partitionByEDP[TC, TA](initCorpus, storageLevel)
         } else {
           initCorpus.partitionBy(PartitionStrategy.EdgePartition1D)
         }
       case "bydoc" =>
         println("partition corpus by docs.")
-        if (reverse) {
+        if (byDoc) {
           initCorpus.partitionBy(PartitionStrategy.EdgePartition1D)
         } else {
           EdgeDstPartitioner.partitionByEDP[TC, TA](initCorpus, storageLevel)
@@ -437,7 +415,7 @@ object LDA {
   def convertRawDocs(rawDocs: RDD[String],
     numTopics: Int,
     ignDid: Boolean,
-    reverse: Boolean): RDD[Edge[TA]] = {
+    byDoc: Boolean): RDD[Edge[TA]] = {
     rawDocs.mapPartitionsWithIndex((pid, iter) => {
       val gen = new XORShiftRandom(pid + 117)
       var pidMark = pid.toLong << 48
@@ -466,7 +444,7 @@ object LDA {
   def convertBowDocs(bowDocs: RDD[BOW],
     numTopics: Int,
     ignDid: Boolean,
-    reverse: Boolean): RDD[Edge[TA]] = {
+    byDoc: Boolean): RDD[Edge[TA]] = {
     bowDocs.mapPartitionsWithIndex((pid, iter) => {
       val gen = new XORShiftRandom(pid + 117)
       var pidMark = pid.toLong << 48
@@ -518,12 +496,10 @@ object LDA {
           val gen = new XORShiftRandom(pid + 223)
           iter.map(triplet => {
             val wc = triplet.srcAttr
-            val topics = triplet.attr
             if (wc == null) {
-              topics
+              triplet.attr
             } else {
-              val tSize = wc.length
-              topics.map(_ => wc(gen.nextInt(tSize)))
+              wc(gen.nextInt(wc.length))
             }
           })
         }, TripletFields.Src)

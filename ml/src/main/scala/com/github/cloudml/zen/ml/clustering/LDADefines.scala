@@ -41,6 +41,10 @@ object LDADefines {
   type TC = Product
   type TA = Int
   type BOW = (Long, BSV[Count])
+  type Nwk = BV[Count]
+  type Ndk = BSV[Count]
+  type Nvk = BV[Count]
+  type NvkPair = (VertexId, Nvk)
 
   val sv_formatVersionV2_0 = "2.0"
   val sv_classNameV2_0 = "com.github.cloudml.zen.ml.clustering.DistributedLDAModel"
@@ -89,12 +93,13 @@ object LDADefines {
 
   def registerKryoClasses(conf: SparkConf): Unit = {
     conf.registerKryoClasses(Array(
-      classOf[TC], classOf[TA],
+      classOf[(Object,)], classOf[(Object, Object)],
       classOf[BOW],
       classOf[(TC, Double, Int)],  // for perplexity
       classOf[AliasTable[Object]], classOf[FTree[Object]],  // for some partitioners
       classOf[BSV[Object]], classOf[BDV[Object]],
-      classOf[SparseArray[Object]]  // member of BSV
+      classOf[SparseArray[Object]],  // member of BSV
+      classOf[Array[Int]]
     ))
   }
 
@@ -111,10 +116,9 @@ object LDADefines {
     bdv
   }
 
-  def refreshEdgeAssociations[VD: ClassTag, ED: ClassTag](graph: Graph[VD, ED]): GraphImpl[VD, ED] = {
-    val gimpl = graph.asInstanceOf[GraphImpl[VD, ED]]
-    val vertices = gimpl.vertices
-    val edges = gimpl.edges.asInstanceOf[EdgeRDDImpl[ED, VDO] forSome { type VDO }]
+  def refreshEdgeAssociations[VD: ClassTag, ED: ClassTag](graph: GraphImpl[VD, ED]): GraphImpl[VD, ED] = {
+    val vertices = graph.vertices
+    val edges = graph.edges.asInstanceOf[EdgeRDDImpl[ED, VDO] forSome { type VDO }]
     val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
     val shippedVerts = vertices.partitionsRDD.mapPartitions(_.flatMap(svp => {
       val rt = svp.routingTable
