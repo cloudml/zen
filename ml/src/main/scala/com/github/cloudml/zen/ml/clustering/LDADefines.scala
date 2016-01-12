@@ -90,10 +90,9 @@ object LDADefines {
 
   def registerKryoClasses(conf: SparkConf): Unit = {
     conf.registerKryoClasses(Array(
-      classOf[Tuple1[Object]], classOf[(Object, Object)],
+      classOf[TC],
       classOf[BOW],
       classOf[NwkPair],
-      classOf[(TC, Double, Int)],  // for perplexity
       classOf[AliasTable[Object]], classOf[FTree[Object]],  // for some partitioners
       classOf[BSV[Object]], classOf[BDV[Object]],
       classOf[SparseArray[Object]],  // member of BSV

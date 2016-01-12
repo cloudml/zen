@@ -18,13 +18,12 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
-import java.util.concurrent.Executors
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
+import breeze.linalg.{DenseVector => BDV}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.clustering.algorithm.LDATrainer
 import com.github.cloudml.zen.ml.partitioner._
-import com.github.cloudml.zen.ml.util.{SparkUtils, XORShiftRandom}
+import com.github.cloudml.zen.ml.util.{CompressedVector, SparkUtils, XORShiftRandom}
 import me.lemire.integercompression.IntCompressor
 import me.lemire.integercompression.differential.IntegratedIntCompressor
 import org.apache.hadoop.fs.Path
@@ -35,8 +34,7 @@ import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 
-import scala.concurrent._
-import scala.concurrent.duration._
+import scala.language.existentials
 
 
 class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
@@ -92,62 +90,23 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
     verts = computedModel match {
       case Some(cm) =>
         val ccm = cm.mapPartitions(iter => {
-          val nic = new IntCompressor
-          val iic = new IntegratedIntCompressor
-          iter.map(Function.tupled((vid, counter) => counter match {
-            case v: BDV[Count] =>
-              val cdata = nic.compress(v.data)
-              Tuple1(cdata)
-            case v: BSV[Count] =>
-              val cdata = nic.compress(v.data)
-              val cindex = iic.compress(v.index)
-              (cdata, cindex)
-          }))
+          implicit val nic = new IntCompressor
+          implicit val iic = new IntegratedIntCompressor
+          iter.map(Function.tupled((vid, counter) =>
+            (vid, CompressedVector.fromVector(counter))
+          ))
         }, preservesPartitioning = true)
-        verts.leftJoin(ccm)((_, uc, cc) => cc.getOrElse(uc))
+        verts.leftJoin(ccm)((_, uc, cc) => cc.getOrElse(uc)).asInstanceOf[VertexRDDImpl[TC]]
       case None => verts
     }
-    corpus.vertices.persist(storageLevel).setName("vertices-0")
-    collectTopicCounters()
+    verts.persist(storageLevel).setName("vertices-0")
+    updateTopicCounters()
   }
 
-  def collectTopicCounters(): Unit = {
-    val numTopics = this.numTopics
-    val numThreads = scConf.getInt(cs_numThreads, 1)
-    val graph = corpus.asInstanceOf[GraphImpl[TC, TA]]
-    val aggRdd = graph.vertices.partitionsRDD.mapPartitions(_.map(svp => {
-      val totalSize = svp.capacity
-      val index = svp.index
-      val mask = svp.mask
-      val values = svp.values
-      val sizePerthrd = {
-        val npt = totalSize / numThreads
-        if (npt * numThreads == totalSize) npt else npt + 1
-      }
-      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-      val all = Range(0, numThreads).map(thid => Future {
-        val startPos = sizePerthrd * thid
-        val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
-        val agg = BDV.zeros[Count](numTopics)
-        var pos = mask.nextSetBit(startPos)
-        while (pos < endPos && pos >= 0) {
-          if (isTermId(index.getValue(pos))) values(pos) match {
-            case u: BDV[Count] => agg :+= u
-            case u: BSV[Count] => agg :+= u
-            case _ =>
-          }
-          pos = mask.nextSetBit(pos + 1)
-        }
-        agg
-      })
-      val aggs = Await.result(Future.sequence(all), 1.hour)
-      es.shutdown()
-      aggs.reduce(_ :+= _)
-    }))
-    val gtc = aggRdd.collect().par.reduce(_ :+= _)
-    val count = gtc.data.par.map(_.toLong).sum
+  def updateTopicCounters(): Unit = {
+    topicCounters = algo.collectTopicCounters(verts)
+    val count = topicCounters.data.par.map(_.toLong).sum
     assert(count == numTokens, s"numTokens=$numTokens, count=$count")
-    topicCounters = gtc
   }
 
   def runGibbsSampling(totalIter: Int): Unit = {
@@ -179,37 +138,36 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
     }
   }
 
-  def gibbsSampling(sampIter: Int, inferenceOnly: Boolean = false): Unit = {
+  def gibbsSampling(sampIter: Int): Unit = {
     val chkptIntv = scConf.getInt(cs_chkptInterval, 0)
     val needChkpt = chkptIntv > 0 && sampIter % chkptIntv == 1 && scContext.getCheckpointDir.isDefined
-    val prevCorpus = corpus
     val startedAt = System.nanoTime()
 
-    val sampledCorpus = algo.sampleGraph(corpus, topicCounters, seed, sampIter,
-      numTokens, numTopics, numTerms, alpha, alphaAS, beta)
-    val newEdges = sampledCorpus.edges
+    val newEdges = algo.sampleGraph(edges, verts, topicCounters, seed, sampIter,
+      numTokens, numTerms, alpha, alphaAS, beta)
     newEdges.persist(storageLevel).setName(s"edges-$sampIter")
     if (needChkpt) {
       newEdges.checkpoint()
       newEdges.partitionsRDD.count()
     }
 
-    corpus = algo.updateVertexCounters(sampledCorpus, numTopics, inferenceOnly)
-    val newVertices = corpus.vertices
-    newVertices.persist(storageLevel).setName(s"vertices-$sampIter")
+    val newVerts = algo.updateVertexCounters(newEdges, verts)
+    newVerts.persist(storageLevel).setName(s"vertices-$sampIter")
     if (needChkpt) {
-      newVertices.checkpoint()
+      newVerts.checkpoint()
     }
-    collectTopicCounters()
-    prevCorpus.edges.unpersist(blocking=false)
-    prevCorpus.vertices.unpersist(blocking=false)
+    updateTopicCounters()
+    edges.unpersist(blocking=false)
+    verts.unpersist(blocking=false)
+    edges = newEdges
+    verts = newVerts
 
     if (needChkpt) {
       if (edgeCpFile != null && vertCpFile != null) {
         SparkUtils.deleteChkptDirs(scConf, Array(edgeCpFile, vertCpFile))
       }
-      edgeCpFile = corpus.edges.getCheckpointFile.get
-      vertCpFile = corpus.vertices.getCheckpointFile.get
+      edgeCpFile = newEdges.getCheckpointFile.get
+      vertCpFile = newVerts.getCheckpointFile.get
     }
     val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
     println(s"Sampling & update paras $sampIter takes: $elapsedSeconds secs")
@@ -221,15 +179,14 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
    * @param runIter saved more these iters' averaged model
    */
   def runSum(filter: VertexId => Boolean,
-    runIter: Int = 0,
-    inferenceOnly: Boolean = false): RDD[(VertexId, TC)] = {
-    def vertices = corpus.vertices.filter(t => filter(t._1))
+    runIter: Int = 0): RDD[(VertexId, TC)] = {
+    def vertices = verts.filter(t => filter(t._1))
     var countersSum = vertices
     countersSum.persist(storageLevel)
     var iter = 1
     while (iter <= runIter) {
       println(s"Save TopicModel (Iteration $iter/$runIter)")
-      gibbsSampling(iter, inferenceOnly)
+      gibbsSampling(iter)
       countersSum = countersSum.innerZipJoin(vertices)((_, a, b) => a :+= b)
       countersSum.persist(storageLevel)
       iter += 1
@@ -237,46 +194,35 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
     countersSum
   }
 
-  def toLDAModel(runIter: Int = 0): DistributedLDAModel = {
-    val ttcsSum = runSum(isTermId, runIter)
-    val ttcs = if (runIter == 0) {
-      ttcsSum
-    } else {
-      val turn = (runIter + 1).toDouble
-      ttcsSum.mapValues(_.mapValues(v => {
-        val gen = new XORShiftRandom()
-        val aver = v / turn
-        val intPart = math.floor(aver)
-        if (gen.nextDouble() > aver - intPart) intPart else intPart + 1
-      }.toInt))
-    }
+  def toLDAModel: DistributedLDAModel = {
+    val ttcs = termVertices
     ttcs.persist(storageLevel)
     new DistributedLDAModel(ttcs, numTopics, numTerms, numTokens, alpha, beta, alphaAS, storageLevel)
   }
 
-  def mergeDuplicateTopic(threshold: Double = 0.95D): Map[Int, Int] = {
-    val rows = termVertices.map(t => t._2).map(v => {
-      val length = v.length
-      val index = v.activeKeysIterator.toArray
-      val data = v.activeValuesIterator.toArray.map(_.toDouble)
-      new SSV(length, index, data).asInstanceOf[SV]
-    })
-    val simMatrix = new RowMatrix(rows).columnSimilarities()
-    val minMap = simMatrix.entries.filter {
-      case MatrixEntry(row, column, sim) => sim > threshold && row != column
-    }.map {
-      case MatrixEntry(row, column, sim) => (column.toInt, row.toInt)
-    }.groupByKey().map {
-      case (topic, simTopics) => (topic, simTopics.min)
-    }.collect().toMap
-    if (minMap.nonEmpty) {
-      val mergingCorpus = corpus.mapEdges(_.attr.map(topic =>
-        minMap.getOrElse(topic, topic))
-      )
-      corpus = algo.updateVertexCounters(mergingCorpus, numTopics)
-    }
-    minMap
-  }
+//  def mergeDuplicateTopic(threshold: Double = 0.95D): Map[Int, Int] = {
+//    val rows = termVertices.map(t => t._2).map(v => {
+//      val length = v.length
+//      val index = v.activeKeysIterator.toArray
+//      val data = v.activeValuesIterator.toArray.map(_.toDouble)
+//      new SSV(length, index, data).asInstanceOf[SV]
+//    })
+//    val simMatrix = new RowMatrix(rows).columnSimilarities()
+//    val minMap = simMatrix.entries.filter {
+//      case MatrixEntry(row, column, sim) => sim > threshold && row != column
+//    }.map {
+//      case MatrixEntry(row, column, sim) => (column.toInt, row.toInt)
+//    }.groupByKey().map {
+//      case (topic, simTopics) => (topic, simTopics.min)
+//    }.collect().toMap
+//    if (minMap.nonEmpty) {
+//      val mergingCorpus = corpus.mapEdges(_.attr.map(topic =>
+//        minMap.getOrElse(topic, topic))
+//      )
+//      corpus = algo.updateVertexCounters(mergingCorpus, numTopics)
+//    }
+//    minMap
+//  }
 }
 
 object LDA {
@@ -350,7 +296,7 @@ object LDA {
     storageLevel: StorageLevel): DistributedLDAModel = {
     val lda = LDA(docs, numTopics, alpha, beta, alphaAS, algo, storageLevel)
     lda.runGibbsSampling(totalIter)
-    lda.toLDAModel()
+    lda.toLDAModel
   }
 
   def incrementalTrain(docs: EdgeRDD[TA],
@@ -361,11 +307,11 @@ object LDA {
     val lda = LDA(computedModel, docs, algo)
     var iter = 1
     while (iter <= 15) {
-      lda.gibbsSampling(iter, inferenceOnly=true)
+      lda.gibbsSampling(iter)
       iter += 1
     }
     lda.runGibbsSampling(totalIter)
-    lda.toLDAModel()
+    lda.toLDAModel
   }
 
   /**
@@ -475,20 +421,6 @@ object LDA {
         ))
       }))
     })
-  }
-
-  private def toEdge(gen: Random,
-    docId: Long,
-    numTopics: Int,
-    reverse: Boolean)
-    (termPair: (Int, Count)): Edge[TA] = {
-    val (termId, termCnt) = termPair
-    val topics = Array.fill(termCnt)(gen.nextInt(numTopics))
-    if (!reverse) {
-      Edge(termId, genNewDocId(docId), topics)
-    } else {
-      Edge(genNewDocId(docId), termId, topics)
-    }
   }
 
   def resampleCorpus(corpus: Graph[TC, TA],

@@ -197,9 +197,9 @@ class DistributedLDAModel(@transient val termTopicsRDD: RDD[NwkPair],
     val docs = LDA.initializeCorpusEdges(bowDocs, "bow", numTopics, reverse=false, storageLevel)
     val lda = LDA(this, docs, algo)
     for (i <- 1 to burnIn) {
-      lda.gibbsSampling(i, inferenceOnly=true)
+      lda.gibbsSampling(i)
     }
-    val topicDist = lda.runSum(isDocId, runIter, inferenceOnly=true)
+    val topicDist = lda.runSum(isDocId, runIter)
     topicDist.mapValues(v => {
       val dist = v.asInstanceOf[BSV[Count]]
       val pSum = sum(dist).toDouble

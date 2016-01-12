@@ -35,7 +35,8 @@ class LDAPerplexity(val pplx: Double, val wpplx: Double, val dpplx: Double) exte
 
 object LDAPerplexity {
   def apply(lda: LDA): LDAPerplexity = {
-    val corpus = lda.corpus
+    val edges = lda.edges
+    val verts = lda.verts
     val topicCounters = lda.topicCounters
     val numTokens = lda.numTokens
     val numTopics = lda.numTopics
@@ -43,7 +44,7 @@ object LDAPerplexity {
     val alpha = lda.alpha
     val alphaAS = lda.alphaAS
     val beta = lda.beta
-    lda.algo.calcPerplexity(corpus, topicCounters, numTokens, numTopics, numTerms,
+    lda.algo.calcPerplexity(edges, verts, topicCounters, numTokens, numTerms,
       alpha, alphaAS, beta)
   }
 }

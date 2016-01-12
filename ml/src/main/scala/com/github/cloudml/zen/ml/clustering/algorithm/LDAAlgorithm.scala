@@ -169,4 +169,36 @@ abstract class LDAAlgorithm(numTopics: Int,
     )
     edges.withPartitionsRDD(partRDD)
   }
+
+  def collectTopicCounters(verts: VertexRDDImpl[TC]): BDV[Count] = {
+    verts.partitionsRDD.mapPartitions(_.map(vp => {
+      val totalSize = vp.capacity
+      val index = vp.index
+      val mask = vp.mask
+      val values = vp.values
+      val sizePerthrd = {
+        val npt = totalSize / numThreads
+        if (npt * numThreads == totalSize) npt else npt + 1
+      }
+      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+      val all = Range(0, numThreads).map(thid => Future {
+        implicit val nic = new IntCompressor
+        implicit val iic = new IntegratedIntCompressor
+        val startPos = sizePerthrd * thid
+        val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
+        val agg = BDV.zeros[Count](numTopics)
+        var pos = mask.nextSetBit(startPos)
+        while (pos < endPos && pos >= 0) {
+          if (isTermId(index.getValue(pos))) {
+            agg :+= values(pos).toVector(numTopics)
+          }
+          pos = mask.nextSetBit(pos + 1)
+        }
+        agg
+      })
+      val aggs = Await.result(Future.sequence(all), 1.hour)
+      es.shutdown()
+      aggs.reduce(_ :+= _)
+    })).collect().par.reduce(_ :+= _)
+  }
 }
