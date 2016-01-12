@@ -17,40 +17,33 @@
 
 package com.github.cloudml.zen.ml.clustering.algorithm
 
-import java.lang.ref.SoftReference
 import java.util.Random
-import java.util.concurrent.atomic.AtomicIntegerArray
 import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
-import com.github.cloudml.zen.ml.clustering.LDAPerplexity
 import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
-import me.lemire.integercompression.IntCompressor
-import me.lemire.integercompression.differential.IntegratedIntCompressor
-import org.apache.spark.graphx2._
-import org.apache.spark.graphx2.impl.{EdgePartition, GraphImpl}
+import org.apache.spark.graphx2.impl.EdgePartition
 
 import scala.collection.JavaConversions._
 import scala.concurrent._
 import scala.concurrent.duration._
 
 
-class SparseLDA extends LDATrainerByDoc {
-  override def samplePartition(numThreads: Int,
-                               accelMethod: String,
-                               numPartitions: Int,
-                               sampIter: Int,
-                               seed: Int,
-                               topicCounters: BDV[Count],
-                               numTokens: Long,
-                               numTopics: Int,
-                               numTerms: Int,
-                               alpha: Double,
-                               alphaAS: Double,
-                               beta: Double)
-                              (pid: Int, ep: EdgePartition[TA, TC]): EdgePartition[TA, TC] = {
+class SparseLDA(numTopics: Int, numThreads: Int)
+  extends LDATrainerByDoc(numTopics: Int, numThreads: Int) {
+  override def samplePartition(accelMethod: String,
+    numPartitions: Int,
+    sampIter: Int,
+    seed: Int,
+    topicCounters: BDV[Count],
+    numTokens: Long,
+    numTerms: Int,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double)
+    (pid: Int, ep: EdgePartition[TA, Nvk]): EdgePartition[TA, Int] = {
     val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
     val betaSum = beta * numTerms
     val totalSize = ep.size
@@ -91,12 +84,8 @@ class SparseLDA extends LDATrainerByDoc {
         val di = lcDstIds(pos)
         val termTopics = vattrs(di)
         resetDist_wdaSparse(mainDist, docAlphaK_denoms, termTopics)
-        val topics = data(pos)
-        var i = 0
-        while (i < topics.length) {
-          topics(i) = tokenSampling(gen, global, docDist, mainDist)
-          i += 1
-        }
+        val topic = data(pos)
+        data(pos) = tokenSampling(gen, global, docDist, mainDist)
         pos += 1
       }
       thq.add(thid)
@@ -107,9 +96,9 @@ class SparseLDA extends LDATrainerByDoc {
   }
 
   def tokenSampling(gen: Random,
-                    ab: FlatDist[Double],
-                    db: FlatDist[Double],
-                    wda: FlatDist[Double]): Int = {
+    ab: FlatDist[Double],
+    db: FlatDist[Double],
+    wda: FlatDist[Double]): Int = {
     val wdaSum = wda.norm
     val sum23 = wdaSum + db.norm
     val distSum = sum23 + ab.norm

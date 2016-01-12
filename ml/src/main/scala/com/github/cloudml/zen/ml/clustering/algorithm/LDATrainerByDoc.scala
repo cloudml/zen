@@ -22,20 +22,17 @@ import java.util.concurrent.Executors
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, convert, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
-import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.EdgePartition
 
 import scala.concurrent._
 import scala.concurrent.duration._
 
 
-abstract class LDATrainerByDoc extends LDATrainer {
+abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
+  extends LDATrainer(numTopics: Int, numThreads: Int) {
   override def isByDoc: Boolean = true
 
-  override def countPartition(numThreads: Int,
-                              numTopics: Int,
-                              inferenceOnly: Boolean)
-                             (ep: EdgePartition[TA, TC]): Iterator[(VertexId, TC)] = {
+  override def countPartition(ep: EdgePartition[TA, Int]): Iterator[NvkPair] = {
     val totalSize = ep.size
     val lcSrcIds = ep.localSrcIds
     val lcDstIds = ep.localDstIds
@@ -52,36 +49,27 @@ abstract class LDATrainerByDoc extends LDATrainer {
       var pos = offset
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
-        val topics = data(pos)
-        var i = 0
-        while (i < topics.length) {
-          val topic = topics(i)
-          docTopics(topic) += 1
-          if (!inferenceOnly) {
-            val termTopics = results(di)._2
-            termTopics.synchronized {
-              termTopics(topic) += 1
-            }
-          }
-          i += 1
+        val topic = data(pos)
+        docTopics(topic) += 1
+        val termTopics = results(di)._2
+        termTopics.synchronized {
+          termTopics(topic) += 1
         }
         pos += 1
       }
     }))
     Await.ready(all, 1.hour)
     es.shutdown()
-    results.iterator.filter(_ != null)
+    results.iterator
   }
 
-  override def perplexPartition(numThreads: Int,
-                                topicCounters: BDV[Count],
-                                numTokens: Long,
-                                numTopics: Int,
-                                numTerms: Int,
-                                alpha: Double,
-                                alphaAS: Double,
-                                beta: Double)
-                               (ep: EdgePartition[TA, TC]): (Double, Double, Double) = {
+  override def perplexPartition(topicCounters: BDV[Count],
+    numTokens: Long,
+    numTerms: Int,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double)
+    (ep: EdgePartition[TA, Nvk]): (Double, Double, Double) = {
     val alphaSum = alpha * numTopics
     val betaSum = beta * numTerms
     val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
@@ -114,17 +102,12 @@ abstract class LDATrainerByDoc extends LDATrainer {
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
         val termTopics = vattrs(di)
-        val topics = data(pos)
+        val topic = data(pos)
         val wdaSparseSum = sum_wdaSparse(docAlphaK_denoms, termTopics)
         val prob = (sum12 + wdaSparseSum) * doc_denom
-        llhs_th += Math.log(prob) * topics.length
-        var i = 0
-        while (i < topics.length) {
-          val topic = topics(i)
-          wllhs_th += Math.log((termTopics(topic) + beta) * denoms(topic))
-          dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * doc_denom)
-          i += 1
-        }
+        llhs_th += Math.log(prob)
+        wllhs_th += Math.log((termTopics(topic) + beta) * denoms(topic))
+        dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * doc_denom)
         pos += 1
       }
       llhs += llhs_th
@@ -137,8 +120,8 @@ abstract class LDATrainerByDoc extends LDATrainer {
   }
 
   def resetDist_dbSparse(db: FlatDist[Double],
-                         nkd_denoms: BSV[Double],
-                         beta: Double): FlatDist[Double] = {
+    nkd_denoms: BSV[Double],
+    beta: Double): FlatDist[Double] = {
     val used = nkd_denoms.used
     val index = nkd_denoms.index
     val data = nkd_denoms.data
@@ -152,7 +135,7 @@ abstract class LDATrainerByDoc extends LDATrainer {
   }
 
   def sum_dbSparse(nkd_denoms: BSV[Double],
-                   beta: Double): Double = {
+    beta: Double): Double = {
     val used = nkd_denoms.used
     val data = nkd_denoms.data
     var sum = 0.0
@@ -165,8 +148,8 @@ abstract class LDATrainerByDoc extends LDATrainer {
   }
 
   def resetDist_wdaSparse(wda: FlatDist[Double],
-                          docAlphaK_Denoms: BDV[Double],
-                          termTopics: TC): FlatDist[Double] = termTopics match {
+    docAlphaK_Denoms: BDV[Double],
+    termTopics: Nwk): FlatDist[Double] = termTopics match {
     case v: BDV[Count] =>
       val k = v.length
       val probs = new Array[Double](k)
@@ -197,7 +180,7 @@ abstract class LDATrainerByDoc extends LDATrainer {
   }
 
   def sum_wdaSparse(docAlphaK_Denoms: BDV[Double],
-                    termTopics: TC): Double = termTopics match {
+    termTopics: Nwk): Double = termTopics match {
     case v: BDV[Count] =>
       val k = v.length
       var sum = 0.0
@@ -224,7 +207,7 @@ abstract class LDATrainerByDoc extends LDATrainer {
   }
 
   def calc_nkd_denoms(denoms: BDV[Double],
-                      docTopics: BSV[Count]): BSV[Double] = {
+    docTopics: Ndk): BSV[Double] = {
     val used = docTopics.used
     val index = docTopics.index
     val data = docTopics.data
@@ -238,7 +221,7 @@ abstract class LDATrainerByDoc extends LDATrainer {
   }
 
   def calc_docAlphaK_denoms(alphak_denoms: BDV[Double],
-                            nkd_denoms: BSV[Double]): BDV[Double] = {
+    nkd_denoms: BSV[Double]): BDV[Double] = {
     val bdv = alphak_denoms.copy
     val used = nkd_denoms.used
     val index = nkd_denoms.index

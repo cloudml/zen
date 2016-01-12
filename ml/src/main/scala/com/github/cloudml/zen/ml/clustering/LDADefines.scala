@@ -18,32 +18,29 @@
 package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
-import java.util.concurrent.Executors
-import scala.concurrent._
-import scala.concurrent.duration._
-import scala.language.existentials
-import scala.reflect.ClassTag
-
-import com.github.cloudml.zen.ml.sampler._
 
 import breeze.collection.mutable.SparseArray
-import breeze.linalg.{Vector => BV, SparseVector => BSV, DenseVector => BDV}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
 import breeze.storage.Zero
+import com.github.cloudml.zen.ml.sampler._
+import com.github.cloudml.zen.ml.util.CompressedVector
 import org.apache.spark.SparkConf
 import org.apache.spark.graphx2._
-import org.apache.spark.graphx2.impl._
+
+import scala.reflect.ClassTag
 
 
 object LDADefines {
   type DocId = VertexId
   type WordId = VertexId
   type Count = Int
-  type TC = Product
+  type TC = CompressedVector
   type TA = Int
   type BOW = (Long, BSV[Count])
   type Nwk = BV[Count]
   type Ndk = BSV[Count]
   type Nvk = BV[Count]
+  type NwkPair = (VertexId, Nwk)
   type NvkPair = (VertexId, Nvk)
 
   val sv_formatVersionV2_0 = "2.0"
@@ -93,8 +90,9 @@ object LDADefines {
 
   def registerKryoClasses(conf: SparkConf): Unit = {
     conf.registerKryoClasses(Array(
-      classOf[(Object,)], classOf[(Object, Object)],
+      classOf[Tuple1[Object]], classOf[(Object, Object)],
       classOf[BOW],
+      classOf[NwkPair],
       classOf[(TC, Double, Int)],  // for perplexity
       classOf[AliasTable[Object]], classOf[FTree[Object]],  // for some partitioners
       classOf[BSV[Object]], classOf[BDV[Object]],
@@ -114,47 +112,5 @@ object LDADefines {
       i += 1
     }
     bdv
-  }
-
-  def refreshEdgeAssociations[VD: ClassTag, ED: ClassTag](graph: GraphImpl[VD, ED]): GraphImpl[VD, ED] = {
-    val vertices = graph.vertices
-    val edges = graph.edges.asInstanceOf[EdgeRDDImpl[ED, VDO] forSome { type VDO }]
-    val numThreads = edges.context.getConf.getInt(cs_numThreads, 1)
-    val shippedVerts = vertices.partitionsRDD.mapPartitions(_.flatMap(svp => {
-      val rt = svp.routingTable
-      val index = svp.index
-      val values = svp.values
-      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-      Range(0, rt.numEdgePartitions).grouped(numThreads).flatMap(batch => {
-        val all = Future.traverse(batch)(pid => Future {
-          val vids = rt.routingTable(pid)._1
-          val attrs = vids.map(vid => values(index.getPos(vid)))
-          (pid, new VertexAttributeBlock(vids, attrs))
-        })
-        Await.result(all, 1.hour)
-      }) ++ {
-        es.shutdown()
-        Iterator.empty
-      }
-    })).partitionBy(edges.partitioner.get)
-
-    // Below identical map is used to isolate the impact of locality of CheckpointRDD
-    val isoRDD = edges.partitionsRDD.mapPartitions(iter => iter, preservesPartitioning=true)
-    val partRDD = isoRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
-      (epIter, vabsIter) => epIter.map(Function.tupled((pid, ep) => {
-        val g2l = ep.global2local
-        val results = new Array[VD](ep.vertexAttrs.length)
-        implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-        val all = Future.traverse(vabsIter)(Function.tupled((_, vab) => Future {
-          vab.iterator.foreach(Function.tupled((vid, vdata) =>
-            results(g2l(vid)) = vdata
-          ))
-        }))
-        Await.ready(all, 1.hour)
-        es.shutdown()
-        (pid, ep.withVertexAttributes(results))
-      }))
-    )
-    GraphImpl.fromExistingRDDs(vertices, edges.withPartitionsRDD(partRDD))
   }
 }

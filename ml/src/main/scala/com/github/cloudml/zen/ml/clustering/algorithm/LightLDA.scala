@@ -19,38 +19,32 @@ package com.github.cloudml.zen.ml.clustering.algorithm
 
 import java.lang.ref.SoftReference
 import java.util.Random
-import java.util.concurrent.atomic.AtomicIntegerArray
 import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
-import com.github.cloudml.zen.ml.clustering.LDAPerplexity
 import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
-import me.lemire.integercompression.IntCompressor
-import me.lemire.integercompression.differential.IntegratedIntCompressor
-import org.apache.spark.graphx2._
-import org.apache.spark.graphx2.impl.{EdgePartition, GraphImpl}
+import org.apache.spark.graphx2.impl.EdgePartition
 
 import scala.collection.JavaConversions._
 import scala.concurrent._
 import scala.concurrent.duration._
 
 
-class LightLDA extends LDATrainerByWord {
-  override def samplePartition(numThreads: Int,
-                               accelMethod: String,
-                               numPartitions: Int,
-                               sampIter: Int,
-                               seed: Int,
-                               topicCounters: BDV[Count],
-                               numTokens: Long,
-                               numTopics: Int,
-                               numTerms: Int,
-                               alpha: Double,
-                               alphaAS: Double,
-                               beta: Double)
-                              (pid: Int, ep: EdgePartition[TA, TC]): EdgePartition[TA, TC] = {
+class LightLDA(numTopics: Int, numThreads: Int)
+  extends LDATrainerByWord(numTopics: Int, numThreads: Int) {
+  override def samplePartition(accelMethod: String,
+    numPartitions: Int,
+    sampIter: Int,
+    seed: Int,
+    topicCounters: BDV[Count],
+    numTokens: Long,
+    numTerms: Int,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double)
+    (pid: Int, ep: EdgePartition[TA, Nvk]): EdgePartition[TA, Int] = {
     val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
     val betaSum = beta * numTerms
     val totalSize = ep.size
@@ -89,7 +83,7 @@ class LightLDA extends LDATrainerByWord {
       var pos = offset
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
-        val docTopics = vattrs(di)
+        val docTopics = vattrs(di).asInstanceOf[Ndk]
         if (gen.nextDouble() < 1e-6) {
           resetDist_aDense(alphaDist, topicCounters, numTopics, alphaRatio, alphaAS)
           resetDist_bDense(betaDist, topicCounters, numTopics, beta, betaSum)
@@ -100,49 +94,44 @@ class LightLDA extends LDATrainerByWord {
         val docDist = dSparseCached(cache => cache == null || cache.get() == null || gen.nextDouble() < 1e-2,
           docCache, docTopics, di)
 
-        val topics = data(pos)
-        var i = 0
-        while (i < topics.length) {
-          var docProposal = gen.nextDouble() < 0.5
-          var j = 0
-          while (j < 8) {
-            docProposal = !docProposal
-            val topic = topics(i)
-            var proposalTopic = -1
-            val q = if (docProposal) {
-              val aSum = alphaDist.norm
-              val dPropSum = aSum + docDist.norm
-              if (gen.nextDouble() * dPropSum < aSum) {
-                proposalTopic = alphaDist.sampleRandom(gen)
-              } else {
-                val rr = 1.0 / docTopics(topic)
-                proposalTopic = docDist.resampleRandom(gen, topic, rr)
-              }
-              dPFun
+        val topic = data(pos)
+        var docProposal = gen.nextDouble() < 0.5
+        var j = 0
+        while (j < 8) {
+          docProposal = !docProposal
+          var proposalTopic = -1
+          val q = if (docProposal) {
+            val aSum = alphaDist.norm
+            val dPropSum = aSum + docDist.norm
+            if (gen.nextDouble() * dPropSum < aSum) {
+              proposalTopic = alphaDist.sampleRandom(gen)
             } else {
-              val wSum = termDist.norm
-              val wPropSum = wSum + betaDist.norm
-              val table = if (gen.nextDouble() * wPropSum < wSum) termDist else betaDist
-              proposalTopic = table.sampleRandom(gen)
-              wPFun
+              val rr = 1.0 / docTopics(topic)
+              proposalTopic = docDist.resampleRandom(gen, topic, rr)
             }
-
-            val newTopic = tokenSampling(gen, docTopics, termTopics, docProposal,
-              topic, proposalTopic, q, p)
-            if (newTopic != topic) {
-              topics(i) = newTopic
-              topicCounters(topic) -= 1
-              topicCounters(newTopic) += 1
-              termTopics(topic) -= 1
-              termTopics(newTopic) += 1
-              docTopics.synchronized {
-                docTopics(topic) -= 1
-                docTopics(newTopic) += 1
-              }
-            }
-            j += 1
+            dPFun
+          } else {
+            val wSum = termDist.norm
+            val wPropSum = wSum + betaDist.norm
+            val table = if (gen.nextDouble() * wPropSum < wSum) termDist else betaDist
+            proposalTopic = table.sampleRandom(gen)
+            wPFun
           }
-          i += 1
+
+          val newTopic = tokenSampling(gen, docTopics, termTopics, docProposal,
+            topic, proposalTopic, q, p)
+          if (newTopic != topic) {
+            data(pos) = newTopic
+            topicCounters(topic) -= 1
+            topicCounters(newTopic) += 1
+            termTopics(topic) -= 1
+            termTopics(newTopic) += 1
+            docTopics.synchronized {
+              docTopics(topic) -= 1
+              docTopics(newTopic) += 1
+            }
+          }
+          j += 1
         }
         pos += 1
       }
@@ -173,13 +162,13 @@ class LightLDA extends LDATrainerByWord {
     * {n}_{k} is the number of tokens in corpus that belong to topic k
     */
   def tokenSampling(gen: Random,
-                    docTopicCounter: TC,
-                    termTopicCounter: TC,
-                    docProposal: Boolean,
-                    currentTopic: Int,
-                    proposalTopic: Int,
-                    q: (TC, Int, Boolean) => Double,
-                    p: (TC, TC, Int, Boolean) => Double): Int = {
+    docTopicCounter: Ndk,
+    termTopicCounter: Nwk,
+    docProposal: Boolean,
+    currentTopic: Int,
+    proposalTopic: Int,
+    q: (Nvk, Int, Boolean) => Double,
+    p: (Ndk, Nwk, Int, Boolean) => Double): Int = {
     if (proposalTopic == currentTopic) return proposalTopic
     val cp = p(docTopicCounter, termTopicCounter, currentTopic, true)
     val np = p(docTopicCounter, termTopicCounter, proposalTopic, false)
@@ -193,14 +182,14 @@ class LightLDA extends LDATrainerByWord {
 
   // scalastyle:off
   def tokenTopicProb(totalTopicCounter: BDV[Count],
-                     beta: Double,
-                     alpha: Double,
-                     alphaAS: Double,
-                     numTokens: Long,
-                     numTerms: Int)(docTopicCounter: TC,
-                                    termTopicCounter: TC,
-                                    topic: Int,
-                                    isAdjustment: Boolean): Double = {
+    beta: Double,
+    alpha: Double,
+    alphaAS: Double,
+    numTokens: Long,
+    numTerms: Int)(docTopicCounter: Ndk,
+    termTopicCounter: Nwk,
+    topic: Int,
+    isAdjustment: Boolean): Double = {
     val numTopics = docTopicCounter.length
     val adjustment = if (isAdjustment) -1 else 0
     val ratio = (totalTopicCounter(topic) + adjustment + alphaAS) /
@@ -220,15 +209,15 @@ class LightLDA extends LDATrainerByWord {
   // scalastyle:on
 
   def wordProb(totalTopicCounter: BDV[Count],
-               numTerms: Int,
-               beta: Double)(termTopicCounter: TC, topic: Int, isAdjustment: Boolean): Double = {
+    numTerms: Int,
+    beta: Double)(termTopicCounter: Nvk, topic: Int, isAdjustment: Boolean): Double = {
     (termTopicCounter(topic) + beta) / (totalTopicCounter(topic) + beta * numTerms)
   }
 
   def docProb(totalTopicCounter: BDV[Count],
-              alpha: Double,
-              alphaAS: Double,
-              numTokens: Long)(docTopicCounter: TC, topic: Int, isAdjustment: Boolean): Double = {
+    alpha: Double,
+    alphaAS: Double,
+    numTokens: Long)(docTopicCounter: Nvk, topic: Int, isAdjustment: Boolean): Double = {
     val adjustment = if (isAdjustment) -1 else 0
     val numTopics = totalTopicCounter.length
     val ratio = (totalTopicCounter(topic) + alphaAS) / (numTokens - 1 + alphaAS * numTopics)
@@ -240,10 +229,10 @@ class LightLDA extends LDATrainerByWord {
     * \frac{{\beta}_{w}}{{n}_{k}+\bar{\beta}}
     */
   def resetDist_bDense(b: AliasTable[Double],
-                       topicCounters: BDV[Count],
-                       numTopics: Int,
-                       beta: Double,
-                       betaSum: Double): Unit = {
+    topicCounters: BDV[Count],
+    numTopics: Int,
+    beta: Double,
+    betaSum: Double): Unit = {
     val probs = new Array[Double](numTopics)
     var i = 0
     while (i < numTopics) {
@@ -259,9 +248,9 @@ class LightLDA extends LDATrainerByWord {
     * \frac{{n}_{kw}}{{n}_{k}+\bar{\beta}}
     */
   def resetDist_wSparse(ws: AliasTable[Double],
-                        topicCounters: BDV[Count],
-                        termTopics: TC,
-                        betaSum: Double): Unit = termTopics match {
+    topicCounters: BDV[Count],
+    termTopics: Nwk,
+    betaSum: Double): Unit = termTopics match {
     case v: BDV[Count] =>
       val numTopics = v.length
       val data = v.data
@@ -293,10 +282,10 @@ class LightLDA extends LDATrainerByWord {
   }
 
   def resetDist_aDense(a: AliasTable[Double],
-                       topicCounters: BDV[Count],
-                       numTopics: Int,
-                       alphaRatio: Double,
-                       alphaAS: Double): Unit = {
+    topicCounters: BDV[Count],
+    numTopics: Int,
+    alphaRatio: Double,
+    alphaAS: Double): Unit = {
     val probs = new Array[Double](numTopics)
     var i = 0
     while (i < numTopics) {
@@ -309,9 +298,9 @@ class LightLDA extends LDATrainerByWord {
   }
 
   def dSparseCached(updatePred: SoftReference[AliasTable[Count]] => Boolean,
-                    cacheArray: Array[SoftReference[AliasTable[Count]]],
-                    docTopics: TC,
-                    lcDocId: Int): AliasTable[Count] = {
+    cacheArray: Array[SoftReference[AliasTable[Count]]],
+    docTopics: Ndk,
+    lcDocId: Int): AliasTable[Count] = {
     val docCache = cacheArray(lcDocId)
     if (!updatePred(docCache)) {
       docCache.get

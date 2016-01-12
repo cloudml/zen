@@ -20,7 +20,7 @@ package com.github.cloudml.zen.ml.clustering.algorithm
 import java.util.Random
 import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
@@ -31,20 +31,19 @@ import scala.concurrent._
 import scala.concurrent.duration._
 
 
-class ZenLDA extends LDATrainerByWord {
-  override def samplePartition(numThreads: Int,
-                               accelMethod: String,
-                               numPartitions: Int,
-                               sampIter: Int,
-                               seed: Int,
-                               topicCounters: BDV[Count],
-                               numTokens: Long,
-                               numTopics: Int,
-                               numTerms: Int,
-                               alpha: Double,
-                               alphaAS: Double,
-                               beta: Double)
-                              (pid: Int, ep: EdgePartition[TA, TC]): EdgePartition[TA, TC] = {
+class ZenLDA(numTopics: Int, numThreads: Int)
+  extends LDATrainerByWord(numTopics, numThreads) {
+  override def samplePartition(accelMethod: String,
+    numPartitions: Int,
+    sampIter: Int,
+    seed: Int,
+    topicCounters: BDV[Count],
+    numTokens: Long,
+    numTerms: Int,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double)
+    (pid: Int, ep: EdgePartition[TA, Nvk]): EdgePartition[TA, Int] = {
     val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
     val betaSum = beta * numTerms
     val denoms = calc_denoms(topicCounters, betaSum)
@@ -55,6 +54,7 @@ class ZenLDA extends LDATrainerByWord {
     val lcDstIds = ep.localDstIds
     val vattrs = ep.vertexAttrs
     val data = ep.data
+    val activeLens = new Array[Int](vattrs.length)
     val thq = new ConcurrentLinkedQueue(0 until numThreads)
     // table/ftree is a per term data structure
     // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
@@ -86,6 +86,7 @@ class ZenLDA extends LDATrainerByWord {
       val termDist = termDists(thid)
       val si = lcSrcIds(offset)
       val termTopics = vattrs(si)
+      activeLens(si) = termTopics.activeSize
       resetDist_waSparse(termDist, alphak_denoms, termTopics)
       val denseTermTopics = termTopics match {
         case v: BDV[Count] => v
@@ -106,15 +107,15 @@ class ZenLDA extends LDATrainerByWord {
     }))
     Await.ready(all, 2.hour)
     es.shutdown()
-    ep.withoutVertexAttributes()
+    ep.withVertexAttributes(activeLens)
   }
 
   def tokenSampling(gen: Random,
-                    ab: DiscreteSampler[Double],
-                    wa: DiscreteSampler[Double],
-                    dwb: CumulativeDist[Double],
-                    termTopics: BDV[Count],
-                    topic: Int): Int = {
+    ab: DiscreteSampler[Double],
+    wa: DiscreteSampler[Double],
+    dwb: CumulativeDist[Double],
+    termTopics: BDV[Count],
+    topic: Int): Int = {
     val dwbSum = dwb.norm
     val sum23 = dwbSum + wa.norm
     val distSum = sum23 + ab.norm
@@ -132,13 +133,13 @@ class ZenLDA extends LDATrainerByWord {
   }
 
   def tokenResampling(gen: Random,
-                      ab: DiscreteSampler[Double],
-                      wa: DiscreteSampler[Double],
-                      dwb: CumulativeDist[Double],
-                      termTopics: BDV[Count],
-                      docTopics: BSV[Count],
-                      topic: Int,
-                      beta: Double): Int = {
+    ab: DiscreteSampler[Double],
+    wa: DiscreteSampler[Double],
+    dwb: CumulativeDist[Double],
+    termTopics: BDV[Count],
+    docTopics: Ndk,
+    topic: Int,
+    beta: Double): Int = {
     val dwbSum = dwb.norm
     val sum23 = dwbSum + wa.norm
     val distSum = sum23 + ab.norm

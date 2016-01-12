@@ -19,35 +19,37 @@ package com.github.cloudml.zen.ml.clustering
 
 import java.util.Random
 import java.util.concurrent.Executors
-import com.github.cloudml.zen.ml.clustering.algorithm.{ZenLDA, SparseLDA, LightLDA, LDATrainer}
+
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
+import com.github.cloudml.zen.ml.clustering.LDADefines._
+import com.github.cloudml.zen.ml.clustering.algorithm.LDATrainer
+import com.github.cloudml.zen.ml.partitioner._
+import com.github.cloudml.zen.ml.util.{SparkUtils, XORShiftRandom}
+import me.lemire.integercompression.IntCompressor
+import me.lemire.integercompression.differential.IntegratedIntCompressor
+import org.apache.hadoop.fs.Path
+import org.apache.spark.graphx2._
+import org.apache.spark.graphx2.impl.{EdgeRDDImpl, GraphImpl, VertexRDDImpl}
+import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
+import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
+import org.apache.spark.rdd.RDD
+import org.apache.spark.storage.StorageLevel
 
 import scala.concurrent._
 import scala.concurrent.duration._
 
-import LDADefines._
-import com.github.cloudml.zen.ml.partitioner._
-import com.github.cloudml.zen.ml.util.{SparkUtils, XORShiftRandom}
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
-import org.apache.hadoop.fs.Path
-import org.apache.spark.graphx2._
-import org.apache.spark.graphx2.impl.GraphImpl
-import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
-import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
-import org.apache.spark.rdd.RDD
-import org.apache.spark.storage.StorageLevel
-
-
-class LDA(@transient var corpus: Graph[TC, TA],
-          val numTopics: Int,
-          val numTerms: Int,
-          val numDocs: Long,
-          val numTokens: Long,
-          var alpha: Double,
-          var beta: Double,
-          var alphaAS: Double,
-          val algo: LDATrainer,
-          var storageLevel: StorageLevel) extends Serializable {
+class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
+  @transient var verts: VertexRDDImpl[TC],
+  val numTopics: Int,
+  val numTerms: Int,
+  val numDocs: Long,
+  val numTokens: Long,
+  var alpha: Double,
+  var beta: Double,
+  var alphaAS: Double,
+  val algo: LDATrainer,
+  var storageLevel: StorageLevel) extends Serializable {
 
   @transient var topicCounters: BDV[Count] = _
   @transient lazy val seed = new XORShiftRandom().nextInt()
@@ -74,23 +76,36 @@ class LDA(@transient var corpus: Graph[TC, TA],
     this
   }
 
-  def getCorpus: Graph[TC, TA] = corpus
+  def termVertices: VertexRDD[TC] = verts.filter(t => isTermId(t._1))
 
-  def termVertices: VertexRDD[TC] = corpus.vertices.filter(t => isTermId(t._1))
+  def docVertices: VertexRDD[TC] = verts.filter(t => isDocId(t._1))
 
-  def docVertices: VertexRDD[TC] = corpus.vertices.filter(t => isDocId(t._1))
-
-  @inline private def scContext = corpus.edges.context
+  @inline private def scContext = edges.context
 
   @inline private def scConf = scContext.getConf
 
-  def init(computedModel: Option[RDD[(VertexId, TC)]] = None): Unit = {
-    corpus = algo.updateVertexCounters(corpus, numTopics)
-    corpus = computedModel match {
+  def init(computedModel: Option[RDD[NwkPair]] = None): Unit = {
+    val initPartRDD = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) => {
+      (pid, ep.withVertexAttributes(new Array[Int](ep.vertexAttrs.length)))
+    })), preservesPartitioning=true)
+    verts = algo.updateVertexCounters(edges.withPartitionsRDD(initPartRDD), verts)
+    verts = computedModel match {
       case Some(cm) =>
-        val verts = corpus.vertices.leftJoin(cm)((_, uc, cc) => cc.getOrElse(uc))
-        GraphImpl.fromExistingRDDs(verts, corpus.edges)
-      case None => corpus
+        val ccm = cm.mapPartitions(iter => {
+          val nic = new IntCompressor
+          val iic = new IntegratedIntCompressor
+          iter.map(Function.tupled((vid, counter) => counter match {
+            case v: BDV[Count] =>
+              val cdata = nic.compress(v.data)
+              Tuple1(cdata)
+            case v: BSV[Count] =>
+              val cdata = nic.compress(v.data)
+              val cindex = iic.compress(v.index)
+              (cdata, cindex)
+          }))
+        }, preservesPartitioning = true)
+        verts.leftJoin(ccm)((_, uc, cc) => cc.getOrElse(uc))
+      case None => verts
     }
     corpus.vertices.persist(storageLevel).setName("vertices-0")
     collectTopicCounters()

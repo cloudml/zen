@@ -233,7 +233,7 @@ class VertexRDDImpl[VD] (
   }
 
   override def withPartitionsRDD[VD2: ClassTag](
-      partitionsRDD: RDD[ShippableVertexPartition[VD2]]): VertexRDD[VD2] = {
+      partitionsRDD: RDD[ShippableVertexPartition[VD2]]): VertexRDDImpl[VD2] = {
     new VertexRDDImpl(partitionsRDD, this.targetStorageLevel)
   }
 

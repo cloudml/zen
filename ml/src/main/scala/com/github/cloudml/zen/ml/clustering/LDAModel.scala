@@ -169,7 +169,7 @@ class LocalLDAModel(@transient val termTopicsArr: Array[TC],
   }
 }
 
-class DistributedLDAModel(@transient val termTopicsRDD: RDD[(VertexId, TC)],
+class DistributedLDAModel(@transient val termTopicsRDD: RDD[NwkPair],
   val numTopics: Int,
   val numTerms: Int,
   val numTokens: Long,

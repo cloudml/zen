@@ -17,35 +17,30 @@
 
 package com.github.cloudml.zen.ml.clustering.algorithm
 
-import java.lang.ref.SoftReference
-import java.util.Random
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicIntegerArray
-import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
-import com.github.cloudml.zen.ml.clustering.LDAPerplexity
 import com.github.cloudml.zen.ml.sampler._
-import com.github.cloudml.zen.ml.util.XORShiftRandom
+import com.github.cloudml.zen.ml.util.CompressedVector
 import me.lemire.integercompression.IntCompressor
 import me.lemire.integercompression.differential.IntegratedIntCompressor
-import org.apache.spark.graphx2._
-import org.apache.spark.graphx2.impl.{ShippableVertexPartition => VertPartition, EdgePartition, GraphImpl}
+import org.apache.spark.graphx2.impl.{ShippableVertexPartition => VertPartition}
 
-import scala.collection.JavaConversions._
 import scala.concurrent._
 import scala.concurrent.duration._
 
 
 abstract class LDATrainer(numTopics: Int, numThreads: Int)
   extends LDAAlgorithm(numTopics, numThreads) {
-
-  override def aggregateCounters(svp: VertPartition[TC],
-    cntsIter: Iterator[NvkPair]): VertPartition[TC] = {
-    val totalSize = svp.capacity
+  def aggregateCounters(vp: VertPartition[TC], cntsIter: Iterator[NvkPair]): VertPartition[TC] = {
+    val totalSize = vp.capacity
+    val index = vp.index
+    val mask = vp.mask
+    val values = vp.values
     val results = new Array[BV[Count]](totalSize)
-    val index = svp.index
-    val marks = new AtomicIntegerArray(results.length)
+    val marks = new AtomicIntegerArray(totalSize)
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
     val all = cntsIter.grouped(numThreads * 5).map(batch => Future {
       batch.foreach(Function.tupled((vid, counter) => {
@@ -77,32 +72,26 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
     })
     Await.ready(Future.sequence(all), 1.hour)
 
-    val mask = svp.mask
-    val values = svp.values
+    // compress counters
     val sizePerthrd = {
       val npt = totalSize / numThreads
       if (npt * numThreads == totalSize) npt else npt + 1
     }
     val all2 = Range(0, numThreads).map(thid => Future {
-      val nic = new IntCompressor
-      val iic = new IntegratedIntCompressor
+      implicit val nic = new IntCompressor
+      implicit val iic = new IntegratedIntCompressor
       val startPos = sizePerthrd * thid
       val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
       var pos = mask.nextSetBit(startPos)
-      while (pos < endPos && pos >= 0) results(pos) match {
-        case v: BDV[Count] =>
-          val cdata = nic.compress(v.data)
-          results(pos) = (cdata,)
-        case v: BSV[Count] =>
-          val cdata = nic.compress(v.data)
-          val cindex = iic.compress(v.index)
-          results(pos) = (cdata, cindex)
-          pos = mask.nextSetBit(pos + 1)
+      while (pos < endPos && pos >= 0) {
+        values(pos) = CompressedVector.fromVector(results(pos))
+        pos = mask.nextSetBit(pos + 1)
       }
     })
+    Await.ready(Future.sequence(all2), 1.hour)
 
     es.shutdown()
-    svp.withValues(results)
+    vp.withValues(values)
   }
 
   def resetDist_abDense(ab: DiscreteSampler[Double],
@@ -138,17 +127,17 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
 }
 
 object LDATrainer {
-  def initAlgorithm(algoStr: String): LDATrainer = {
+  def initAlgorithm(algoStr: String, numTopics: Int, numThreads: Int): LDATrainer = {
     algoStr.toLowerCase match {
       case "zenlda" =>
         println("using ZenLDA sampling algorithm.")
-        new ZenLDA
+        new ZenLDA(numTopics, numThreads)
       case "lightlda" =>
         println("using LightLDA sampling algorithm.")
-        new LightLDA
+        new LightLDA(numTopics, numThreads)
       case "sparselda" =>
         println("using SparseLDA sampling algorithm")
-        new SparseLDA
+        new SparseLDA(numTopics, numThreads)
       case _ =>
         throw new NoSuchMethodException("No this algorithm or not implemented.")
     }
