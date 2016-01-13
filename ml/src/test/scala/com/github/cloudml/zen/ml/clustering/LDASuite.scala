@@ -41,9 +41,10 @@ class LDASuite extends FunSuite with SharedSparkContext {
 
     val data = sc.parallelize(corpus, 2)
     data.cache()
-    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, reverse=false, storageLevel)
+    val algo = new ZenLDA(numTopics, numThreads)
+    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, algo, storageLevel)
     val pps = new Array[Double](incrementalLearning)
-    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new ZenLDA, storageLevel)
+    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, algo, storageLevel)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
@@ -59,7 +60,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
     assert(pps.head - pps.last > 0)
 
-    val ldaModel = lda.toLDAModel()
+    val ldaModel = lda.toLDAModel
     val tempDir = Files.createTempDir()
     tempDir.deleteOnExit()
     val path = tempDir.toURI.toString + File.separator + "lda"
@@ -89,9 +90,10 @@ class LDASuite extends FunSuite with SharedSparkContext {
 
     val data = sc.parallelize(corpus, 2)
     data.cache()
-    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, reverse=false, storageLevel)
+    val algo = new LightLDA(numTopics, numThreads)
+    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, algo, storageLevel)
     val pps = new Array[Double](incrementalLearning)
-    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new LightLDA, storageLevel)
+    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, algo, storageLevel)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
@@ -107,7 +109,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
     assert(pps.head - pps.last > 0)
 
-    val ldaModel = lda.toLDAModel(2).toLocalLDAModel
+    val ldaModel = lda.toLDAModel.toLocalLDAModel
     data.collect().foreach { case (_, sv) =>
       val a = ldaModel.inference(sv)
       val b = ldaModel.inference(sv)
@@ -122,9 +124,10 @@ class LDASuite extends FunSuite with SharedSparkContext {
 
     val data = sc.parallelize(corpus, 2)
     data.cache()
-    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, reverse=true, storageLevel)
+    val algo = new SparseLDA(numTopics, numThreads)
+    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, algo, storageLevel)
     val pps = new Array[Double](incrementalLearning)
-    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, new SparseLDA, storageLevel)
+    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, algo, storageLevel)
     var i = 0
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
@@ -140,7 +143,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
     assert(pps.head - pps.last > 0)
 
-    val ldaModel = lda.toLDAModel(2).toLocalLDAModel
+    val ldaModel = lda.toLDAModel.toLocalLDAModel
     data.collect().foreach { case (_, sv) =>
       val a = ldaModel.inference(sv)
       val b = ldaModel.inference(sv)
@@ -159,6 +162,7 @@ object LDASuite {
   val alphaAS = 1D
   val beta = 0.01
   val totalIterations = 2
+  val numThreads = 2
   val burnInIterations = 1
   val incrementalLearning = 10
   val storageLevel = StorageLevel.MEMORY_AND_DISK

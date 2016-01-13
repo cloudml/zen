@@ -65,11 +65,13 @@ object LDADriver {
     conf.set(cs_outputpath, outputPath)
     conf.set(cs_storageLevel, slvlStr)
 
+    val nthdStr = options.getOrElse("numthreads", "1")
+    val numThreads = nthdStr.toInt
     val algoStr = options.getOrElse("ldaalgorithm", "zenlda")
+    conf.set(cs_numThreads, nthdStr)
     conf.set(cs_LDAAlgorithm, algoStr)
 
     conf.set(cs_sampleRate, options.getOrElse("samplerate", "1.0"))
-    conf.set(cs_numThreads, options.getOrElse("numthreads", "1"))
     conf.set(cs_accelMethod, options.getOrElse("accelmethod", "alias"))
     conf.set(cs_partStrategy, options.getOrElse("partstrategy", "dbh"))
     conf.set(cs_initStrategy, options.getOrElse("initstrategy", "random"))
@@ -108,7 +110,7 @@ object LDADriver {
       println(s"inputDataPath = $inputPath")
       println(s"outputPath = $outputPath")
 
-      val algo = LDATrainer.initAlgorithm(algoStr)
+      val algo = LDATrainer.initAlgorithm(algoStr, numTopics, numThreads)
       val docs = loadCorpus(sc, algo, storageLevel)
       val trainingTime = runTraining(docs, numTopics, totalIter, alpha, beta, alphaAS, algo, storageLevel)
       println(s"Training time consumed: $trainingTime seconds")

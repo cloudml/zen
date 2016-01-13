@@ -100,13 +100,7 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
       case None => verts
     }
     verts.persist(storageLevel).setName("vertices-0")
-    updateTopicCounters()
-  }
-
-  def updateTopicCounters(): Unit = {
     topicCounters = algo.collectTopicCounters(verts)
-    val count = topicCounters.data.par.map(_.toLong).sum
-    assert(count == numTokens, s"numTokens=$numTokens, count=$count")
   }
 
   def runGibbsSampling(totalIter: Int): Unit = {
@@ -125,7 +119,7 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
         LDAPerplexity(this).output(println)
       }
       if (saveIntv > 0 && iter % saveIntv == 0 && iter < totalIter) {
-        val model = toLDAModel()
+        val model = toLDAModel
         val savPath = new Path(scConf.get(cs_outputpath) + s"-iter$iter")
         val fs = SparkUtils.getFileSystem(scConf, savPath)
         fs.delete(savPath, true)
@@ -156,7 +150,9 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
     if (needChkpt) {
       newVerts.checkpoint()
     }
-    updateTopicCounters()
+    topicCounters = algo.collectTopicCounters(newVerts)
+    val count = topicCounters.data.par.map(_.toLong).sum
+    assert(count == numTokens, s"numTokens=$numTokens, count=$count")
     edges.unpersist(blocking=false)
     verts.unpersist(blocking=false)
     edges = newEdges
@@ -173,29 +169,35 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
     println(s"Sampling & update paras $sampIter takes: $elapsedSeconds secs")
   }
 
-  /**
-   * run more iters, return averaged counters
-   * @param filter return which vertices
-   * @param runIter saved more these iters' averaged model
-   */
-  def runSum(filter: VertexId => Boolean,
-    runIter: Int = 0): RDD[(VertexId, TC)] = {
-    def vertices = verts.filter(t => filter(t._1))
-    var countersSum = vertices
-    countersSum.persist(storageLevel)
-    var iter = 1
-    while (iter <= runIter) {
-      println(s"Save TopicModel (Iteration $iter/$runIter)")
-      gibbsSampling(iter)
-      countersSum = countersSum.innerZipJoin(vertices)((_, a, b) => a :+= b)
-      countersSum.persist(storageLevel)
-      iter += 1
-    }
-    countersSum
-  }
+//  /**
+//   * run more iters, return averaged counters
+//   * @param filter return which vertices
+//   * @param runIter saved more these iters' averaged model
+//   */
+//  def runSum(filter: VertexId => Boolean,
+//    runIter: Int = 0): RDD[(VertexId, TC)] = {
+//    def vertices = verts.filter(t => filter(t._1))
+//    var countersSum = vertices
+//    countersSum.persist(storageLevel)
+//    var iter = 1
+//    while (iter <= runIter) {
+//      println(s"Save TopicModel (Iteration $iter/$runIter)")
+//      gibbsSampling(iter)
+//      countersSum = countersSum.innerZipJoin(vertices)((_, a, b) => a :+= b)
+//      countersSum.persist(storageLevel)
+//      iter += 1
+//    }
+//    countersSum
+//  }
 
   def toLDAModel: DistributedLDAModel = {
-    val ttcs = termVertices
+    val ttcs = termVertices.mapPartitions(iter => {
+      implicit val nic = new IntCompressor
+      implicit val iic = new IntegratedIntCompressor
+      iter.map(Function.tupled((vid, counter) =>
+        (vid, counter.toVector(numTopics))
+      ))
+    }, preservesPartitioning = true)
     ttcs.persist(storageLevel)
     new DistributedLDAModel(ttcs, numTopics, numTerms, numTokens, alpha, beta, alphaAS, storageLevel)
   }
@@ -233,19 +235,20 @@ object LDA {
     alphaAS: Double,
     algo: LDATrainer,
     storageLevel: StorageLevel): LDA = {
-    val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdgeRDD(docs, storageLevel)
+    val initCorpus = LBVertexRDDBuilder.fromEdgeRDD[TC, TA](docs, storageLevel)
     initCorpus.persist(storageLevel)
-    val numTokens = initCorpus.edges.count()
+    val edges = initCorpus.edges
+    val numTokens = edges.count()
     println(s"tokens in the corpus: $numTokens")
-    val vertices = initCorpus.vertices
-    val numTerms = vertices.map(_._1).filter(isTermId).count().toInt
+    val verts = initCorpus.vertices.asInstanceOf[VertexRDDImpl[TC]]
+    val numTerms = verts.map(_._1).filter(isTermId).count().toInt
     println(s"terms in the corpus: $numTerms")
-    val numDocs = vertices.map(_._1).filter(isDocId).count()
+    val numDocs = verts.map(_._1).filter(isDocId).count()
     println(s"docs in the corpus: $numDocs")
-    val lda = new LDA(initCorpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS,
+    val lda = new LDA(edges, verts, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS,
       algo, storageLevel)
     lda.init()
-    vertices.unpersist(blocking=false)
+    verts.unpersist(blocking=false)
     lda
   }
 
@@ -262,15 +265,16 @@ object LDA {
     val storageLevel = computedModel.storageLevel
     println(s"tokens in the corpus: $numTokens")
     println(s"terms in the corpus: $numTerms")
-    val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdgeRDD(docs, storageLevel)
+    val initCorpus = LBVertexRDDBuilder.fromEdgeRDD[TC, TA](docs, storageLevel)
     initCorpus.persist(storageLevel)
-    val vertices = initCorpus.vertices
-    val numDocs = vertices.map(_._1).filter(isDocId).count()
+    val edges = initCorpus.edges
+    val verts = initCorpus.vertices.asInstanceOf[VertexRDDImpl[TC]]
+    val numDocs = verts.map(_._1).filter(isDocId).count()
     println(s"docs in the corpus: $numDocs")
-    val lda = new LDA(initCorpus, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS,
+    val lda = new LDA(edges, verts, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS,
       algo, storageLevel)
     lda.init(Some(computedModel.termTopicsRDD))
-    vertices.unpersist(blocking=false)
+    verts.unpersist(blocking=false)
     lda
   }
 
