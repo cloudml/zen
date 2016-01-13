@@ -17,15 +17,11 @@
 
 package com.github.cloudml.zen.ml.clustering
 
-import java.util.Random
-
 import breeze.linalg.{DenseVector => BDV}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.clustering.algorithm.LDATrainer
 import com.github.cloudml.zen.ml.partitioner._
-import com.github.cloudml.zen.ml.util.{CompressedVector, SparkUtils, XORShiftRandom}
-import me.lemire.integercompression.IntCompressor
-import me.lemire.integercompression.differential.IntegratedIntCompressor
+import com.github.cloudml.zen.ml.util._
 import org.apache.hadoop.fs.Path
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.{EdgeRDDImpl, GraphImpl, VertexRDDImpl}
@@ -90,10 +86,9 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
     verts = computedModel match {
       case Some(cm) =>
         val ccm = cm.mapPartitions(iter => {
-          implicit val nic = new IntCompressor
-          implicit val iic = new IntegratedIntCompressor
+          val comp = new BVCompressor(numTopics)
           iter.map(Function.tupled((vid, counter) =>
-            (vid, CompressedVector.fromVector(counter))
+            (vid, comp.BV2CV(counter))
           ))
         }, preservesPartitioning = true)
         verts.leftJoin(ccm)((_, uc, cc) => cc.getOrElse(uc)).asInstanceOf[VertexRDDImpl[TC]]
@@ -192,10 +187,9 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
 
   def toLDAModel: DistributedLDAModel = {
     val ttcs = termVertices.mapPartitions(iter => {
-      implicit val nic = new IntCompressor
-      implicit val iic = new IntegratedIntCompressor
+      val decomp = new BVDecompressor(numTopics)
       iter.map(Function.tupled((vid, counter) =>
-        (vid, counter.toVector(numTopics))
+        (vid, decomp.CV2BV(counter))
       ))
     }, preservesPartitioning = true)
     ttcs.persist(storageLevel)

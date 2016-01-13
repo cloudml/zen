@@ -24,9 +24,7 @@ import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, convert, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler.{AliasTable, CumulativeDist, DiscreteSampler, FTree}
-import com.github.cloudml.zen.ml.util.{CompressedVector, XORShiftRandom}
-import me.lemire.integercompression.IntCompressor
-import me.lemire.integercompression.differential.IntegratedIntCompressor
+import com.github.cloudml.zen.ml.util.{BVCompressor, XORShiftRandom}
 import org.apache.spark.graphx2.impl.{EdgePartition, ShippableVertexPartition => VertPartition}
 
 import scala.collection.JavaConversions._
@@ -300,13 +298,12 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
       if (npt * numThreads == totalSize) npt else npt + 1
     }
     val all2 = Range(0, numThreads).map(thid => Future {
-      implicit val nic = new IntCompressor
-      implicit val iic = new IntegratedIntCompressor
+      val comp = new BVCompressor(numTopics)
       val startPos = sizePerthrd * thid
       val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
       var pos = mask.nextSetBit(startPos)
       while (pos < endPos && pos >= 0) {
-        values(pos) = CompressedVector.fromVector(results(pos))
+        values(pos) = comp.BV2CV(results(pos))
         pos = mask.nextSetBit(pos + 1)
       }
     })

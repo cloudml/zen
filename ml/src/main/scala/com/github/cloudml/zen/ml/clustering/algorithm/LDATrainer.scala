@@ -23,9 +23,7 @@ import java.util.concurrent.atomic.AtomicIntegerArray
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
-import com.github.cloudml.zen.ml.util.CompressedVector
-import me.lemire.integercompression.IntCompressor
-import me.lemire.integercompression.differential.IntegratedIntCompressor
+import com.github.cloudml.zen.ml.util.{BVDecompressor, BVCompressor}
 import org.apache.spark.graphx2.impl.{ShippableVertexPartition => VertPartition}
 
 import scala.concurrent._
@@ -78,13 +76,16 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
       if (npt * numThreads == totalSize) npt else npt + 1
     }
     val all2 = Range(0, numThreads).map(thid => Future {
-      implicit val nic = new IntCompressor
-      implicit val iic = new IntegratedIntCompressor
+      val comp = new BVCompressor(numTopics)
+      val decomp = new BVDecompressor(numTopics)
       val startPos = sizePerthrd * thid
       val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
       var pos = mask.nextSetBit(startPos)
       while (pos < endPos && pos >= 0) {
-        values(pos) = CompressedVector.fromVector(results(pos))
+        val bv = results(pos)
+        val cv = comp.BV2CV(bv)
+        assert(decomp.CV2BV(cv).equals(bv), bv)
+        values(pos) = cv
         pos = mask.nextSetBit(pos + 1)
       }
     })

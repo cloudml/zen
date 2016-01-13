@@ -28,8 +28,6 @@ import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util._
 import com.google.common.base.Charsets
 import com.google.common.io.Files
-import me.lemire.integercompression.IntCompressor
-import me.lemire.integercompression.differential.IntegratedIntCompressor
 import org.apache.hadoop.fs.{FileUtil, Path}
 import org.apache.spark.Partitioner._
 import org.apache.spark.SparkContext
@@ -203,10 +201,9 @@ class DistributedLDAModel(@transient val termTopicsRDD: RDD[NwkPair],
     }
     // val topicDist = lda.runSum(isDocId, runIter)
     val topicDist = lda.termVertices.mapPartitions(iter => {
-      implicit val nic = new IntCompressor
-      implicit val iic = new IntegratedIntCompressor
+      val decomp = new BVDecompressor(numTopics)
       iter.map(Function.tupled((vid, counter) =>
-        (vid, counter.toVector(numTopics))
+        (vid, decomp.CV2BV(counter))
       ))
     }, preservesPartitioning = true)
     topicDist.mapValues(v => {

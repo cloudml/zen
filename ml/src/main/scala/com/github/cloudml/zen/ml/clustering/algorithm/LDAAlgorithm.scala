@@ -22,8 +22,7 @@ import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
 import breeze.linalg.{DenseVector => BDV}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.clustering.LDAPerplexity
-import me.lemire.integercompression.IntCompressor
-import me.lemire.integercompression.differential.IntegratedIntCompressor
+import com.github.cloudml.zen.ml.util.BVDecompressor
 import org.apache.spark.graphx2.impl.{ShippableVertexPartition => VertPartition, _}
 
 import scala.collection.JavaConversions._
@@ -34,7 +33,7 @@ import scala.language.existentials
 
 abstract class LDAAlgorithm(numTopics: Int,
   numThreads: Int) extends Serializable {
-  protected val dscp = numTopics >>> 3
+  protected val dscp = numTopics >>> 4
 
   def isByDoc: Boolean
 
@@ -149,16 +148,14 @@ abstract class LDAAlgorithm(numTopics: Int,
         val g2l = ep.global2local
         val results = new Array[Nvk](ep.vertexAttrs.length)
         val thq = new ConcurrentLinkedQueue(0 until numThreads)
-        val nics = Array.fill(numThreads)(new IntCompressor)
-        val iics = Array.fill(numThreads)(new IntegratedIntCompressor)
+        val decomps = Array.fill(numThreads)(new BVDecompressor(numTopics))
 
         implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
         val all = Future.traverse(vabsIter)(Function.tupled((_, vab) => Future {
           val thid = thq.poll()
-          implicit val nic = nics(thid)
-          implicit val iic = iics(thid)
+          val decomp = decomps(thid)
           vab.iterator.foreach(Function.tupled((vid, vdata) =>
-            results(g2l(vid)) = vdata.toVector(numTopics)
+            results(g2l(vid)) = decomp.CV2BV(vdata)
           ))
           thq.add(thid)
         }))
@@ -182,15 +179,14 @@ abstract class LDAAlgorithm(numTopics: Int,
       }
       implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
       val all = Range(0, numThreads).map(thid => Future {
-        implicit val nic = new IntCompressor
-        implicit val iic = new IntegratedIntCompressor
+        val decomp = new BVDecompressor(numTopics)
         val startPos = sizePerthrd * thid
         val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
         val agg = BDV.zeros[Count](numTopics)
         var pos = mask.nextSetBit(startPos)
         while (pos < endPos && pos >= 0) {
           if (isTermId(index.getValue(pos))) {
-            agg :+= values(pos).toVector(numTopics)
+            agg :+= decomp.CV2BV(values(pos))
           }
           pos = mask.nextSetBit(pos + 1)
         }

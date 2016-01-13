@@ -17,29 +17,69 @@
 
 package com.github.cloudml.zen.ml.util
 
+import java.util
+
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
-import me.lemire.integercompression.IntCompressor
-import me.lemire.integercompression.differential.IntegratedIntCompressor
+import me.lemire.integercompression._
+import me.lemire.integercompression.differential._
 
 
-class CompressedVector(cdata: Array[Int],
-  cindex: Array[Int]) extends Serializable {
-  def toVector(numTopics: Int)(implicit nic: IntCompressor,
-    iic: IntegratedIntCompressor): BV[Int] = {
-    if (cindex == null) {
-      new BDV(nic.uncompress(cdata))
-    } else {
-      new BSV(iic.uncompress(cindex), nic.uncompress(cdata), numTopics)
-    }
+class CompressedVector(val used: Int,
+  val cdata: Array[Int],
+  val cindex: Array[Int]) extends Serializable
+
+class BVCompressor(numTopics: Int) {
+  val dataCodec = new SkippableComposition(new BinaryPacking, new VariableByte)
+  val indexCodec = new SkippableIntegratedComposition(new IntegratedBinaryPacking, new IntegratedVariableByte)
+  val buf = new Array[Int](numTopics + 1024)
+
+  def BV2CV(bv: BV[Int]): CompressedVector = bv match {
+    case v: BDV[Int] =>
+      val outPos = new IntWrapper
+      dataCodec.headlessCompress(v.data, new IntWrapper, numTopics, buf, outPos)
+      val cdata = util.Arrays.copyOf(buf, outPos.get)
+      new CompressedVector(numTopics, cdata, null)
+    case v: BSV[Int] =>
+      val used = v.used
+      val index = v.index
+      val data = v.data
+      if (used <= 0) {
+        new CompressedVector(used, data, index)
+      } else {
+        val outPos = new IntWrapper
+        dataCodec.headlessCompress(data, new IntWrapper, used, buf, outPos)
+        val cdata = util.Arrays.copyOf(buf, outPos.get)
+        outPos.set(0)
+        indexCodec.headlessCompress(index, new IntWrapper, used, buf, outPos, new IntWrapper)
+        val cindex = util.Arrays.copyOf(buf, outPos.get)
+        new CompressedVector(used, cdata, cindex)
+      }
   }
 }
 
-object CompressedVector {
-  def fromVector(bv: BV[Int])(implicit nic: IntCompressor,
-    iic: IntegratedIntCompressor): CompressedVector = bv match {
-    case v: BDV[Int] =>
-      new CompressedVector(nic.compress(v.data), null)
-    case v: BSV[Int] =>
-      new CompressedVector(nic.compress(v.data), iic.compress(v.index))
+class BVDecompressor(numTopics: Int) {
+  val dataCodec = new SkippableComposition(new BinaryPacking, new VariableByte)
+  val indexCodec = new SkippableIntegratedComposition(new IntegratedBinaryPacking, new IntegratedVariableByte)
+
+  def CV2BV(cv: CompressedVector): BV[Int] = {
+    val cdata = cv.cdata
+    val cindex = cv.cindex
+    if (cindex == null) {
+      val data = new Array[Int](numTopics)
+      dataCodec.headlessUncompress(cdata, new IntWrapper, cdata.length, data, new IntWrapper, numTopics)
+      new BDV(data)
+    } else {
+      val used = cv.used
+      if (used <= 0) {
+        new BSV(cindex, cdata, used, numTopics)
+      } else {
+        val data = new Array[Int](used)
+        dataCodec.headlessUncompress(cdata, new IntWrapper, cdata.length, data, new IntWrapper, used)
+        val index = new Array[Int](used)
+        indexCodec.headlessUncompress(cindex, new IntWrapper, cindex.length, index, new IntWrapper,
+          used, new IntWrapper)
+        new BSV(index, data, used, numTopics)
+      }
+    }
   }
 }
