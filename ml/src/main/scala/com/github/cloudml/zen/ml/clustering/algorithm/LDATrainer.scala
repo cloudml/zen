@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicIntegerArray
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
-import com.github.cloudml.zen.ml.util.{BVDecompressor, BVCompressor}
+import com.github.cloudml.zen.ml.util.BVCompressor
 import org.apache.spark.graphx2.impl.{ShippableVertexPartition => VertPartition}
 
 import scala.concurrent._
@@ -37,7 +37,7 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
     val index = vp.index
     val mask = vp.mask
     val values = vp.values
-    val results = new Array[BV[Count]](totalSize)
+    val results = new Array[Nvk](totalSize)
     val marks = new AtomicIntegerArray(totalSize)
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
     val all = cntsIter.grouped(numThreads * 5).map(batch => Future {
@@ -59,10 +59,8 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
                 u :+= v
                 if (u.activeSize >= dscp) toBDV(u) else u
             }
-          } else agg match {
-            case u: BSV[Count] => counter match {
-              case v: BSV[Count] => u :+= v
-            }
+          } else {
+            agg.asInstanceOf[Ndk] :+= counter.asInstanceOf[Ndk]
           }
         }
         marks.set(i, Int.MaxValue)

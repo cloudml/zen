@@ -19,7 +19,7 @@ package com.github.cloudml.zen.ml.clustering.algorithm
 
 import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
 
-import breeze.linalg.{DenseVector => BDV}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.clustering.LDAPerplexity
 import com.github.cloudml.zen.ml.util.BVDecompressor
@@ -33,7 +33,7 @@ import scala.language.existentials
 
 abstract class LDAAlgorithm(numTopics: Int,
   numThreads: Int) extends Serializable {
-  protected val dscp = numTopics >>> 4
+  protected val dscp = numTopics >>> 3
 
   def isByDoc: Boolean
 
@@ -190,7 +190,11 @@ abstract class LDAAlgorithm(numTopics: Int,
         var pos = mask.nextSetBit(startPos)
         while (pos < endPos && pos >= 0) {
           if (isTermId(index.getValue(pos))) {
-            agg :+= decomp.CV2BV(values(pos))
+            val bv = decomp.CV2BV(values(pos))
+            bv match {
+              case v: BDV[Count] => agg :+= v
+              case v: BSV[Count] => agg :+= v
+            }
           }
           pos = mask.nextSetBit(pos + 1)
         }

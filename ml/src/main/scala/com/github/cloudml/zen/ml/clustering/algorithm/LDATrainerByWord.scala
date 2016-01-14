@@ -51,11 +51,11 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
       newLcSrcIds(lsi + 1) = pos
     }}
     Await.ready(all, 1.hour)
+    es.shutdown()
     new EdgePartition(newLcSrcIds, ep.localDstIds, ep.data, ep.index, ep.global2local, ep.local2global, zeros, None)
   }
 
   override def countPartition(ep: EdgePartition[TA, Int]): Iterator[NvkPair] = {
-    val totalSize = ep.size
     val lcSrcIds = ep.localSrcIds
     val lcDstIds = ep.localDstIds
     val l2g = ep.local2global
@@ -129,14 +129,13 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     val beta_denoms = denoms.copy :*= beta
     // \frac{{\alpha }_{k}{\beta }_{w}}{{n}_{k}+\bar{\beta }}
     val abDenseSum = sum_abDense(alphak_denoms, beta)
-    val totalSize = ep.size
+
     val lcSrcIds = ep.localSrcIds
     val lcDstIds = ep.localDstIds
     val vattrs = ep.vertexAttrs
     val data = ep.data
     val vertSize = vattrs.length
     val doc_denoms = new Array[Double](vertSize)
-    val marks = new AtomicIntegerArray(vertSize)
     @volatile var llhs = 0D
     @volatile var wllhs = 0D
     @volatile var dllhs = 0D
@@ -156,12 +155,12 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
       var pos = startPos
       while (pos < endPos) {
         val di = lcDstIds(pos)
-        val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
-        if (marks.get(di) == 0) {
-          doc_denoms(di) = 1.0 / (sum(docTopics) + alphaSum)
-          marks.set(di, 1)
+        val docTopics = vattrs(di).asInstanceOf[Ndk]
+        var doc_denom = doc_denoms(di)
+        if (doc_denom == 0.0) {
+          doc_denom = 1.0 / (sum(docTopics) + alphaSum)
+          doc_denoms(di) = doc_denom
         }
-        val doc_denom = doc_denoms(di)
         val topic = data(pos)
         val dwbSparseSum = sum_dwbSparse(termBeta_denoms, docTopics)
         val prob = (sum12 + dwbSparseSum) * doc_denom
