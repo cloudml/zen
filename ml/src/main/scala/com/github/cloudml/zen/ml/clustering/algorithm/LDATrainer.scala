@@ -77,15 +77,11 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
     }
     val all2 = Range(0, numThreads).map(thid => Future {
       val comp = new BVCompressor(numTopics)
-      val decomp = new BVDecompressor(numTopics)
       val startPos = sizePerthrd * thid
       val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
       var pos = mask.nextSetBit(startPos)
       while (pos < endPos && pos >= 0) {
-        val bv = results(pos)
-        val cv = comp.BV2CV(bv)
-        assert(decomp.CV2BV(cv).equals(bv), bv)
-        values(pos) = cv
+        values(pos) = comp.BV2CV(results(pos))
         pos = mask.nextSetBit(pos + 1)
       }
     })

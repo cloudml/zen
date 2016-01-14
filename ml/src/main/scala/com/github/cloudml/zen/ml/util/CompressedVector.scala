@@ -28,58 +28,89 @@ class CompressedVector(val used: Int,
   val cdata: Array[Int],
   val cindex: Array[Int]) extends Serializable
 
+// optimized for performance, not thread-safe
 class BVCompressor(numTopics: Int) {
   val dataCodec = new SkippableComposition(new BinaryPacking, new VariableByte)
   val indexCodec = new SkippableIntegratedComposition(new IntegratedBinaryPacking, new IntegratedVariableByte)
   val buf = new Array[Int](numTopics + 1024)
+  val inPos = new IntWrapper
+  val outPos = new IntWrapper
+  val initValue = new IntWrapper
 
   def BV2CV(bv: BV[Int]): CompressedVector = bv match {
     case v: BDV[Int] =>
-      val outPos = new IntWrapper
-      dataCodec.headlessCompress(v.data, new IntWrapper, numTopics, buf, outPos)
-      val cdata = util.Arrays.copyOf(buf, outPos.get)
+      val cdata = compressData(v.data, numTopics)
       new CompressedVector(numTopics, cdata, null)
     case v: BSV[Int] =>
       val used = v.used
       val index = v.index
       val data = v.data
-      if (used <= 0) {
+      if (used <= 4) {
         new CompressedVector(used, data, index)
       } else {
-        val outPos = new IntWrapper
-        dataCodec.headlessCompress(data, new IntWrapper, used, buf, outPos)
-        val cdata = util.Arrays.copyOf(buf, outPos.get)
-        outPos.set(0)
-        indexCodec.headlessCompress(index, new IntWrapper, used, buf, outPos, new IntWrapper)
-        val cindex = util.Arrays.copyOf(buf, outPos.get)
+        val cdata = compressData(data, used)
+        val cindex = compressIndex(index, used)
         new CompressedVector(used, cdata, cindex)
       }
   }
+
+  def compressData(data: Array[Int], len: Int): Array[Int] = {
+    inPos.set(0)
+    outPos.set(0)
+    dataCodec.headlessCompress(data, inPos, len, buf, outPos)
+    util.Arrays.copyOf(buf, outPos.get)
+  }
+
+  def compressIndex(index: Array[Int], len: Int): Array[Int] = {
+    buf(0) = index.length
+    inPos.set(0)
+    outPos.set(1)
+    initValue.set(0)
+    indexCodec.headlessCompress(index, inPos, len, buf, outPos, initValue)
+    util.Arrays.copyOf(buf, outPos.get)
+  }
 }
 
+// optimized for performance, not thread-safe
 class BVDecompressor(numTopics: Int) {
   val dataCodec = new SkippableComposition(new BinaryPacking, new VariableByte)
   val indexCodec = new SkippableIntegratedComposition(new IntegratedBinaryPacking, new IntegratedVariableByte)
+  val inPos = new IntWrapper
+  val outPos = new IntWrapper
+  val initValue = new IntWrapper
 
   def CV2BV(cv: CompressedVector): BV[Int] = {
     val cdata = cv.cdata
     val cindex = cv.cindex
     if (cindex == null) {
-      val data = new Array[Int](numTopics)
-      dataCodec.headlessUncompress(cdata, new IntWrapper, cdata.length, data, new IntWrapper, numTopics)
+      val data = decompressData(cdata, numTopics)
       new BDV(data)
     } else {
       val used = cv.used
-      if (used <= 0) {
+      if (used <= 4) {
         new BSV(cindex, cdata, used, numTopics)
       } else {
-        val data = new Array[Int](used)
-        dataCodec.headlessUncompress(cdata, new IntWrapper, cdata.length, data, new IntWrapper, used)
-        val index = new Array[Int](used)
-        indexCodec.headlessUncompress(cindex, new IntWrapper, cindex.length, index, new IntWrapper,
-          used, new IntWrapper)
+        val data = decompressData(cdata, used)
+        val index= decompressIndex(cindex, used)
         new BSV(index, data, used, numTopics)
       }
     }
+  }
+
+  def decompressData(cdata: Array[Int], rawLen: Int): Array[Int] = {
+    val data = new Array[Int](rawLen)
+    inPos.set(0)
+    outPos.set(0)
+    dataCodec.headlessUncompress(cdata, inPos, cdata.length, data, outPos, rawLen)
+    data
+  }
+
+  def decompressIndex(cindex: Array[Int], rawLen: Int): Array[Int] = {
+    val index = new Array[Int](rawLen)
+    inPos.set(1)
+    outPos.set(0)
+    initValue.set(0)
+    indexCodec.headlessUncompress(cindex, inPos, cindex.length - 1, index, outPos, rawLen, initValue)
+    index
   }
 }

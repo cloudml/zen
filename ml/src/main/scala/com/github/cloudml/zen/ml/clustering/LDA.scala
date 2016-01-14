@@ -85,12 +85,7 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
     verts = algo.updateVertexCounters(edges.withPartitionsRDD(initPartRDD), verts)
     verts = computedModel match {
       case Some(cm) =>
-        val ccm = cm.mapPartitions(iter => {
-          val comp = new BVCompressor(numTopics)
-          iter.map(Function.tupled((vid, counter) =>
-            (vid, comp.BV2CV(counter))
-          ))
-        }, preservesPartitioning = true)
+        val ccm = compressCounterRDD(cm, numTopics)
         verts.leftJoin(ccm)((_, uc, cc) => cc.getOrElse(uc)).asInstanceOf[VertexRDDImpl[TC]]
       case None => verts
     }
@@ -164,6 +159,12 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
     println(s"Sampling & update paras $sampIter takes: $elapsedSeconds secs")
   }
 
+  def toLDAModel: DistributedLDAModel = {
+    val termTopicsRDD = decompressVertexRDD(termVertices, numTopics)
+    termTopicsRDD.persist(storageLevel)
+    new DistributedLDAModel(termTopicsRDD, numTopics, numTerms, numTokens, alpha, beta, alphaAS, storageLevel)
+  }
+
 //  /**
 //   * run more iters, return averaged counters
 //   * @param filter return which vertices
@@ -184,17 +185,6 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
 //    }
 //    countersSum
 //  }
-
-  def toLDAModel: DistributedLDAModel = {
-    val ttcs = termVertices.mapPartitions(iter => {
-      val decomp = new BVDecompressor(numTopics)
-      iter.map(Function.tupled((vid, counter) =>
-        (vid, decomp.CV2BV(counter))
-      ))
-    }, preservesPartitioning = true)
-    ttcs.persist(storageLevel)
-    new DistributedLDAModel(ttcs, numTopics, numTerms, numTokens, alpha, beta, alphaAS, storageLevel)
-  }
 
 //  def mergeDuplicateTopic(threshold: Double = 0.95D): Map[Int, Int] = {
 //    val rows = termVertices.map(t => t._2).map(v => {

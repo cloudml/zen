@@ -23,9 +23,10 @@ import breeze.collection.mutable.SparseArray
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
 import breeze.storage.Zero
 import com.github.cloudml.zen.ml.sampler._
-import com.github.cloudml.zen.ml.util.CompressedVector
+import com.github.cloudml.zen.ml.util.{BVCompressor, BVDecompressor, CompressedVector}
 import org.apache.spark.SparkConf
 import org.apache.spark.graphx2._
+import org.apache.spark.rdd.RDD
 
 import scala.reflect.ClassTag
 
@@ -86,6 +87,24 @@ object LDADefines {
       i += 1
     }
     docTopics
+  }
+
+  def compressCounterRDD(model: RDD[NvkPair], numTopics: Int): RDD[(VertexId, TC)] = {
+    model.mapPartitions(iter => {
+      val comp = new BVCompressor(numTopics)
+      iter.map(Function.tupled((vid, counter) =>
+        (vid, comp.BV2CV(counter))
+      ))
+    }, preservesPartitioning = true)
+  }
+
+  def decompressVertexRDD(verts: RDD[(VertexId, TC)], numTopics: Int): RDD[NvkPair] = {
+    verts.mapPartitions(iter => {
+      val decomp = new BVDecompressor(numTopics)
+      iter.map(Function.tupled((vid, cv) =>
+        (vid, decomp.CV2BV(cv))
+      ))
+    }, preservesPartitioning = true)
   }
 
   def registerKryoClasses(conf: SparkConf): Unit = {
