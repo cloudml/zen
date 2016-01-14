@@ -61,7 +61,11 @@ abstract class LDAAlgorithm(numTopics: Int,
     beta: Double)
     (ep: EdgePartition[TA, Nvk]): (Double, Double, Double)
 
-  def sampleGraph(edges: EdgeRDDImpl[TA, VD] forSome {type VD},
+  def initEdgePartition(ep: EdgePartition[TA, _]): EdgePartition[TA, Int] = {
+    ep.withVertexAttributes(new Array[Int](ep.vertexAttrs.length))
+  }
+
+  def sampleGraph(edges: EdgeRDDImpl[TA, _],
     verts: VertexRDDImpl[TC],
     topicCounters: BDV[Count],
     seed: Int,
@@ -94,14 +98,14 @@ abstract class LDAAlgorithm(numTopics: Int,
     ))).partitionBy(verts.partitioner.get)
 
     // Below identical map is used to isolate the impact of locality of CheckpointRDD
-    val isoRDD = verts.partitionsRDD.mapPartitions(iter => iter, preservesPartitioning=true)
+    val isoRDD = verts.partitionsRDD.mapPartitions(_.seq, preservesPartitioning=true)
     val partRDD = isoRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
       (vpIter, cntsIter) => vpIter.map(vp => aggregateCounters(vp, cntsIter))
     )
     verts.withPartitionsRDD(partRDD)
   }
 
-  def calcPerplexity(edges: EdgeRDDImpl[TA, VD] forSome {type VD},
+  def calcPerplexity(edges: EdgeRDDImpl[TA, _],
     verts: VertexRDDImpl[TC],
     topicCounters: BDV[Count],
     numTokens: Long,
@@ -121,7 +125,7 @@ abstract class LDAAlgorithm(numTopics: Int,
     new LDAPerplexity(pplx, wpplx, dpplx)
   }
 
-  def refreshEdgeAssociations(edges: EdgeRDDImpl[TA, VD] forSome {type VD},
+  def refreshEdgeAssociations(edges: EdgeRDDImpl[TA, _],
     verts: VertexRDDImpl[TC]): EdgeRDDImpl[TA, Nvk] = {
     val shippedVerts = verts.partitionsRDD.mapPartitions(_.flatMap(vp => {
       val rt = vp.routingTable
@@ -142,7 +146,7 @@ abstract class LDAAlgorithm(numTopics: Int,
     })).partitionBy(edges.partitioner.get)
 
     // Below identical map is used to isolate the impact of locality of CheckpointRDD
-    val isoRDD = edges.partitionsRDD.mapPartitions(iter => iter, preservesPartitioning=true)
+    val isoRDD = edges.partitionsRDD.mapPartitions(_.seq, preservesPartitioning=true)
     val partRDD = isoRDD.zipPartitions(shippedVerts, preservesPartitioning=true)(
       (epIter, vabsIter) => epIter.map(Function.tupled((pid, ep) => {
         val g2l = ep.global2local

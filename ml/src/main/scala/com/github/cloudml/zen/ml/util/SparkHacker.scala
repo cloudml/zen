@@ -34,7 +34,7 @@ private[zen] object SparkHacker extends Logging {
       System.gc()
       System.runFinalization()
       Thread.sleep(200)
-      if (System.currentTimeMillis - startTime > 10000) {
+      if (System.currentTimeMillis - startTime > 30000) {
         throw new Exception("automatically cleanup error")
       }
     }

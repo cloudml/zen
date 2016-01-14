@@ -24,16 +24,14 @@ import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.util._
 import org.apache.hadoop.fs.Path
 import org.apache.spark.graphx2._
-import org.apache.spark.graphx2.impl.{EdgeRDDImpl, GraphImpl, VertexRDDImpl}
+import org.apache.spark.graphx2.impl._
 import org.apache.spark.mllib.linalg.distributed.{MatrixEntry, RowMatrix}
 import org.apache.spark.mllib.linalg.{SparseVector => SSV, Vector => SV}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 
-import scala.language.existentials
 
-
-class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
+class LDA(@transient var edges: EdgeRDDImpl[TA, _],
   @transient var verts: VertexRDDImpl[TC],
   val numTopics: Int,
   val numTerms: Int,
@@ -80,9 +78,13 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, VD] forSome {type VD},
 
   def init(computedModel: Option[RDD[NwkPair]] = None): Unit = {
     val initPartRDD = edges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) => {
-      (pid, ep.withVertexAttributes(new Array[Int](ep.vertexAttrs.length)))
+      (pid, algo.initEdgePartition(ep))
     })), preservesPartitioning=true)
-    verts = algo.updateVertexCounters(edges.withPartitionsRDD(initPartRDD), verts)
+    val newEdges = edges.withPartitionsRDD(initPartRDD)
+    newEdges.persist(storageLevel).setName("edges-0")
+    edges = newEdges
+
+    verts = algo.updateVertexCounters(newEdges, verts)
     verts = computedModel match {
       case Some(cm) =>
         val ccm = compressCounterRDD(cm, numTopics)
@@ -232,7 +234,7 @@ object LDA {
     val lda = new LDA(edges, verts, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS,
       algo, storageLevel)
     lda.init()
-    verts.unpersist(blocking=false)
+    initCorpus.unpersist(blocking=false)
     lda
   }
 
@@ -315,49 +317,22 @@ object LDA {
     storageLevel: StorageLevel): EdgeRDD[TA] = {
     val conf = orgDocs.context.getConf
     val ignDid = conf.getBoolean(cs_ignoreDocId, false)
+    val partStrategy = conf.get(cs_partStrategy, "dbh")
+    val initStrategy = conf.get(cs_initStrategy, "random")
     val byDoc = algo.isByDoc
     val docs = docType match {
       case "raw" => convertRawDocs(orgDocs.asInstanceOf[RDD[String]], numTopics, ignDid, byDoc)
       case "bow" => convertBowDocs(orgDocs.asInstanceOf[RDD[BOW]], numTopics, ignDid, byDoc)
     }
-    val initCorpus: Graph[TC, TA] = LBVertexRDDBuilder.fromEdges(docs, storageLevel)
-    initCorpus.persist(storageLevel)
-    initCorpus.edges.setName("rawEdges").count()
-    val partCorpus = conf.get(cs_partStrategy, "dbh") match {
-      case "byterm" =>
-        println("partition corpus by terms.")
-        if (byDoc) {
-          EdgeDstPartitioner.partitionByEDP[TC, TA](initCorpus, storageLevel)
-        } else {
-          initCorpus.partitionBy(PartitionStrategy.EdgePartition1D)
-        }
-      case "bydoc" =>
-        println("partition corpus by docs.")
-        if (byDoc) {
-          initCorpus.partitionBy(PartitionStrategy.EdgePartition1D)
-        } else {
-          EdgeDstPartitioner.partitionByEDP[TC, TA](initCorpus, storageLevel)
-        }
-      case "edge2d" =>
-        println("using Edge2D partition strategy.")
-        initCorpus.partitionBy(PartitionStrategy.EdgePartition2D)
-      case "dbh" =>
-        println("using Degree-based Hashing partition strategy.")
-        DBHPartitioner.partitionByDBH[TC, TA](initCorpus, storageLevel)
-      case "vsdlp" =>
-        println("using Vertex-cut Stochastic Dynamic Label Propagation partition strategy.")
-        VSDLPPartitioner.partitionByVSDLP[TC, TA](initCorpus, 4, storageLevel)
-      case "bbr" =>
-        println("using Bounded & Balanced Rearranger partition strategy.")
-        BBRPartitioner.partitionByBBR[TC, TA](initCorpus, storageLevel)
-      case _ =>
-        throw new NoSuchMethodException("No this algorithm or not implemented.")
-    }
-    val reCorpus = resampleCorpus(partCorpus, numTopics, storageLevel)
-    val edges = reCorpus.edges
-    val numEdges = edges.persist(storageLevel).setName("edges-0").count()
-    println(s"edges in the corpus: $numEdges")
-    initCorpus.unpersist(blocking=false)
+    val graph: Graph[TC, TA] = LBVertexRDDBuilder.fromEdges(docs, storageLevel)
+    graph.persist(storageLevel)
+    graph.edges.setName("rawEdges").count()
+
+    val partCorpus = partitionCorpus(graph, partStrategy, byDoc, storageLevel)
+    val initCorpus = reinitCorpus(partCorpus, initStrategy, numTopics, storageLevel)
+    val edges = initCorpus.edges
+    val numEdges = edges.persist(storageLevel).count()
+    graph.unpersist(blocking=false)
     edges
   }
 
@@ -381,7 +356,11 @@ object LDA {
           val termId = pairs(0).toInt
           val termCnt = if (pairs.length > 1) pairs(1).toInt else 1
           if (termCnt > 0) {
-            Range(0, termCnt).map(_ => Edge(termId, genNewDocId(docId), gen.nextInt(numTopics)))
+            Range(0, termCnt).map(_ => if (byDoc) {
+              Edge(genNewDocId(docId), termId, gen.nextInt(numTopics))
+            } else {
+              Edge(termId, genNewDocId(docId), gen.nextInt(numTopics))
+            })
           } else {
             Iterator.empty
           }
@@ -405,42 +384,85 @@ object LDA {
           oDocId
         }
         tokens.activeIterator.filter(_._2 > 0).flatMap(Function.tupled((termId, termCnt) =>
-          Range(0, termCnt).map(_ => Edge(termId, genNewDocId(docId), gen.nextInt(numTopics)))
+          Range(0, termCnt).map(_ => if (byDoc) {
+            Edge(genNewDocId(docId), termId, gen.nextInt(numTopics))
+          } else {
+            Edge(termId, genNewDocId(docId), gen.nextInt(numTopics))
+          })
         ))
       }))
     })
   }
 
-  def resampleCorpus(corpus: Graph[TC, TA],
+  def partitionCorpus(corpus: Graph[TC, TA],
+    partStrategy: String,
+    byDoc: Boolean,
+    storageLevel: StorageLevel): Graph[TC, TA] = partStrategy match {
+    case "direct" =>
+      println("don't repartition, directly build graph.")
+      corpus
+    case "byterm" =>
+      println("partition corpus by terms.")
+      if (byDoc) {
+        EdgeDstPartitioner.partitionByEDP[TC, TA](corpus, storageLevel)
+      } else {
+        corpus.partitionBy(PartitionStrategy.EdgePartition1D)
+      }
+    case "bydoc" =>
+      println("partition corpus by docs.")
+      if (byDoc) {
+        corpus.partitionBy(PartitionStrategy.EdgePartition1D)
+      } else {
+        EdgeDstPartitioner.partitionByEDP[TC, TA](corpus, storageLevel)
+      }
+    case "edge2d" =>
+      println("using Edge2D partition strategy.")
+      corpus.partitionBy(PartitionStrategy.EdgePartition2D)
+    case "dbh" =>
+      println("using Degree-based Hashing partition strategy.")
+      DBHPartitioner.partitionByDBH[TC, TA](corpus, storageLevel)
+    case "vsdlp" =>
+      println("using Vertex-cut Stochastic Dynamic Label Propagation partition strategy.")
+      VSDLPPartitioner.partitionByVSDLP[TC, TA](corpus, 4, storageLevel)
+    case "bbr" =>
+      println("using Bounded & Balanced Rearranger partition strategy.")
+      BBRPartitioner.partitionByBBR[TC, TA](corpus, storageLevel)
+    case _ =>
+      throw new NoSuchMethodException("No this algorithm or not implemented.")
+  }
+
+  def reinitCorpus(corpus: Graph[TC, TA],
+    initStrategy: String,
     numTopics: Int,
-    storageLevel: StorageLevel): Graph[TC, TA] = {
-    val conf = corpus.edges.context.getConf
-    conf.get(cs_initStrategy, "random") match {
-      case "sparse" =>
-        corpus.persist(storageLevel)
-        val gen = new XORShiftRandom()
-        val tMin = math.min(1000, numTopics / 100)
-        val degGraph = GraphImpl(corpus.degrees, corpus.edges)
-        val reSampledGraph = degGraph.mapVertices((vid, deg) => {
-          if (isTermId(vid) && deg > tMin) {
-            Array.fill(tMin)(gen.nextInt(numTopics))
+    storageLevel: StorageLevel): Graph[TC, TA] = initStrategy match {
+    case "random" =>
+      println("fully randomized initialization.")
+      corpus
+    case "sparse" =>
+      println("sparsely init on terms.")
+      corpus.persist(storageLevel)
+      val gen = new XORShiftRandom()
+      val tMin = math.min(1000, numTopics / 100)
+      val degGraph = GraphImpl(corpus.degrees, corpus.edges)
+      val reSampledGraph = degGraph.mapVertices((vid, deg) => {
+        if (isTermId(vid) && deg > tMin) {
+          Array.fill(tMin)(gen.nextInt(numTopics))
+        } else {
+          null
+        }
+      }).mapTriplets((pid, iter) => {
+        val gen = new XORShiftRandom(pid + 223)
+        iter.map(triplet => {
+          val wc = triplet.srcAttr
+          if (wc == null) {
+            triplet.attr
           } else {
-            null
+            wc(gen.nextInt(wc.length))
           }
-        }).mapTriplets((pid, iter) => {
-          val gen = new XORShiftRandom(pid + 223)
-          iter.map(triplet => {
-            val wc = triplet.srcAttr
-            if (wc == null) {
-              triplet.attr
-            } else {
-              wc(gen.nextInt(wc.length))
-            }
-          })
-        }, TripletFields.Src)
-        GraphImpl(corpus.vertices, reSampledGraph.edges)
-      case _ =>
-        corpus
-    }
+        })
+      }, TripletFields.Src)
+      GraphImpl(corpus.vertices, reSampledGraph.edges)
+    case _ =>
+      throw new NoSuchMethodException("No this algorithm or not implemented.")
   }
 }

@@ -33,6 +33,27 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
   extends LDATrainer(numTopics, numThreads) {
   override def isByDoc: Boolean = false
 
+  override def initEdgePartition(ep: EdgePartition[TA, _]): EdgePartition[TA, Int] = {
+    val totalSize = ep.size
+    val srcSize = ep.indexSize
+    val lcSrcIds = ep.localSrcIds
+    val zeros = new Array[Int](ep.vertexAttrs.length)
+    val newLcSrcIds = new Array[Int](srcSize << 1)  // two elements for each term: lcSrcId & endPos
+    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
+      val si = lcSrcIds(startPos)
+      val lsi = ii << 1
+      var pos = startPos
+      while (pos < totalSize && lcSrcIds(pos) == si) {
+        pos += 1
+      }
+      newLcSrcIds(lsi) = si
+      newLcSrcIds(lsi + 1) = pos
+    }}
+    Await.ready(all, 1.hour)
+    new EdgePartition(newLcSrcIds, ep.localDstIds, ep.data, ep.index, ep.global2local, ep.local2global, zeros, None)
+  }
+
   override def countPartition(ep: EdgePartition[TA, Int]): Iterator[NvkPair] = {
     val totalSize = ep.size
     val lcSrcIds = ep.localSrcIds
@@ -45,16 +66,18 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     val marks = new AtomicIntegerArray(vertSize)
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
-      val si = lcSrcIds(offset)
+    val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
+      val lsi = ii << 1
+      val si = lcSrcIds(lsi)
+      val endPos = lcSrcIds(lsi + 1)
       var termTuple = results(si)
       if (termTuple == null) {
         termTuple = (l2g(si), BSV.zeros[Count](numTopics))
         results(si) = termTuple
       }
       var termTopics = termTuple._2
-      var pos = offset
-      while (pos < totalSize && lcSrcIds(pos) == si) {
+      var pos = startPos
+      while (pos < endPos) {
         val di = lcDstIds(pos)
         var docTuple = results(di)
         if (docTuple == null) {
@@ -84,7 +107,7 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
         }
         pos += 1
       }
-    }))
+    }}
     Await.ready(all, 1.hour)
     es.shutdown()
     results.iterator
@@ -119,8 +142,10 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     @volatile var dllhs = 0D
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
-      val si = lcSrcIds(offset)
+    val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
+      val lsi = ii << 1
+      val si = lcSrcIds(lsi)
+      val endPos = lcSrcIds(lsi + 1)
       val termTopics = vattrs(si)
       val waSparseSum = sum_waSparse(alphak_denoms, termTopics)
       val sum12 = abDenseSum + waSparseSum
@@ -128,8 +153,8 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
       var llhs_th = 0D
       var wllhs_th = 0D
       var dllhs_th = 0D
-      var pos = offset
-      while (pos < totalSize && lcSrcIds(pos) == si) {
+      var pos = startPos
+      while (pos < endPos) {
         val di = lcDstIds(pos)
         val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
         if (marks.get(di) == 0) {
@@ -148,7 +173,7 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
       llhs += llhs_th
       wllhs += wllhs_th
       dllhs += dllhs_th
-    }))
+    }}
     Await.ready(all, 2.hour)
     es.shutdown()
     (llhs, wllhs, dllhs)

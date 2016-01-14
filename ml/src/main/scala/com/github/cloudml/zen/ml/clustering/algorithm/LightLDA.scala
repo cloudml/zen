@@ -67,7 +67,7 @@ class LightLDA(numTopics: Int, numThreads: Int)
     val wPFun = wordProb(topicCounters, numTerms, beta)_
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+    val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
       val thid = thq.poll()
       var gen = gens(thid)
       if (gen == null) {
@@ -77,11 +77,14 @@ class LightLDA(numTopics: Int, numThreads: Int)
         termDists(thid).reset(numTopics)
       }
       val termDist = termDists(thid)
-      val si = lcSrcIds(offset)
+
+      val lsi = ii << 1
+      val si = lcSrcIds(lsi)
+      val endPos = lcSrcIds(lsi + 1)
       val termTopics = vattrs(si)
       resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
-      var pos = offset
-      while (pos < totalSize && lcSrcIds(pos) == si) {
+      var pos = startPos
+      while (pos < endPos) {
         val di = lcDstIds(pos)
         val docTopics = vattrs(di).asInstanceOf[Ndk]
         if (gen.nextDouble() < 1e-6) {
@@ -136,7 +139,7 @@ class LightLDA(numTopics: Int, numThreads: Int)
         pos += 1
       }
       thq.add(thid)
-    }))
+    }}
     Await.ready(all, 2.hour)
     es.shutdown()
     ep.withoutVertexAttributes()

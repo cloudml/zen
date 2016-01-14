@@ -132,7 +132,7 @@ object LDADriver {
     alphaAS: Double,
     algo: LDATrainer,
     storageLevel: StorageLevel): Double = {
-    SparkHacker.gcCleaner(15 * 60, 15 * 60, "LDA_gcCleaner")
+    SparkHacker.gcCleaner(30 * 60, 30 * 60, "LDA_gcCleaner")
     val trainingStartedTime = System.nanoTime()
     val termModel = LDA.train(docs, totalIter, numTopics, alpha, beta, alphaAS, algo, storageLevel)
     val trainingEndedTime = System.nanoTime()
@@ -149,9 +149,8 @@ object LDADriver {
     val numTopics = conf.get(cs_numTopics).toInt
     val numPartitions = conf.get(cs_numPartitions).toInt
     val sr = conf.get(cs_sampleRate).toDouble
-    val rawDocs = sc.textFile(inputPath, numPartitions)
-    val sampledDocs = if (sr < 1.0) rawDocs.sample(false, sr) else rawDocs
-    LDA.initializeCorpusEdges(sampledDocs, "raw", numTopics, algo, storageLevel)
+    val rawDocs = sc.textFile(inputPath, numPartitions).sample(false, sr)
+    LDA.initializeCorpusEdges(rawDocs, "raw", numTopics, algo, storageLevel)
   }
 
   def parseArgs(args: Array[String]): OptionMap = {
@@ -163,7 +162,7 @@ object LDADriver {
       "           -LDAAlgorithm=<*ZenLDA|LightLDA|SparseLDA>\n" +
       "           -accelMethod=<*Alias|FTree|Hybrid>\n" +
       "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK)>\n" +
-      "           -partStrategy=<byTerm|byDoc|Edge2D|*DBH|VSDLP|BBR>\n" +
+      "           -partStrategy=<Direct|ByTerm|ByDoc|Edge2D|*DBH|VSDLP|BBR>\n" +
       "           -initStrategy=<*Random|Sparse|Split>\n" +
       "           -chkptInterval=<Int(*10)> (0 or negative disables checkpoint)\n" +
       "           -calcPerplexity=<true|*false>\n" +

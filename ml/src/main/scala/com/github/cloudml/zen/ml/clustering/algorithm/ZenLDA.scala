@@ -69,7 +69,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     resetDist_abDense(global, alphak_denoms, beta)
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+    val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
       val thid = thq.poll()
       var gen = gens(thid)
       if (gen == null) {
@@ -84,7 +84,11 @@ class ZenLDA(numTopics: Int, numThreads: Int)
         cdfDists(thid).reset(numTopics)
       }
       val termDist = termDists(thid)
-      val si = lcSrcIds(offset)
+      val cdfDist = cdfDists(thid)
+
+      val lsi = ii << 1
+      val si = lcSrcIds(lsi)
+      val endPos = lcSrcIds(lsi + 1)
       val termTopics = vattrs(si)
       activeLens(si) = termTopics.activeSize
       resetDist_waSparse(termDist, alphak_denoms, termTopics)
@@ -93,9 +97,8 @@ class ZenLDA(numTopics: Int, numThreads: Int)
         case v: BSV[Count] => toBDV(v)
       }
       val termBeta_denoms = calc_termBeta_denoms(denoms, beta_denoms, termTopics)
-      val cdfDist = cdfDists(thid)
-      var pos = offset
-      while (pos < totalSize && lcSrcIds(pos) == si) {
+      var pos = startPos
+      while (pos < endPos) {
         val di = lcDstIds(pos)
         val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
         val topic = data(pos)
@@ -104,7 +107,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
         pos += 1
       }
       thq.add(thid)
-    }))
+    }}
     Await.ready(all, 2.hour)
     es.shutdown()
     ep.withVertexAttributes(activeLens)
