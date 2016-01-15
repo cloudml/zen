@@ -89,6 +89,9 @@ class ZenLDA(numTopics: Int, numThreads: Int)
       val lsi = ii << 1
       val si = lcSrcIds(lsi)
       val endPos = lcSrcIds(lsi + 1)
+      // val numSrcEdges = endPos - startPos
+      // val dlgPos = startPos + gen.nextInt(math.min(numSrcEdges, 32))
+      // val common = numSrcEdges * vattrs(lcDstIds(dlgPos)).activeSize >= dscp
       val termTopics = vattrs(si)
       activeLens(si) = termTopics.activeSize
       resetDist_waSparse(termDist, alphak_denoms, termTopics)
@@ -96,15 +99,27 @@ class ZenLDA(numTopics: Int, numThreads: Int)
         case v: BDV[Count] => v
         case v: BSV[Count] => toBDV(v)
       }
-      val termBeta_denoms = calc_termBeta_denoms(denoms, beta_denoms, termTopics)
-      var pos = startPos
-      while (pos < endPos) {
-        val di = lcDstIds(pos)
-        val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
-        val topic = data(pos)
-        resetDist_dwbSparse_withAdjust(cdfDist, denoms, termBeta_denoms, docTopics, topic)
-        data(pos) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
-        pos += 1
+      if (true) {
+        val termBeta_denoms = calc_termBeta_denoms(denoms, beta_denoms, termTopics)
+        var pos = startPos
+        while (pos < endPos) {
+          val di = lcDstIds(pos)
+          val docTopics = vattrs(di).asInstanceOf[Ndk]
+          val topic = data(pos)
+          resetDist_dwbSparse_withAdjust(cdfDist, denoms, termBeta_denoms, docTopics, topic)
+          data(pos) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
+          pos += 1
+        }
+      } else {
+        var pos = startPos
+        while (pos < endPos) {
+          val di = lcDstIds(pos)
+          val docTopics = vattrs(di).asInstanceOf[Ndk]
+          val topic = data(pos)
+          resetDist_dwbSparse_withAdjust(cdfDist, denoms, beta_denoms, denseTermTopics, docTopics, topic)
+          data(pos) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
+          pos += 1
+        }
       }
       thq.add(thid)
     }}
@@ -117,7 +132,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     ab: DiscreteSampler[Double],
     wa: DiscreteSampler[Double],
     dwb: CumulativeDist[Double],
-    termTopics: BDV[Count],
+    denseTermTopics: BDV[Count],
     topic: Int): Int = {
     val dwbSum = dwb.norm
     val sum23 = dwbSum + wa.norm
@@ -127,7 +142,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
       dwb.sampleFrom(genSum, gen)
     } else if (genSum < sum23) wa match {
       case wt: AliasTable[Double] =>
-        val rr = 1.0 / termTopics(topic)
+        val rr = 1.0 / denseTermTopics(topic)
         wt.resampleFrom(genSum - dwbSum, gen, topic, rr)
       case wf: FTree[Double] => wf.sampleFrom(genSum - dwbSum, gen)
     } else {
@@ -139,7 +154,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     ab: DiscreteSampler[Double],
     wa: DiscreteSampler[Double],
     dwb: CumulativeDist[Double],
-    termTopics: BDV[Count],
+    denseTermTopics: BDV[Count],
     docTopics: Ndk,
     topic: Int,
     beta: Double): Int = {
@@ -149,12 +164,12 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     val genSum = gen.nextDouble() * distSum
     if (genSum < dwbSum) {
       val nkd = docTopics(topic)
-      val nkw_beta = termTopics(topic) + beta
+      val nkw_beta = denseTermTopics(topic) + beta
       val rr = 1.0 / nkd + 1.0 / nkw_beta - 1.0 / nkd / nkw_beta
       dwb.resampleFrom(genSum, gen, topic, rr)
     } else if (genSum < sum23) wa match {
       case wt: AliasTable[Double] =>
-        val rr = 1.0 / termTopics(topic)
+        val rr = 1.0 / denseTermTopics(topic)
         wt.resampleFrom(genSum - dwbSum, gen, topic, rr)
       case wf: FTree[Double] => wf.sampleFrom(genSum - dwbSum, gen)
     } else {

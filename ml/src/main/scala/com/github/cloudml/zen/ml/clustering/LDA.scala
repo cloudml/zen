@@ -331,7 +331,7 @@ object LDA {
     val partCorpus = partitionCorpus(graph, partStrategy, byDoc, storageLevel)
     val initCorpus = reinitCorpus(partCorpus, initStrategy, numTopics, storageLevel)
     val edges = initCorpus.edges
-    val numEdges = edges.persist(storageLevel).count()
+    edges.persist(storageLevel).count()
     graph.unpersist(blocking=false)
     edges
   }
