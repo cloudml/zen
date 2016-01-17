@@ -100,7 +100,7 @@ abstract class LDAAlgorithm(numTopics: Int,
     // Below identical map is used to isolate the impact of locality of CheckpointRDD
     val isoRDD = verts.partitionsRDD.mapPartitions(_.seq, preservesPartitioning=true)
     val partRDD = isoRDD.zipPartitions(shippedCounters, preservesPartitioning=true)(
-      (vpIter, cntsIter) => vpIter.map(vp => aggregateCounters(vp, cntsIter))
+      (vpIter, cntsIter) => vpIter.map(aggregateCounters(_, cntsIter))
     )
     verts.withPartitionsRDD(partRDD)
   }

@@ -18,15 +18,16 @@
 package com.github.cloudml.zen.ml.clustering.algorithm
 
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicIntegerArray
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, convert, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
 import org.apache.spark.graphx2.impl.EdgePartition
 
+import scala.collection.parallel.ForkJoinTaskSupport
 import scala.concurrent._
 import scala.concurrent.duration._
+import scala.concurrent.forkjoin.ForkJoinPool
 
 
 abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
@@ -59,49 +60,34 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     val lcSrcIds = ep.localSrcIds
     val lcDstIds = ep.localDstIds
     val l2g = ep.local2global
-    val activeLens = ep.vertexAttrs
+    val useds = ep.vertexAttrs
     val data = ep.data
-    val vertSize = activeLens.length
-    val results = new Array[NvkPair](vertSize)
-    val marks = new AtomicIntegerArray(vertSize)
+    val vertSize = useds.length
+    val results = new Array[Nvk](vertSize)
+
+    val lel = Range(0, vertSize).par
+    val fjp = new ForkJoinPool(numThreads)
+    lel.tasksupport = new ForkJoinTaskSupport(fjp)
+    lel.foreach { i =>
+      val used = useds(i)
+      results(i) = if (used >= dscp) {
+        BDV.zeros[Count](numTopics)
+      } else {
+        val len = math.min(used >>> 1, 2)
+        new BSV(new Array[Int](len), new Array[Count](len), 0, numTopics)
+      }
+    }
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
     val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
       val lsi = ii << 1
-      val si = lcSrcIds(lsi)
       val endPos = lcSrcIds(lsi + 1)
-      var termTuple = results(si)
-      if (termTuple == null) {
-        termTuple = (l2g(si), BSV.zeros[Count](numTopics))
-        results(si) = termTuple
-      }
-      var termTopics = termTuple._2
+      val termTopics = results(lcSrcIds(lsi))
       var pos = startPos
       while (pos < endPos) {
-        val di = lcDstIds(pos)
-        var docTuple = results(di)
-        if (docTuple == null) {
-          if (marks.getAndDecrement(di) == 0) {
-            docTuple = (l2g(di), BSV.zeros[Count](numTopics))
-            results(di) = docTuple
-            marks.set(di, Int.MaxValue)
-          } else {
-            while (marks.get(di) <= 0) {}
-            docTuple = results(di)
-          }
-        }
-        val docTopics = docTuple._2
+        val docTopics = results(lcDstIds(pos))
         val topic = data(pos)
-        termTopics match {
-          case v: BDV[Count] => v(topic) += 1
-          case v: BSV[Count] =>
-            v(topic) += 1
-            if (v.activeSize >= dscp) {
-              termTuple = (l2g(si), toBDV(v))
-              results(si) = termTuple
-              termTopics = termTuple._2
-            }
-        }
+        termTopics(topic) += 1
         docTopics.synchronized {
           docTopics(topic) += 1
         }
@@ -110,7 +96,19 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     }}
     Await.ready(all, 1.hour)
     es.shutdown()
-    results.iterator
+
+    val pairs = new Array[NvkPair](vertSize)
+    lel.foreach { i =>
+      val counter = results(i) match {
+        case v: BSV[Count] => v
+        case v: BDV[Count] =>
+          val used = v.data.count(_ > 0)
+          if (used >= dscp) v else toBSV(v, used)
+      }
+      pairs(i) = (l2g(i), counter)
+    }
+    fjp.shutdown()
+    pairs.iterator
   }
 
   override def perplexPartition(topicCounters: BDV[Count],

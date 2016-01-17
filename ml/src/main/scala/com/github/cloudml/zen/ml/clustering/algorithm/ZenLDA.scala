@@ -54,7 +54,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     val lcDstIds = ep.localDstIds
     val vattrs = ep.vertexAttrs
     val data = ep.data
-    val activeLens = new Array[Int](vattrs.length)
+    val useds = new Array[Int](vattrs.length)
     val thq = new ConcurrentLinkedQueue(0 until numThreads)
     // table/ftree is a per term data structure
     // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
@@ -89,17 +89,17 @@ class ZenLDA(numTopics: Int, numThreads: Int)
       val lsi = ii << 1
       val si = lcSrcIds(lsi)
       val endPos = lcSrcIds(lsi + 1)
-      // val numSrcEdges = endPos - startPos
-      // val dlgPos = startPos + gen.nextInt(math.min(numSrcEdges, 32))
-      // val common = numSrcEdges * vattrs(lcDstIds(dlgPos)).activeSize >= dscp
+      val numSrcEdges = endPos - startPos
+      val dlgPos = startPos + gen.nextInt(math.min(numSrcEdges, 32))
+      val common = numSrcEdges * vattrs(lcDstIds(dlgPos)).activeSize >= dscp
       val termTopics = vattrs(si)
-      activeLens(si) = termTopics.activeSize
+      useds(si) = termTopics.activeSize
       resetDist_waSparse(termDist, alphak_denoms, termTopics)
       val denseTermTopics = termTopics match {
         case v: BDV[Count] => v
         case v: BSV[Count] => toBDV(v)
       }
-      if (true) {
+      if (common) {
         val termBeta_denoms = calc_termBeta_denoms(denoms, beta_denoms, termTopics)
         var pos = startPos
         while (pos < endPos) {
@@ -125,7 +125,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     }}
     Await.ready(all, 2.hour)
     es.shutdown()
-    ep.withVertexAttributes(activeLens)
+    ep.withVertexAttributes(useds)
   }
 
   def tokenSampling(gen: Random,

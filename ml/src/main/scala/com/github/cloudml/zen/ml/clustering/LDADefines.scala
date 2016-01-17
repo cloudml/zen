@@ -21,14 +21,11 @@ import java.util.Random
 
 import breeze.collection.mutable.SparseArray
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
-import breeze.storage.Zero
 import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util.{BVCompressor, BVDecompressor, CompressedVector}
 import org.apache.spark.SparkConf
 import org.apache.spark.graphx2._
 import org.apache.spark.rdd.RDD
-
-import scala.reflect.ClassTag
 
 
 object LDADefines {
@@ -119,8 +116,8 @@ object LDADefines {
     ))
   }
 
-  def toBDV[@specialized(Int, Double, Float) V: ClassTag: Zero](bsv: BSV[V]): BDV[V] = {
-    val bdv = BDV.zeros[V](bsv.length)
+  def toBDV(bsv: BSV[Count]): BDV[Count] = {
+    val bdv = BDV.zeros[Count](bsv.length)
     val used = bsv.used
     val index = bsv.index
     val data = bsv.data
@@ -130,5 +127,23 @@ object LDADefines {
       i += 1
     }
     bdv
+  }
+
+  def toBSV(bdv: BDV[Count], used: Int): BSV[Count] = {
+    val index = new Array[Int](used)
+    val data = new Array[Count](used)
+    val arr = bdv.data
+    var i = 0
+    var j = 0
+    while (i < used) {
+      val cnt = arr(j)
+      if (cnt > 0) {
+        index(i) = j
+        data(i) = cnt
+        i += 1
+      }
+      j += 1
+    }
+    new BSV(index, data, used, bdv.length)
   }
 }

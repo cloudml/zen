@@ -20,7 +20,7 @@ package com.github.cloudml.zen.ml.clustering.algorithm
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicIntegerArray
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util.BVCompressor
