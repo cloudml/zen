@@ -19,9 +19,10 @@ package com.github.cloudml.zen.ml.clustering.algorithm
 
 import java.util.concurrent.Executors
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, convert, sum}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, convert, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
+import com.github.cloudml.zen.ml.util.BVCompressor
 import org.apache.spark.graphx2.impl.EdgePartition
 
 import scala.concurrent._
@@ -32,26 +33,41 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
   extends LDATrainer(numTopics: Int, numThreads: Int) {
   override def isByDoc: Boolean = true
 
-  override def countPartition(ep: EdgePartition[TA, Int]): Iterator[NvkPair] = {
+  override def countPartition(ep: EdgePartition[TA, Int]): Iterator[CVPair] = {
     val totalSize = ep.size
     val lcSrcIds = ep.localSrcIds
     val lcDstIds = ep.localDstIds
     val l2g = ep.local2global
-    val vattrs = ep.vertexAttrs
+    val useds = ep.vertexAttrs
     val data = ep.data
-    val vertSize = vattrs.length
-    val results = Array.tabulate(vertSize)(vi => (l2g(vi), BSV.zeros[Count](numTopics)))
+    val vertSize = useds.length
+    val results = new Array[Nvk](vertSize)
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    val all0 = Range(0, numThreads).map { thid => Future {
+      var i = thid
+      while (i < vertSize) {
+        val used = useds(i)
+        results(i) = if (used >= dscp) {
+          BDV.zeros[Count](numTopics)
+        } else {
+          val len = math.min(used >>> 1, 2)
+          new BSV(new Array[Int](len), new Array[Count](len), 0, numTopics)
+        }
+        i += numThreads
+      }
+    }}
+    Await.ready(Future.sequence(all0), 1.hour)
+
     val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
       val si = lcSrcIds(offset)
-      val docTopics = results(si)._2
+      val docTopics = results(si)
       var pos = offset
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
         val topic = data(pos)
         docTopics(topic) += 1
-        val termTopics = results(di)._2
+        val termTopics = results(di)
         termTopics.synchronized {
           termTopics(topic) += 1
         }
@@ -59,8 +75,28 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
       }
     }))
     Await.ready(all, 1.hour)
+
+    val pairs = new Array[CVPair](vertSize)
+    val all2 = Range(0, numThreads).map { thid => Future {
+      val comp = new BVCompressor(numTopics)
+      var i = thid
+      while (i < vertSize) {
+        val vid = l2g(i)
+        var counter = results(i)
+        if (isTermId(vid)) counter match {
+          case v: BDV[Count] =>
+            val used = v.data.count(_ > 0)
+            if (used < dscp) {
+              counter = toBSV(v, used)
+            }
+        }
+        pairs(i) = (vid, comp.BV2CV(counter))
+        i += numThreads
+      }
+    }}
+    Await.ready(Future.sequence(all2), 1.hour)
     es.shutdown()
-    results.iterator
+    pairs.iterator
   }
 
   override def perplexPartition(topicCounters: BDV[Count],

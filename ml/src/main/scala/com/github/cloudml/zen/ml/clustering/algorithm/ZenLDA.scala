@@ -105,6 +105,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
         while (pos < endPos) {
           val di = lcDstIds(pos)
           val docTopics = vattrs(di).asInstanceOf[Ndk]
+          useds(di) = docTopics.activeSize
           val topic = data(pos)
           resetDist_dwbSparse_withAdjust(cdfDist, denoms, termBeta_denoms, docTopics, topic)
           data(pos) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
@@ -115,6 +116,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
         while (pos < endPos) {
           val di = lcDstIds(pos)
           val docTopics = vattrs(di).asInstanceOf[Ndk]
+          useds(di) = docTopics.activeSize
           val topic = data(pos)
           resetDist_dwbSparse_withAdjust(cdfDist, denoms, beta_denoms, denseTermTopics, docTopics, topic)
           data(pos) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)

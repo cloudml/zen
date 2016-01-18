@@ -51,6 +51,7 @@ class SparseLDA(numTopics: Int, numThreads: Int)
     val lcDstIds = ep.localDstIds
     val vattrs = ep.vertexAttrs
     val data = ep.data
+    val useds = new Array[Int](vattrs.length)
     val thq = new ConcurrentLinkedQueue(0 until numThreads)
     val gens = new Array[XORShiftRandom](numThreads)
     val docDists = new Array[FlatDist[Double]](numThreads)
@@ -75,6 +76,7 @@ class SparseLDA(numTopics: Int, numThreads: Int)
       val docDist = docDists(thid)
       val si = lcSrcIds(offset)
       val docTopics = vattrs(si).asInstanceOf[BSV[Count]]
+      useds(si) = docTopics.activeSize
       val nkd_denoms = calc_nkd_denoms(denoms, docTopics)
       resetDist_dbSparse(docDist, nkd_denoms, beta)
       val docAlphaK_denoms = calc_docAlphaK_denoms(alphak_denoms, nkd_denoms)
@@ -83,6 +85,7 @@ class SparseLDA(numTopics: Int, numThreads: Int)
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
         val termTopics = vattrs(di)
+        useds(di) = termTopics.activeSize
         resetDist_wdaSparse(mainDist, docAlphaK_denoms, termTopics)
         val topic = data(pos)
         data(pos) = tokenSampling(gen, global, docDist, mainDist)
@@ -92,7 +95,7 @@ class SparseLDA(numTopics: Int, numThreads: Int)
     }))
     Await.ready(all, 2.hour)
     es.shutdown()
-    ep.withoutVertexAttributes()
+    ep.withVertexAttributes(useds)
   }
 
   def tokenSampling(gen: Random,
