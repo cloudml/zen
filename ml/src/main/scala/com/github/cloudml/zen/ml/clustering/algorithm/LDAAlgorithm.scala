@@ -49,9 +49,9 @@ abstract class LDAAlgorithm(numTopics: Int,
     beta: Double)
     (pid: Int, ep: EdgePartition[TA, Nvk]): EdgePartition[TA, Int]
 
-  def countPartition(ep: EdgePartition[TA, Int]): Iterator[CVPair]
+  def countPartition(ep: EdgePartition[TA, Int]): Iterator[NvkPair]
 
-  def aggregateCounters(vp: VertPartition[TC], cntsIter: Iterator[CVPair]): VertPartition[TC]
+  def aggregateCounters(vp: VertPartition[TC], cntsIter: Iterator[NvkPair]): VertPartition[TC]
 
   def perplexPartition(topicCounters: BDV[Count],
     numTokens: Long,

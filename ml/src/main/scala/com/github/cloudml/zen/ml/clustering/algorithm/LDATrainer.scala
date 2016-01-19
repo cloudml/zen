@@ -17,39 +17,32 @@
 
 package com.github.cloudml.zen.ml.clustering.algorithm
 
-import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicIntegerArray
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
-import com.github.cloudml.zen.ml.util.{BVDecompressor, BVCompressor}
+import com.github.cloudml.zen.ml.util.BVCompressor
 import org.apache.spark.graphx2.impl.{ShippableVertexPartition => VertPartition}
 
-import scala.collection.JavaConversions._
 import scala.concurrent._
 import scala.concurrent.duration._
 
 
 abstract class LDATrainer(numTopics: Int, numThreads: Int)
   extends LDAAlgorithm(numTopics, numThreads) {
-  def aggregateCounters(vp: VertPartition[TC], cntsIter: Iterator[CVPair]): VertPartition[TC] = {
+  def aggregateCounters(vp: VertPartition[TC], cntsIter: Iterator[NvkPair]): VertPartition[TC] = {
     val totalSize = vp.capacity
     val index = vp.index
     val mask = vp.mask
     val values = vp.values
     val results = new Array[Nvk](totalSize)
     val marks = new AtomicIntegerArray(totalSize)
-    val thq = new ConcurrentLinkedQueue(0 until numThreads)
-    val decomps = Array.fill(numThreads)(new BVDecompressor(numTopics))
-
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-    val all = cntsIter.grouped(numThreads * 5).map { batch => Future {
-      val thid = thq.poll()
-      val decomp = decomps(thid)
-      batch.foreach { case (vid, cv) =>
+    val all = cntsIter.grouped(numThreads * 5).map(batch => Future {
+      batch.foreach(Function.tupled((vid, counter) => {
         val i = index.getPos(vid)
-        val counter = decomp.CV2BV(cv)
         if (marks.getAndDecrement(i) == 0) {
           results(i) = counter
         } else {
@@ -71,9 +64,8 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
           }
         }
         marks.set(i, Int.MaxValue)
-      }
-      thq.add(thid)
-    }}
+      }))
+    })
     Await.ready(Future.sequence(all), 1.hour)
 
     // compress counters

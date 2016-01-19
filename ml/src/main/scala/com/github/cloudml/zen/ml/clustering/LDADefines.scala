@@ -40,7 +40,6 @@ object LDADefines {
   type Nvk = BV[Count]
   type NwkPair = (VertexId, Nwk)
   type NvkPair = (VertexId, Nvk)
-  type CVPair = (VertexId, TC)
 
   val sv_formatVersionV2_0 = "2.0"
   val sv_classNameV2_0 = "com.github.cloudml.zen.ml.clustering.DistributedLDAModel"

@@ -53,7 +53,6 @@ class LightLDA(numTopics: Int, numThreads: Int)
     val vattrs = ep.vertexAttrs
     val data = ep.data
     val vertSize = vattrs.length
-    val useds = new Array[Int](vertSize)
     val thq = new ConcurrentLinkedQueue(0 until numThreads)
 
     val alphaDist = new AliasTable[Double]
@@ -83,13 +82,11 @@ class LightLDA(numTopics: Int, numThreads: Int)
       val si = lcSrcIds(lsi)
       val endPos = lcSrcIds(lsi + 1)
       val termTopics = vattrs(si)
-      useds(si) = termTopics.activeSize
       resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
       var pos = startPos
       while (pos < endPos) {
         val di = lcDstIds(pos)
         val docTopics = vattrs(di).asInstanceOf[Ndk]
-        useds(di) = docTopics.activeSize
         if (gen.nextDouble() < 1e-6) {
           resetDist_aDense(alphaDist, topicCounters, numTopics, alphaRatio, alphaAS)
           resetDist_bDense(betaDist, topicCounters, numTopics, beta, betaSum)
@@ -145,7 +142,7 @@ class LightLDA(numTopics: Int, numThreads: Int)
     }}
     Await.ready(all, 2.hour)
     es.shutdown()
-    ep.withVertexAttributes(useds)
+    ep.withoutVertexAttributes()
   }
 
   /**

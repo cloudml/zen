@@ -24,7 +24,7 @@ import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, convert, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler.{AliasTable, CumulativeDist, DiscreteSampler, FTree}
-import com.github.cloudml.zen.ml.util.{BVDecompressor, BVCompressor, XORShiftRandom}
+import com.github.cloudml.zen.ml.util.{BVCompressor, XORShiftRandom}
 import org.apache.spark.graphx2.impl.{EdgePartition, ShippableVertexPartition => VertPartition}
 
 import scala.collection.JavaConversions._
@@ -162,7 +162,7 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
     }
   }
 
-  override def countPartition(ep: EdgePartition[TA, Int]): Iterator[CVPair] = {
+  override def countPartition(ep: EdgePartition[TA, Int]): Iterator[NvkPair] = {
     val totalSize = ep.size
     val lcSrcIds = ep.localSrcIds
     val lcDstIds = ep.localDstIds
@@ -170,7 +170,7 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
     val vattrs = ep.vertexAttrs
     val data = ep.data
     val vertSize = vattrs.length
-    val results = new Array[Nvk](vertSize)
+    val results = new Array[NvkPair](vertSize)
     val marks = new AtomicIntegerArray(vertSize)
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
@@ -179,17 +179,18 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
       var pos = offset
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
-        var docTopics = results(di)
-        if (docTopics == null) {
+        var docTuple = results(di)
+        if (docTuple == null) {
           if (marks.getAndDecrement(di) == 0) {
-            docTopics = BSV.zeros[Count](numTopics)
-            results(di) = docTopics
+            docTuple = (l2g(di), BSV.zeros[Count](numTopics))
+            results(di) = docTuple
             marks.set(di, Int.MaxValue)
           } else {
             while (marks.get(di) <= 0) {}
-            docTopics = results(di)
+            docTuple = results(di)
           }
         }
+        val docTopics = docTuple._2
         val topic = data(pos)
         docTopics.synchronized {
           docTopics(topic) += 1
@@ -198,19 +199,8 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
       }
     }))
     Await.ready(all, 1.hour)
-
-    val pairs = new Array[CVPair](vertSize)
-    val all2 = Range(0, numThreads).map { thid => Future {
-      val comp = new BVCompressor(numTopics)
-      var i = thid
-      while (i < vertSize) {
-        pairs(i) = (l2g(i), comp.BV2CV(results(i)))
-        i += numThreads
-      }
-    }}
-    Await.ready(Future.sequence(all2), 1.hour)
     es.shutdown()
-    pairs.iterator.filter(_ != null)
+    results.iterator.filter(_ != null)
   }
 
   override def perplexPartition(topicCounters: BDV[Count],
@@ -278,24 +268,19 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
   }
 
   override def aggregateCounters(vp: VertPartition[TC],
-    cntsIter: Iterator[CVPair]): VertPartition[TC] = {
+    cntsIter: Iterator[NvkPair]): VertPartition[TC] = {
     val totalSize = vp.capacity
     val index = vp.index
     val mask = vp.mask
     val values = vp.values
     val results = new Array[BSV[Count]](totalSize)
     val marks = new AtomicIntegerArray(totalSize)
-    val thq = new ConcurrentLinkedQueue(0 until numThreads)
-    val decomps = Array.fill(numThreads)(new BVDecompressor(numTopics))
-
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
     val all = cntsIter.grouped(numThreads * 5).map(batch => Future {
-      val thid = thq.poll()
-      val decomp = decomps(thid)
-      batch.foreach(Function.tupled((vid, cv) => {
+      batch.foreach(Function.tupled((vid, counter) => {
         assert(isDocId(vid))
+        val bsv = counter.asInstanceOf[BSV[Count]]
         val i = index.getPos(vid)
-        val bsv = decomp.CV2BV(cv).asInstanceOf[BSV[Count]]
         if (marks.getAndDecrement(i) == 0) {
           results(i) = bsv
         } else {
