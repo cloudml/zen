@@ -37,8 +37,7 @@ abstract class LDAAlgorithm(numTopics: Int,
 
   def isByDoc: Boolean
 
-  def samplePartition(accelMethod: String,
-    numPartitions: Int,
+  def samplePartition(numPartitions: Int,
     sampIter: Int,
     seed: Int,
     topicCounters: BDV[Count],
@@ -77,10 +76,9 @@ abstract class LDAAlgorithm(numTopics: Int,
     beta: Double): EdgeRDDImpl[TA, Int] = {
     val newEdges = refreshEdgeAssociations(edges, verts)
     val conf = newEdges.context.getConf
-    val accelMethod = conf.get(cs_accelMethod, "alias")
     val numPartitions = newEdges.partitions.length
-    val spf = samplePartition(accelMethod, numPartitions, sampIter, seed,
-      topicCounters, numTokens, numTerms, alpha, alphaAS, beta)_
+    val spf = samplePartition(numPartitions, sampIter, seed, topicCounters,
+      numTokens, numTerms, alpha, alphaAS, beta)_
     val partRDD = newEdges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) => {
       val startedAt = System.nanoTime()
       val newEp = spf(pid, ep)

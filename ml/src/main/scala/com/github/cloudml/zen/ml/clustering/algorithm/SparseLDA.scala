@@ -33,8 +33,7 @@ import scala.concurrent.duration._
 
 class SparseLDA(numTopics: Int, numThreads: Int)
   extends LDATrainerByDoc(numTopics: Int, numThreads: Int) {
-  override def samplePartition(accelMethod: String,
-    numPartitions: Int,
+  override def samplePartition(numPartitions: Int,
     sampIter: Int,
     seed: Int,
     topicCounters: BDV[Count],
@@ -68,10 +67,8 @@ class SparseLDA(numTopics: Int, numThreads: Int)
       if (gen == null) {
         gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
         gens(thid) = gen
-        docDists(thid) = new FlatDist[Double](isSparse=true)
-        mainDists(thid) = new FlatDist[Double](isSparse=true)
-        docDists(thid).reset(numTopics)
-        mainDists(thid).reset(numTopics)
+        docDists(thid) = new FlatDist[Double](isSparse=true) { reset(numTopics) }
+        mainDists(thid) = new FlatDist[Double](isSparse=true) { reset(numTopics) }
       }
       val docDist = docDists(thid)
       val si = lcSrcIds(offset)

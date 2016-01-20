@@ -34,8 +34,7 @@ import scala.concurrent.duration._
 
 class LightLDA(numTopics: Int, numThreads: Int)
   extends LDATrainerByWord(numTopics: Int, numThreads: Int) {
-  override def samplePartition(accelMethod: String,
-    numPartitions: Int,
+  override def samplePartition(numPartitions: Int,
     sampIter: Int,
     seed: Int,
     topicCounters: BDV[Count],
@@ -74,8 +73,7 @@ class LightLDA(numTopics: Int, numThreads: Int)
       if (gen == null) {
         gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
         gens(thid) = gen
-        termDists(thid) = new AliasTable[Double]
-        termDists(thid).reset(numTopics)
+        termDists(thid) = new AliasTable[Double] { reset(numTopics) }
       }
       val termDist = termDists(thid)
 

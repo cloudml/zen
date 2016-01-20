@@ -47,7 +47,6 @@ object LDADefines {
   val cs_numPartitions = "zen.lda.numPartitions"
   val cs_sampleRate = "zen.lda.sampleRate"
   val cs_LDAAlgorithm = "zen.lda.LDAAlgorithm"
-  val cs_accelMethod = "zen.lda.accelMethod"
   val cs_storageLevel = "zen.lda.storageLevel"
   val cs_partStrategy = "zen.lda.partStrategy"
   val cs_initStrategy = "zen.lda.initStrategy"

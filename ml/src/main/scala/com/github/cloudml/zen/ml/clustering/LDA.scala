@@ -44,7 +44,7 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, _],
   var storageLevel: StorageLevel) extends Serializable {
 
   @transient var topicCounters: BDV[Count] = _
-  @transient lazy val seed = new XORShiftRandom().nextInt()
+  @transient lazy val seed = (new XORShiftRandom).nextInt()
   @transient var edgeCpFile: String = _
   @transient var vertCpFile: String = _
 
@@ -232,8 +232,7 @@ object LDA {
     val numDocs = verts.map(_._1).filter(isDocId).count()
     println(s"docs in the corpus: $numDocs")
     val lda = new LDA(edges, verts, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS,
-      algo, storageLevel)
-    lda.init()
+      algo, storageLevel) { init() }
     initCorpus.unpersist(blocking=false)
     lda
   }
@@ -258,8 +257,7 @@ object LDA {
     val numDocs = verts.map(_._1).filter(isDocId).count()
     println(s"docs in the corpus: $numDocs")
     val lda = new LDA(edges, verts, numTopics, numTerms, numDocs, numTokens, alpha, beta, alphaAS,
-      algo, storageLevel)
-    lda.init(Some(computedModel.termTopicsRDD))
+      algo, storageLevel) { init(Some(computedModel.termTopicsRDD)) }
     verts.unpersist(blocking=false)
     lda
   }
@@ -441,7 +439,7 @@ object LDA {
     case "sparse" =>
       println("sparsely init on terms.")
       corpus.persist(storageLevel)
-      val gen = new XORShiftRandom()
+      val gen = new XORShiftRandom
       val tMin = math.min(1000, numTopics / 100)
       val degGraph = GraphImpl(corpus.degrees, corpus.edges)
       val reSampledGraph = degGraph.mapVertices((vid, deg) => {

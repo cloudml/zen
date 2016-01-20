@@ -31,38 +31,8 @@ import scala.concurrent._
 import scala.concurrent.duration._
 
 
-class ZenLDA(numTopics: Int, numThreads: Int)
+class FPlusLDA(numTopics: Int, numThreads: Int)
   extends LDATrainerByWord(numTopics, numThreads) {
-  override def initEdgePartition(ep: EdgePartition[TA, _]): EdgePartition[TA, Int] = {
-    val ep2 = super.initEdgePartition(ep)
-    val totalSize = ep2.size
-    val srcSize = ep2.indexSize
-    val lcSrcIds = ep2.localSrcIds
-    val lcDstIds = ep2.localDstIds
-    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-    val all = Future.traverse(ep2.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
-      val lsi = ii << 1
-      val si = lcSrcIds(lsi)
-      val endPos = lcSrcIds(lsi + 1)
-      var anchor = startPos
-      var anchorId = lcDstIds(anchor)
-      var pos = startPos
-      while (pos < endPos) {
-        val lcDstId = lcDstIds(pos)
-        if (lcDstId != anchorId) {
-          lcDstIds(anchor) = anchor - pos
-          anchor = pos
-          anchorId = lcDstId
-        }
-        pos += 1
-      }
-    }}
-    Await.ready(all, 1.hour)
-    es.shutdown()
-    new EdgePartition(lcSrcIds, lcDstIds, ep2.data, ep2.index, ep2.global2local, ep2.local2global,
-      ep2.vertexAttrs, None)
-  }
-
   override def samplePartition(numPartitions: Int,
     sampIter: Int,
     seed: Int,
@@ -88,7 +58,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     // table/ftree is a per term data structure
     // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
     // so, use below simple cache to avoid calculating table each time
-    val global: DiscreteSampler[Double] = new AliasTable
+    val global: DiscreteSampler[Double] = new FTree[Double](isSparse=false)
     val gens = new Array[XORShiftRandom](numThreads)
     val termDists = new Array[DiscreteSampler[Double]](numThreads)
     val cdfDists = new Array[CumulativeDist[Double]](numThreads)
@@ -101,7 +71,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
       if (gen == null) {
         gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
         gens(thid) = gen
-        termDists(thid) = new AliasTable[Double] { reset(numTopics) }
+        termDists(thid) = new FTree[Double](isSparse=true) { reset(numTopics) }
         cdfDists(thid) = new CumulativeDist[Double] { reset(numTopics) }
       }
       val termDist = termDists(thid)

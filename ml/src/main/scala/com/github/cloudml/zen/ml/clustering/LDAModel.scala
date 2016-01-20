@@ -82,13 +82,12 @@ class LocalLDAModel(@transient val termTopicsArr: Array[Nwk],
     runIter: Int = 5): BSV[Double] = {
     require(runIter > 0, "totalIter is less than 1")
     require(burnIn > 0, "burnInIter is less than 1")
-    val gen = new XORShiftRandom()
+    val gen = new XORShiftRandom
     val topicDist = BSV.zeros[Int](numTopics)
     val tokens = vector2Array(doc)
     val topics = new Array[Int](tokens.length)
     var docTopics = uniformDistSampler(gen, tokens, topics, numTopics)
-    val docCdf = new CumulativeDist[Double]
-    docCdf.reset(numTopics)
+    val docCdf = new CumulativeDist[Double] { reset(numTopics) }
     for (i <- 1 to burnIn + runIter) {
       docTopics = sampleDoc(gen, docTopics, tokens, topics, docCdf)
       if (i > burnIn) topicDist :+= docTopics

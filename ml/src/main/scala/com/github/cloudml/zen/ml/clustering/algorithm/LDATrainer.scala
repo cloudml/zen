@@ -130,6 +130,9 @@ object LDATrainer {
       case "lightlda" =>
         println("using LightLDA sampling algorithm.")
         new LightLDA(numTopics, numThreads)
+      case "f+lda" =>
+        println("using F+LDA sampling algorithm.")
+        new FPlusLDA(numTopics, numThreads)
       case "sparselda" =>
         println("using SparseLDA sampling algorithm")
         new SparseLDA(numTopics, numThreads)

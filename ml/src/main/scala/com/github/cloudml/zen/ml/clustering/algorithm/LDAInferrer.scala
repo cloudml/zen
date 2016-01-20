@@ -36,8 +36,7 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
   extends LDAAlgorithm(numTopics, numThreads) {
   override def isByDoc: Boolean = false
 
-  override def samplePartition(accelMethod: String,
-    numPartitions: Int,
+  override def samplePartition(numPartitions: Int,
     sampIter: Int,
     seed: Int,
     topicCounters: BDV[Count],
@@ -62,10 +61,7 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
     // table/ftree is a per term data structure
     // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
     // so, use below simple cache to avoid calculating table each time
-    val global: DiscreteSampler[Double] = accelMethod match {
-      case "ftree" => new FTree[Double](isSparse=false)
-      case "alias" | "hybrid" => new AliasTable
-    }
+    val global: DiscreteSampler[Double] = new AliasTable
     val gens = new Array[XORShiftRandom](numThreads)
     val termDists = new Array[DiscreteSampler[Double]](numThreads)
     val cdfDists = new Array[CumulativeDist[Double]](numThreads)
@@ -78,13 +74,8 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
       if (gen == null) {
         gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
         gens(thid) = gen
-        termDists(thid) = accelMethod match {
-          case "alias" => new AliasTable[Double]
-          case "ftree" | "hybrid" => new FTree(isSparse=true)
-        }
-        cdfDists(thid) = new CumulativeDist[Double]
-        termDists(thid).reset(numTopics)
-        cdfDists(thid).reset(numTopics)
+        termDists(thid) = new AliasTable[Double] { reset(numTopics) }
+        cdfDists(thid) = new CumulativeDist[Double] { reset(numTopics) }
       }
       val termDist = termDists(thid)
       val si = lcSrcIds(offset)

@@ -72,7 +72,6 @@ object LDADriver {
     conf.set(cs_LDAAlgorithm, algoStr)
 
     conf.set(cs_sampleRate, options.getOrElse("samplerate", "1.0"))
-    conf.set(cs_accelMethod, options.getOrElse("accelmethod", "alias"))
     conf.set(cs_partStrategy, options.getOrElse("partstrategy", "dbh"))
     conf.set(cs_initStrategy, options.getOrElse("initstrategy", "random"))
     conf.set(cs_chkptInterval, options.getOrElse("chkptinterval", "10"))
@@ -159,8 +158,7 @@ object LDADriver {
       "        -totalIter=<Int> -numPartitions=<Int>\n" +
       "  Options: -sampleRate=<Double(*1.0)>\n" +
       "           -numThreads=<Int(*1)>\n" +
-      "           -LDAAlgorithm=<*ZenLDA|LightLDA|SparseLDA>\n" +
-      "           -accelMethod=<*Alias|FTree|Hybrid>\n" +
+      "           -LDAAlgorithm=<*ZenLDA|LightLDA|F+LDA|SparseLDA>\n" +
       "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK)>\n" +
       "           -partStrategy=<Direct|ByTerm|ByDoc|Edge2D|*DBH|VSDLP|BBR>\n" +
       "           -initStrategy=<*Random|Sparse|Split>\n" +
