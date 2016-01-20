@@ -33,13 +33,13 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
   override def isByDoc: Boolean = false
 
   override def initEdgePartition(ep: EdgePartition[TA, _]): EdgePartition[TA, Int] = {
-    val totalSize = ep.size
-    val srcSize = ep.indexSize
-    val lcSrcIds = ep.localSrcIds
-    val zeros = new Array[Int](ep.vertexAttrs.length)
+    val ep2 = super.initEdgePartition(ep)
+    val totalSize = ep2.size
+    val srcSize = ep2.indexSize
+    val lcSrcIds = ep2.localSrcIds
     val newLcSrcIds = new Array[Int](srcSize << 1)  // two elements for each term: lcSrcId & endPos
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-    val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
+    val all = Future.traverse(ep2.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
       val si = lcSrcIds(startPos)
       val lsi = ii << 1
       var pos = startPos
@@ -51,7 +51,8 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     }}
     Await.ready(all, 1.hour)
     es.shutdown()
-    new EdgePartition(newLcSrcIds, ep.localDstIds, ep.data, ep.index, ep.global2local, ep.local2global, zeros, None)
+    new EdgePartition(newLcSrcIds, ep2.localDstIds, ep2.data, ep2.index,
+      ep2.global2local, ep2.local2global, ep2.vertexAttrs, None)
   }
 
   override def countPartition(ep: EdgePartition[TA, Int]): Iterator[NvkPair] = {
@@ -98,8 +99,9 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
       termTopics match {
         case v: BDV[Count] =>
           val used = v.data.count(_ > 0)
-          val counter = if (used >= dscp) v else toBSV(v, used)
-          results(si) = (l2g(si), counter)
+          if (used < dscp) {
+            results(si) = (l2g(si), toBSV(v, used))
+          }
       }
     }}
     Await.ready(all, 1.hour)
