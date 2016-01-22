@@ -281,6 +281,29 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     dwb
   }
 
+  def resetDist_dwbSparse(dwb: CumulativeDist[Double],
+    denoms: BDV[Double],
+    beta_denoms: BDV[Double],
+    denseTermTopics: BDV[Count],
+    docTopics: Ndk): CumulativeDist[Double] = {
+    val used = docTopics.used
+    val index = docTopics.index
+    val data = docTopics.data
+    // DANGER operations for performance
+    dwb._used = used
+    val cdf = dwb._cdf
+    var sum = 0.0
+    var i = 0
+    while (i < used) {
+      val topic = index(i)
+      sum += (denseTermTopics(topic) * denoms(topic) + beta_denoms(topic)) * data(i)
+      cdf(i) = sum
+      i += 1
+    }
+    dwb._space = index
+    dwb
+  }
+
   def resetDist_dwbSparse_withAdjust(dwb: CumulativeDist[Double],
     denoms: BDV[Double],
     beta_denoms: BDV[Double],

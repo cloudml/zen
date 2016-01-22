@@ -35,22 +35,21 @@ class ZenLDA(numTopics: Int, numThreads: Int)
   extends LDATrainerByWord(numTopics, numThreads) {
   override def initEdgePartition(ep: EdgePartition[TA, _]): EdgePartition[TA, Int] = {
     val ep2 = super.initEdgePartition(ep)
-    val totalSize = ep2.size
-    val srcSize = ep2.indexSize
     val lcSrcIds = ep2.localSrcIds
     val lcDstIds = ep2.localDstIds
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
     val all = Future.traverse(ep2.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
-      val lsi = ii << 1
-      val si = lcSrcIds(lsi)
-      val endPos = lcSrcIds(lsi + 1)
+      val endPos = lcSrcIds(ii << 1 + 1)
       var anchor = startPos
       var anchorId = lcDstIds(anchor)
       var pos = startPos
       while (pos < endPos) {
         val lcDstId = lcDstIds(pos)
         if (lcDstId != anchorId) {
-          lcDstIds(anchor) = anchor - pos
+          val numLink = pos - anchor
+          if (numLink > 1) {
+            lcDstIds(anchor) = -numLink
+          }
           anchor = pos
           anchorId = lcDstId
         }
@@ -124,24 +123,54 @@ class ZenLDA(numTopics: Int, numThreads: Int)
         val termBeta_denoms = calc_termBeta_denoms(denoms, beta_denoms, termTopics)
         var pos = startPos
         while (pos < endPos) {
-          val di = lcDstIds(pos)
-          val docTopics = vattrs(di).asInstanceOf[Ndk]
-          useds(di) = docTopics.activeSize
-          val topic = data(pos)
-          resetDist_dwbSparse_withAdjust(cdfDist, denoms, termBeta_denoms, docTopics, topic)
-          data(pos) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
-          pos += 1
+          val ind = lcDstIds(pos)
+          if (ind >= 0) {
+            val di = ind
+            val docTopics = vattrs(di).asInstanceOf[Ndk]
+            useds(di) = docTopics.activeSize
+            val topic = data(pos)
+            resetDist_dwbSparse_withAdjust(cdfDist, denoms, termBeta_denoms, docTopics, topic)
+            data(pos) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
+            pos += 1
+          } else {
+            val di = lcDstIds(pos + 1)
+            val docTopics = vattrs(di).asInstanceOf[Ndk]
+            useds(di) = docTopics.activeSize
+            var l = 0
+            while (l > ind) {
+              val topic = data(pos)
+              resetDist_dwbSparse(cdfDist, termBeta_denoms, docTopics)
+              data(pos) = tokenResampling(gen, global, termDist, cdfDist, denseTermTopics, docTopics, topic, beta)
+              pos +=1
+              l -= 1
+            }
+          }
         }
       } else {
         var pos = startPos
         while (pos < endPos) {
-          val di = lcDstIds(pos)
-          val docTopics = vattrs(di).asInstanceOf[Ndk]
-          useds(di) = docTopics.activeSize
-          val topic = data(pos)
-          resetDist_dwbSparse_withAdjust(cdfDist, denoms, beta_denoms, denseTermTopics, docTopics, topic)
-          data(pos) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
-          pos += 1
+          val ind = lcDstIds(pos)
+          if (ind >= 0) {
+            val di = ind
+            val docTopics = vattrs(di).asInstanceOf[Ndk]
+            useds(di) = docTopics.activeSize
+            val topic = data(pos)
+            resetDist_dwbSparse_withAdjust(cdfDist, denoms, beta_denoms, denseTermTopics, docTopics, topic)
+            data(pos) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
+            pos += 1
+          } else {
+            val di = lcDstIds(pos + 1)
+            val docTopics = vattrs(di).asInstanceOf[Ndk]
+            useds(di) = docTopics.activeSize
+            var l = 0
+            while (l > ind) {
+              val topic = data(pos)
+              resetDist_dwbSparse(cdfDist, denoms, beta_denoms, denseTermTopics, docTopics)
+              data(pos) = tokenResampling(gen, global, termDist, cdfDist, denseTermTopics, docTopics, topic, beta)
+              pos +=1
+              l -= 1
+            }
+          }
         }
       }
       thq.add(thid)
