@@ -34,16 +34,19 @@ import scala.concurrent.duration._
 class ZenLDA(numTopics: Int, numThreads: Int)
   extends LDATrainerByWord(numTopics, numThreads) {
   override def initEdgePartition(ep: EdgePartition[TA, _]): EdgePartition[TA, Int] = {
-    val ep2 = super.initEdgePartition(ep)
-    val lcSrcIds = ep2.localSrcIds
-    val lcDstIds = ep2.localDstIds
+    val totalSize = ep.size
+    val srcSize = ep.indexSize
+    val lcSrcIds = ep.localSrcIds
+    val lcDstIds = ep.localDstIds
+    val zeros = new Array[Int](ep.vertexAttrs.length)
+    val newLcSrcIds = new Array[Int](srcSize << 1)  // two elements for each term: lcSrcId & endPos
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-    val all = Future.traverse(ep2.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
-      val endPos = lcSrcIds(ii << 1 + 1)
+    val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
+      val si = lcSrcIds(startPos)
       var anchor = startPos
       var anchorId = lcDstIds(anchor)
       var pos = startPos + 1
-      while (pos < endPos) {
+      while (pos < totalSize && lcSrcIds(pos) == si) {
         val lcDstId = lcDstIds(pos)
         if (lcDstId != anchorId) {
           val numLink = pos - anchor
@@ -59,11 +62,14 @@ class ZenLDA(numTopics: Int, numThreads: Int)
       if (numLink > 1) {
         lcDstIds(anchor) = -numLink
       }
+      val lsi = ii << 1
+      newLcSrcIds(lsi) = si
+      newLcSrcIds(lsi + 1) = pos
     }}
     Await.ready(all, 1.hour)
     es.shutdown()
-    new EdgePartition(lcSrcIds, lcDstIds, ep2.data, ep2.index, ep2.global2local, ep2.local2global,
-      ep2.vertexAttrs, None)
+    new EdgePartition(newLcSrcIds, lcDstIds, ep.data, ep.index,
+      ep.global2local, ep.local2global, zeros, None)
   }
 
   override def samplePartition(numPartitions: Int,
@@ -89,7 +95,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     val data = ep.data
     val useds = new Array[Int](vattrs.length)
     val thq = new ConcurrentLinkedQueue(0 until numThreads)
-    // table/ftree is a per term data structure
+    // table is a per term data structure
     // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
     // so, use below simple cache to avoid calculating table each time
     val global: DiscreteSampler[Double] = new AliasTable
@@ -114,18 +120,16 @@ class ZenLDA(numTopics: Int, numThreads: Int)
       val lsi = ii << 1
       val si = lcSrcIds(lsi)
       val endPos = lcSrcIds(lsi + 1)
-      val numSrcEdges = endPos - startPos
-      val dlgPos = startPos + gen.nextInt(math.min(numSrcEdges, 32))
-      val common = numSrcEdges * vattrs(lcDstIds(dlgPos)).activeSize >= dscp
+      val common = isCommon(gen, startPos, endPos, lcDstIds, vattrs)
       val termTopics = vattrs(si)
       useds(si) = termTopics.activeSize
       resetDist_waSparse(termDist, alphak_denoms, termTopics)
       val denseTermTopics = toBDV(termTopics)
+      var pos = startPos
       if (common) {
         val termBeta_denoms = calc_termBeta_denoms(denoms, beta_denoms, termTopics)
-        var pos = startPos
         while (pos < endPos) {
-          val ind = lcDstIds(pos)
+          var ind = lcDstIds(pos)
           if (ind >= 0) {
             val di = ind
             val docTopics = vattrs(di).asInstanceOf[Ndk]
@@ -139,19 +143,17 @@ class ZenLDA(numTopics: Int, numThreads: Int)
             val docTopics = vattrs(di).asInstanceOf[Ndk]
             useds(di) = docTopics.activeSize
             resetDist_dwbSparse_wOpt(cdfDist, termBeta_denoms, docTopics)
-            var l = 0
-            while (l > ind) {
+            while (ind < 0) {
               val topic = data(pos)
               data(pos) = tokenResampling(gen, global, termDist, cdfDist, denseTermTopics, docTopics, topic, beta)
               pos += 1
-              l -= 1
+              ind += 1
             }
           }
         }
       } else {
-        var pos = startPos
         while (pos < endPos) {
-          val ind = lcDstIds(pos)
+          var ind = lcDstIds(pos)
           if (ind >= 0) {
             val di = ind
             val docTopics = vattrs(di).asInstanceOf[Ndk]
@@ -165,12 +167,11 @@ class ZenLDA(numTopics: Int, numThreads: Int)
             val docTopics = vattrs(di).asInstanceOf[Ndk]
             useds(di) = docTopics.activeSize
             resetDist_dwbSparse(cdfDist, denoms, denseTermTopics, docTopics, beta)
-            var l = 0
-            while (l > ind) {
+            while (ind < 0) {
               val topic = data(pos)
               data(pos) = tokenResampling(gen, global, termDist, cdfDist, denseTermTopics, docTopics, topic, beta)
               pos += 1
-              l -= 1
+              ind += 1
             }
           }
         }
@@ -180,6 +181,18 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     Await.ready(all, 2.hour)
     es.shutdown()
     ep.withVertexAttributes(useds)
+  }
+
+  private def isCommon(gen: Random,
+    startPos: Int,
+    endPos: Int,
+    lcDstIds: Array[Int],
+    vattrs: Array[Nvk]): Boolean = {
+    val numSrcEdges = endPos - startPos
+    val dlgPos = startPos + gen.nextInt(math.min(numSrcEdges, 32))
+    val dlgInd = lcDstIds(dlgPos)
+    val dlgDi = if (dlgInd >= 0) dlgInd else lcDstIds(dlgPos + 1)
+    numSrcEdges * vattrs(dlgDi).activeSize >= dscp
   }
 
   def tokenSampling(gen: Random,
@@ -240,14 +253,15 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     val all0 = Range(0, numThreads).map { thid => Future {
       var i = thid
       while (i < vertSize) {
+        val vid = l2g(i)
         val used = useds(i)
-        val counter: Nvk = if (used >= dscp) {
+        val counter: Nvk = if (isTermId(vid) && used >= dscp) {
           new BDV(new Array[Count](numTopics))
         } else {
           val len = math.min(used >>> 1, 2)
           new BSV(new Array[Int](len), new Array[Count](len), 0, numTopics)
         }
-        results(i) = (l2g(i), counter)
+        results(i) = (vid, counter)
         i += numThreads
       }
     }}
@@ -260,7 +274,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
       val termTopics = results(si)._2
       var pos = startPos
       while (pos < endPos) {
-        val ind = lcDstIds(pos)
+        var ind = lcDstIds(pos)
         if (ind >= 0) {
           val di = ind
           val docTopics = results(di)._2
@@ -269,21 +283,20 @@ class ZenLDA(numTopics: Int, numThreads: Int)
           docTopics.synchronized {
             docTopics(topic) += 1
           }
+          pos += 1
         } else {
           val di = lcDstIds(pos + 1)
           val docTopics = results(di)._2
-          var l = 0
-          while (l > ind) {
+          while (ind < 0) {
             val topic = data(pos)
             termTopics(topic) += 1
             docTopics.synchronized {
               docTopics(topic) += 1
             }
             pos += 1
-            l -= 1
+            ind += 1
           }
         }
-        pos += 1
       }
       termTopics match {
         case v: BDV[Count] =>
@@ -319,6 +332,8 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     val data = ep.data
     val vertSize = vattrs.length
     val doc_denoms = new Array[Double](vertSize)
+    val thq = new ConcurrentLinkedQueue(0 until numThreads)
+    val gens = Array.tabulate[XORShiftRandom](numThreads)(thid => new XORShiftRandom(73 * numThreads + thid))
     @volatile var llhs = 0D
     @volatile var wllhs = 0D
     @volatile var dllhs = 0D
@@ -326,58 +341,98 @@ class ZenLDA(numTopics: Int, numThreads: Int)
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
     val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
+      val thid = thq.poll()
+      val gen = gens(thid)
       val lsi = ii << 1
       val si = lcSrcIds(lsi)
       val endPos = lcSrcIds(lsi + 1)
       val termTopics = vattrs(si)
       val waSparseSum = sum_waSparse(alphak_denoms, termTopics)
       val sum12 = abDenseSum + waSparseSum
-      val termBeta_denoms = calc_termBeta_denoms(denoms, beta_denoms, termTopics)
       var llhs_th = 0D
       var wllhs_th = 0D
       var dllhs_th = 0D
+      val common = isCommon(gen, startPos, endPos, lcDstIds, vattrs)
       var pos = startPos
-      while (pos < endPos) {
-        val ind = lcDstIds(pos)
-        if (ind >= 0) {
-          val di = ind
-          val docTopics = vattrs(di).asInstanceOf[Ndk]
-          var doc_denom = doc_denoms(di)
-          if (doc_denom == 0.0) {
-            doc_denom = 1.0 / (sum(docTopics) + alphaSum)
-            doc_denoms(di) = doc_denom
-          }
-          val topic = data(pos)
-          val dwbSparseSum = sum_dwbSparse_wOpt(termBeta_denoms, docTopics)
-          val prob = (sum12 + dwbSparseSum) * doc_denom
-          llhs_th += Math.log(prob)
-          wllhs_th += Math.log(termBeta_denoms(topic))
-          dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * doc_denom)
-          pos += 1
-        } else {
-          val di = lcDstIds(pos + 1)
-          val docTopics = vattrs(di).asInstanceOf[Ndk]
-          var doc_denom = doc_denoms(di)
-          if (doc_denom == 0.0) {
-            doc_denom = 1.0 / (sum(docTopics) + alphaSum)
-            doc_denoms(di) = doc_denom
-          }
-          var l = 0
-          while (l > ind) {
-            val topic = data(pos)
+      if (common) {
+        val termBeta_denoms = calc_termBeta_denoms(denoms, beta_denoms, termTopics)
+        while (pos < endPos) {
+          var ind = lcDstIds(pos)
+          if (ind >= 0) {
+            val di = ind
+            val docTopics = vattrs(di).asInstanceOf[Ndk]
+            var doc_denom = doc_denoms(di)
+            if (doc_denom == 0.0) {
+              doc_denom = 1.0 / (sum(docTopics) + alphaSum)
+              doc_denoms(di) = doc_denom
+            }
             val dwbSparseSum = sum_dwbSparse_wOpt(termBeta_denoms, docTopics)
-            val prob = (sum12 + dwbSparseSum) * doc_denom
-            llhs_th += Math.log(prob)
+            llhs_th += Math.log((sum12 + dwbSparseSum) * doc_denom)
+            val topic = data(pos)
             wllhs_th += Math.log(termBeta_denoms(topic))
             dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * doc_denom)
             pos += 1
-            l -= 1
+          } else {
+            val di = lcDstIds(pos + 1)
+            val docTopics = vattrs(di).asInstanceOf[Ndk]
+            var doc_denom = doc_denoms(di)
+            if (doc_denom == 0.0) {
+              doc_denom = 1.0 / (sum(docTopics) + alphaSum)
+              doc_denoms(di) = doc_denom
+            }
+            val dwbSparseSum = sum_dwbSparse_wOpt(termBeta_denoms, docTopics)
+            llhs_th += Math.log((sum12 + dwbSparseSum) * doc_denom) * -ind
+            while (ind < 0) {
+              val topic = data(pos)
+              wllhs_th += Math.log(termBeta_denoms(topic))
+              dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * doc_denom)
+              pos += 1
+              ind += 1
+            }
+          }
+        }
+      } else {
+        val denseTermTopics = toBDV(termTopics)
+        while (pos < endPos) {
+          var ind = lcDstIds(pos)
+          if (ind >= 0) {
+            val di = lcDstIds(pos)
+            val docTopics = vattrs(di).asInstanceOf[Ndk]
+            var doc_denom = doc_denoms(di)
+            if (doc_denom == 0.0) {
+              doc_denom = 1.0 / (sum(docTopics) + alphaSum)
+              doc_denoms(di) = doc_denom
+            }
+            val dwbSparseSum = sum_dwbSparse(denoms, denseTermTopics, docTopics, beta)
+            llhs_th += Math.log((sum12 + dwbSparseSum) * doc_denom)
+            val topic = data(pos)
+            wllhs_th += Math.log((denseTermTopics(topic) + beta) * denoms(topic))
+            dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * doc_denom)
+            pos += 1
+          } else {
+            val di = lcDstIds(pos + 1)
+            val docTopics = vattrs(di).asInstanceOf[Ndk]
+            var doc_denom = doc_denoms(di)
+            if (doc_denom == 0.0) {
+              doc_denom = 1.0 / (sum(docTopics) + alphaSum)
+              doc_denoms(di) = doc_denom
+            }
+            val dwbSparseSum = sum_dwbSparse(denoms, denseTermTopics, docTopics, beta)
+            llhs_th += Math.log((sum12 + dwbSparseSum) * doc_denom) * -ind
+            while (ind < 0) {
+              val topic = data(pos)
+              wllhs_th += Math.log((denseTermTopics(topic) + beta) * denoms(topic))
+              dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * doc_denom)
+              pos += 1
+              ind += 1
+            }
           }
         }
       }
       llhs += llhs_th
       wllhs += wllhs_th
       dllhs += dllhs_th
+      thq.add(thid)
     }}
     Await.ready(all, 2.hour)
     es.shutdown()

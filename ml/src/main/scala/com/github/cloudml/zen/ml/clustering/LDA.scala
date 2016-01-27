@@ -105,7 +105,7 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, _],
     var iter = 1
     while (iter <= totalIter) {
       println(s"\nStart Gibbs sampling (Iteration $iter/$totalIter)")
-      val startedAt = System.nanoTime()
+      val startedAt = System.nanoTime
       gibbsSampling(iter)
       if (pplx) {
         LDAPerplexity(this).output(println)
@@ -118,7 +118,7 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, _],
         model.save(scContext, savPath.toString)
         println(s"Model saved after Iteration $iter")
       }
-      val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
+      val elapsedSeconds = (System.nanoTime - startedAt) / 1e9
       println(s"End Gibbs sampling (Iteration $iter/$totalIter) takes total: $elapsedSeconds secs")
       iter += 1
     }
@@ -127,7 +127,7 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, _],
   def gibbsSampling(sampIter: Int): Unit = {
     val chkptIntv = scConf.getInt(cs_chkptInterval, 0)
     val needChkpt = chkptIntv > 0 && sampIter % chkptIntv == 1 && scContext.getCheckpointDir.isDefined
-    val startedAt = System.nanoTime()
+    val startedAt = System.nanoTime
 
     val newEdges = algo.sampleGraph(edges, verts, topicCounters, seed, sampIter,
       numTokens, numTerms, alpha, alphaAS, beta)
@@ -157,7 +157,7 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, _],
       edgeCpFile = newEdges.getCheckpointFile.get
       vertCpFile = newVerts.getCheckpointFile.get
     }
-    val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
+    val elapsedSeconds = (System.nanoTime - startedAt) / 1e9
     println(s"Sampling & update paras $sampIter takes: $elapsedSeconds secs")
   }
 

@@ -78,21 +78,21 @@ abstract class LDAAlgorithm(numTopics: Int,
     val numPartitions = newEdges.partitions.length
     val spf = samplePartition(numPartitions, sampIter, seed, topicCounters,
       numTokens, numTerms, alpha, alphaAS, beta)_
-    val partRDD = newEdges.partitionsRDD.mapPartitions(_.map(Function.tupled((pid, ep) => {
-      val startedAt = System.nanoTime()
+    val partRDD = newEdges.partitionsRDD.mapPartitions(_.map { case (pid, ep) =>
+      val startedAt = System.nanoTime
       val newEp = spf(pid, ep)
-      val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
+      val elapsedSeconds = (System.nanoTime - startedAt) / 1e9
       println(s"Partition sampling $sampIter takes: $elapsedSeconds secs")
       (pid, newEp)
-    })), preservesPartitioning=true)
+    }, preservesPartitioning=true)
     newEdges.withPartitionsRDD(partRDD)
   }
 
   def updateVertexCounters(edges: EdgeRDDImpl[TA, Int],
     verts: VertexRDDImpl[TC]): VertexRDDImpl[TC] = {
-    val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap(Function.tupled((_, ep) =>
+    val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap { case (_, ep) =>
       countPartition(ep)
-    ))).partitionBy(verts.partitioner.get)
+    }).partitionBy(verts.partitioner.get)
 
     // Below identical map is used to isolate the impact of locality of CheckpointRDD
     val isoRDD = verts.partitionsRDD.mapPartitions(_.seq, preservesPartitioning=true)
@@ -112,9 +112,9 @@ abstract class LDAAlgorithm(numTopics: Int,
     beta: Double): LDAPerplexity = {
     val newEdges = refreshEdgeAssociations(edges, verts)
     val ppf = perplexPartition(topicCounters, numTokens, numTerms, alpha, alphaAS, beta)_
-    val sumPart = newEdges.partitionsRDD.mapPartitions(_.map(Function.tupled((_, ep) =>
+    val sumPart = newEdges.partitionsRDD.mapPartitions(_.map { case (_, ep) =>
       ppf(ep)
-    )))
+    })
     val (llht, wllht, dllht) = sumPart.collect().unzip3
     val pplx = math.exp(-llht.par.sum / numTokens)
     val wpplx = math.exp(-wllht.par.sum / numTokens)
@@ -152,14 +152,14 @@ abstract class LDAAlgorithm(numTopics: Int,
         val decomps = Array.fill(numThreads)(new BVDecompressor(numTopics))
 
         implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-        val all = Future.traverse(vabsIter)(Function.tupled((_, vab) => Future {
+        val all = Future.traverse(vabsIter) { case (_, vab) => Future {
           val thid = thq.poll()
           val decomp = decomps(thid)
-          vab.iterator.foreach(Function.tupled((vid, vdata) =>
+          vab.iterator.foreach { case (vid, vdata) =>
             results(g2l(vid)) = decomp.CV2BV(vdata)
-          ))
+          }
           thq.add(thid)
-        }))
+        }}
         Await.ready(all, 1.hour)
         es.shutdown()
         (pid, ep.withVertexAttributes(results))

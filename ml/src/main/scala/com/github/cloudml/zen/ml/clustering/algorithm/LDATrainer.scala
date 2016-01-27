@@ -41,7 +41,7 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
     val marks = new AtomicIntegerArray(totalSize)
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
     val all = cntsIter.grouped(numThreads * 5).map(batch => Future {
-      batch.foreach(Function.tupled((vid, counter) => {
+      batch.foreach { case (vid, counter) =>
         val i = index.getPos(vid)
         if (marks.getAndDecrement(i) == 0) {
           results(i) = counter
@@ -64,7 +64,7 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
           }
         }
         marks.set(i, Int.MaxValue)
-      }))
+      }
     })
     Await.ready(Future.sequence(all), 1.hour)
 
