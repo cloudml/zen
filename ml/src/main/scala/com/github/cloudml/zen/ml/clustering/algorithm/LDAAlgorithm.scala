@@ -75,7 +75,6 @@ abstract class LDAAlgorithm(numTopics: Int,
     alphaAS: Double,
     beta: Double): EdgeRDDImpl[TA, Int] = {
     val newEdges = refreshEdgeAssociations(edges, verts)
-    val conf = newEdges.context.getConf
     val numPartitions = newEdges.partitions.length
     val spf = samplePartition(numPartitions, sampIter, seed, topicCounters,
       numTokens, numTerms, alpha, alphaAS, beta)_
@@ -184,7 +183,7 @@ abstract class LDAAlgorithm(numTopics: Int,
         val decomp = new BVDecompressor(numTopics)
         val startPos = sizePerthrd * thid
         val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
-        val agg = BDV.zeros[Count](numTopics)
+        val agg = new BDV(new Array[Count](numTopics))
         var pos = mask.nextSetBit(startPos)
         while (pos < endPos && pos >= 0) {
           if (isTermId(index.getValue(pos))) {

@@ -44,8 +44,9 @@ class LightLDA(numTopics: Int, numThreads: Int)
     alphaAS: Double,
     beta: Double)
     (pid: Int, ep: EdgePartition[TA, Nvk]): EdgePartition[TA, Int] = {
-    val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
+    val alphaSum = alpha * numTopics
     val betaSum = beta * numTerms
+    val alphaRatio = calc_alphaRatio(alphaSum, numTokens, alphaAS)
 
     val lcSrcIds = ep.localSrcIds
     val lcDstIds = ep.localDstIds

@@ -115,34 +115,38 @@ object LDADefines {
     ))
   }
 
-  def toBDV(bsv: BSV[Count]): BDV[Count] = {
-    val bdv = BDV.zeros[Count](bsv.length)
-    val used = bsv.used
-    val index = bsv.index
-    val data = bsv.data
-    var i = 0
-    while (i < used) {
-      bdv(index(i)) = data(i)
-      i += 1
-    }
-    bdv
-  }
-
-  def toBSV(bdv: BDV[Count], used: Int): BSV[Count] = {
-    val index = new Array[Int](used)
-    val data = new Array[Count](used)
-    val arr = bdv.data
-    var i = 0
-    var j = 0
-    while (i < used) {
-      val cnt = arr(j)
-      if (cnt > 0) {
-        index(i) = j
-        data(i) = cnt
+  def toBDV(bv: BV[Count]): BDV[Count] = bv match {
+    case v: BDV[Count] => v
+    case v: BSV[Count] =>
+      val arr = new Array[Count](bv.length)
+      val used = v.used
+      val index = v.index
+      val data = v.data
+      var i = 0
+      while (i < used) {
+        arr(index(i)) = data(i)
         i += 1
       }
-      j += 1
-    }
-    new BSV(index, data, used, bdv.length)
+      new BDV(arr)
+  }
+
+  def toBSV(bv: BV[Count], used: Int): BSV[Count] = bv match {
+    case v: BSV[Count] => v
+    case v: BDV[Count] =>
+      val index = new Array[Int](used)
+      val data = new Array[Count](used)
+      val arr = v.data
+      var i = 0
+      var j = 0
+      while (i < used) {
+        val cnt = arr(j)
+        if (cnt > 0) {
+          index(i) = j
+          data(i) = cnt
+          i += 1
+        }
+        j += 1
+      }
+      new BSV(index, data, used, bv.length)
   }
 }

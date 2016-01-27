@@ -43,8 +43,12 @@ class SparseLDA(numTopics: Int, numThreads: Int)
     alphaAS: Double,
     beta: Double)
     (pid: Int, ep: EdgePartition[TA, Nvk]): EdgePartition[TA, Int] = {
-    val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
+    val alphaSum = alpha * numTopics
     val betaSum = beta * numTerms
+    val alphaRatio = calc_alphaRatio(alphaSum, numTokens, alphaAS)
+    val denoms = calc_denoms(topicCounters, betaSum)
+    val alphak_denoms = calc_alphak_denoms(denoms, alphaAS, betaSum, alphaRatio)
+
     val totalSize = ep.size
     val lcSrcIds = ep.localSrcIds
     val lcDstIds = ep.localDstIds
@@ -55,8 +59,6 @@ class SparseLDA(numTopics: Int, numThreads: Int)
     val gens = new Array[XORShiftRandom](numThreads)
     val docDists = new Array[FlatDist[Double]](numThreads)
     val mainDists = new Array[FlatDist[Double]](numThreads)
-    val denoms = calc_denoms(topicCounters, betaSum)
-    val alphak_denoms = calc_alphak_denoms(denoms, alphaAS, betaSum, alphaRatio)
     val global = new FlatDist[Double](isSparse=false)
     resetDist_abDense(global, alphak_denoms, beta)
 

@@ -19,7 +19,7 @@ package com.github.cloudml.zen.ml.clustering.algorithm
 
 import java.util.concurrent.Executors
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, convert, sum}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
 import org.apache.spark.graphx2.impl.EdgePartition
@@ -72,11 +72,11 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
     (ep: EdgePartition[TA, Nvk]): (Double, Double, Double) = {
     val alphaSum = alpha * numTopics
     val betaSum = beta * numTerms
-    val alphaRatio = alphaSum / (numTokens + alphaAS * numTopics)
-    val alphaks = (convert(topicCounters, Double) :+= alphaAS) :*= alphaRatio
+    val alphaRatio = calc_alphaRatio(alphaSum, numTokens, alphaAS)
+    val alphaks = calc_alphaks(topicCounters, alphaAS, alphaRatio)
     val denoms = calc_denoms(topicCounters, betaSum)
     val alphak_denoms = calc_alphak_denoms(denoms, alphaAS, betaSum, alphaRatio)
-    val abDenseSum = sum_abDense(alphak_denoms, beta)
+
     val totalSize = ep.size
     val lcSrcIds = ep.localSrcIds
     val lcDstIds = ep.localDstIds
@@ -85,6 +85,7 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
     @volatile var llhs = 0D
     @volatile var wllhs = 0D
     @volatile var dllhs = 0D
+    val abDenseSum = sum_abDense(alphak_denoms, beta)
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
     val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
@@ -151,12 +152,11 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
     docAlphaK_Denoms: BDV[Double],
     termTopics: Nwk): FlatDist[Double] = termTopics match {
     case v: BDV[Count] =>
-      val k = v.length
-      val probs = new Array[Double](k)
-      val space = new Array[Int](k)
+      val probs = new Array[Double](numTopics)
+      val space = new Array[Int](numTopics)
       var psize = 0
       var i = 0
-      while (i < k) {
+      while (i < numTopics) {
         val cnt = v(i)
         if (cnt > 0) {
           probs(psize) = docAlphaK_Denoms(i) * cnt
@@ -182,10 +182,9 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
   def sum_wdaSparse(docAlphaK_Denoms: BDV[Double],
     termTopics: Nwk): Double = termTopics match {
     case v: BDV[Count] =>
-      val k = v.length
       var sum = 0.0
       var i = 0
-      while (i < k) {
+      while (i < numTopics) {
         val cnt = v(i)
         if (cnt > 0) {
           sum += docAlphaK_Denoms(i) * cnt

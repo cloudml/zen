@@ -39,7 +39,6 @@ object LDAPerplexity {
     val verts = lda.verts
     val topicCounters = lda.topicCounters
     val numTokens = lda.numTokens
-    val numTopics = lda.numTopics
     val numTerms = lda.numTerms
     val alpha = lda.alpha
     val alphaAS = lda.alphaAS

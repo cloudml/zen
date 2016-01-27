@@ -20,7 +20,7 @@ package com.github.cloudml.zen.ml.clustering.algorithm
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicIntegerArray
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, convert, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util.BVCompressor
@@ -96,28 +96,42 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
     ab.resetDist(probs.data, null, probs.length)
   }
 
-  @inline def sum_abDense(alphak_denoms: BDV[Double],
+  def sum_abDense(alphak_denoms: BDV[Double],
     beta: Double): Double = {
     sum(alphak_denoms.copy :*= beta)
   }
 
-  def calc_denoms(topicCounters: BDV[Count],
-    betaSum: Double): BDV[Double] = {
-    val k = topicCounters.length
-    val bdv = BDV.zeros[Double](k)
-    var i = 0
-    while (i < k) {
-      bdv(i) = 1.0 / (topicCounters(i) + betaSum)
-      i += 1
-    }
-    bdv
+  @inline def calc_alphaRatio(alphaSum: Double, numTokens: Long, alphaAS: Double): Double = {
+    alphaSum / (numTokens + alphaAS * numTopics)
   }
 
-  @inline def calc_alphak_denoms(denoms: BDV[Double],
+  def calc_denoms(topicCounters: BDV[Count],
+    betaSum: Double): BDV[Double] = {
+    val arr = new Array[Double](numTopics)
+    var i = 0
+    while (i < numTopics) {
+      arr(i) = 1.0 / (topicCounters(i) + betaSum)
+      i += 1
+    }
+    new BDV(arr)
+  }
+
+  def calc_alphak_denoms(denoms: BDV[Double],
     alphaAS: Double,
     betaSum: Double,
     alphaRatio: Double): BDV[Double] = {
     (denoms.copy :*= ((alphaAS - betaSum) * alphaRatio)) :+= alphaRatio
+  }
+
+  def calc_beta_denoms(denoms: BDV[Double],
+    beta: Double): BDV[Double] = {
+    denoms.copy :*= beta
+  }
+
+  def calc_alphaks(topicCounters: BDV[Count],
+    alphaAS: Double,
+    alphaRatio: Double): BDV[Double] = {
+    (convert(topicCounters, Double) :+= alphaAS) :*= alphaRatio
   }
 }
 

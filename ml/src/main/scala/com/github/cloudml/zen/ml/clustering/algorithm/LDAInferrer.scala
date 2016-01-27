@@ -82,10 +82,7 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
       val termTopics = vattrs(si)
       activeLens(si) = termTopics.activeSize
       resetDist_waSparse(termDist, alphak_denoms, termTopics)
-      val denseTermTopics = termTopics match {
-        case v: BDV[Count] => v
-        case v: BSV[Count] => toBDV(v)
-      }
+      val denseTermTopics = toBDV(termTopics)
       val termBeta_denoms = calc_termBeta_denoms(denoms, beta_denoms, termTopics)
       val cdfDist = cdfDists(thid)
       var pos = offset

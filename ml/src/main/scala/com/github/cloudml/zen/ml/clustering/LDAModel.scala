@@ -53,11 +53,12 @@ class LocalLDAModel(@transient val termTopicsArr: Array[Nwk],
   @transient val numThreads = Runtime.getRuntime.availableProcessors
   @transient val algo = new ZenLDA(numTopics, numThreads)
 
-  @transient val alphaRatio = alpha * numTopics / (numTokens + alphaAS * numTopics)
+  @transient val alphaSum = alpha * numTopics
   @transient val betaSum = beta * numTerms
-  @transient val denoms = topicCounters.mapValues(nt => 1D / (nt + betaSum))
-  @transient val alphak_denoms = (denoms.copy :*= (alphaAS - betaSum) :+= 1D) :*= alphaRatio
-  @transient val beta_denoms = denoms.copy :*= beta
+  @transient val alphaRatio = algo.calc_alphaRatio(alphaSum, numTokens, alphaAS)
+  @transient val denoms = algo.calc_denoms(topicCounters, betaSum)
+  @transient val alphak_denoms = algo.calc_alphak_denoms(denoms, alphaAS, betaSum, alphaRatio)
+  @transient val beta_denoms = algo.calc_beta_denoms(denoms, beta)
 
   @transient lazy val termDistCache = new AppendOnlyMap[Int,
     SoftReference[AliasTable[Double]]](numTerms / 2)
@@ -119,17 +120,14 @@ class LocalLDAModel(@transient val termTopicsArr: Array[Nwk],
       val termId = tokens(i)
       val termTopics = termTopicsArr(termId)
       val termDist = wSparseCached(termDistCache, termTopics, alphak_denoms, termId)
-      val denseTermTopics = termTopics match {
-        case v: BDV[Count] => v
-        case v: BSV[Count] => toBDV(v)
-      }
+      val denseTermTopics = toBDV(termTopics)
       val termBeta_denoms = algo.calc_termBeta_denoms(denoms, beta_denoms, termTopics)
       val topic = topics(i)
       docTopics(topic) -= 1
       if (docTopics(topic) == 0) {
         docTopics.compact()
       }
-      algo.resetDist_dwbSparse(docCdf, termBeta_denoms, docTopics)
+      algo.resetDist_dwbSparse_wOpt(docCdf, termBeta_denoms, docTopics)
       val newTopic = algo.tokenSampling(gen, global, termDist, docCdf, denseTermTopics, topic)
       topics(i) = newTopic
       docTopics(newTopic) += 1
