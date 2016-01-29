@@ -18,7 +18,7 @@
 package com.github.cloudml.zen.ml.clustering.algorithm
 
 import java.util.Random
-import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
+import java.util.concurrent.ConcurrentLinkedQueue
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
@@ -62,7 +62,7 @@ class SparseLDA(numTopics: Int, numThreads: Int)
     val global = new FlatDist[Double](isSparse=false)
     resetDist_abDense(global, alphak_denoms, beta)
 
-    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    implicit val es = initPartExecutionContext()
     val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
       val thid = thq.poll()
       var gen = gens(thid)
@@ -93,7 +93,8 @@ class SparseLDA(numTopics: Int, numThreads: Int)
       thq.add(thid)
     }))
     Await.ready(all, 2.hour)
-    es.shutdown()
+    closePartExecutionContext()
+
     ep.withVertexAttributes(useds)
   }
 

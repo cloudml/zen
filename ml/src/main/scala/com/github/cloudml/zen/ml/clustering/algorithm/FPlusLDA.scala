@@ -18,9 +18,9 @@
 package com.github.cloudml.zen.ml.clustering.algorithm
 
 import java.util.Random
-import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
+import java.util.concurrent.ConcurrentLinkedQueue
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
+import breeze.linalg.{DenseVector => BDV}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
@@ -48,7 +48,6 @@ class FPlusLDA(numTopics: Int, numThreads: Int)
     val alphaRatio = calc_alphaRatio(alphaSum, numTokens, alphaAS)
     val denoms = calc_denoms(topicCounters, betaSum)
     val alphak_denoms = calc_alphak_denoms(denoms, alphaAS, betaSum, alphaRatio)
-    val beta_denoms = calc_beta_denoms(denoms, beta)
 
     val lcSrcIds = ep.localSrcIds
     val lcDstIds = ep.localDstIds
@@ -65,8 +64,8 @@ class FPlusLDA(numTopics: Int, numThreads: Int)
     val cdfDists = new Array[CumulativeDist[Double]](numThreads)
     resetDist_abDense(global, alphak_denoms, beta)
 
-    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-    val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
+    implicit val es = initPartExecutionContext()
+    val all = Future.traverse(lcSrcIds.indices.by(3).iterator)(lsi => Future {
       val thid = thq.poll()
       var gen = gens(thid)
       if (gen == null) {
@@ -78,9 +77,9 @@ class FPlusLDA(numTopics: Int, numThreads: Int)
       val termDist = termDists(thid)
       val cdfDist = cdfDists(thid)
 
-      val lsi = ii << 1
       val si = lcSrcIds(lsi)
-      val endPos = lcSrcIds(lsi + 1)
+      val startPos = lcSrcIds(lsi + 1)
+      val endPos = lcSrcIds(lsi + 2)
       val termTopics = vattrs(si)
       useds(si) = termTopics.activeSize
       resetDist_waSparse(termDist, alphak_denoms, termTopics)
@@ -99,9 +98,10 @@ class FPlusLDA(numTopics: Int, numThreads: Int)
         pos += 1
       }
       thq.add(thid)
-    }}
+    })
     Await.ready(all, 2.hour)
-    es.shutdown()
+    closePartExecutionContext()
+
     ep.withVertexAttributes(useds)
   }
 

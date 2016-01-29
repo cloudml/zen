@@ -17,8 +17,6 @@
 
 package com.github.cloudml.zen.ml.clustering.algorithm
 
-import java.util.concurrent.Executors
-
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
@@ -38,7 +36,8 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     val lcSrcIds = ep.localSrcIds
     val zeros = new Array[Int](ep.vertexAttrs.length)
     val srcInfos = new Array[(Int, Int, Int)](srcSize)
-    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+
+    implicit val es = initPartExecutionContext()
     val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
       val si = lcSrcIds(startPos)
       var pos = startPos
@@ -48,7 +47,8 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
       srcInfos(ii) = (si, startPos, pos)
     }}
     Await.ready(all, 1.hour)
-    es.shutdown()
+    closePartExecutionContext()
+
     val newLcSrcIds = srcInfos.toSeq.sorted.flatMap(t => Iterator(t._1, t._2, t._3)).toArray
     new EdgePartition(newLcSrcIds, ep.localDstIds, ep.data, null, ep.global2local, ep.local2global, zeros, None)
   }
@@ -62,7 +62,7 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     val vertSize = useds.length
     val results = new Array[NvkPair](vertSize)
 
-    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    implicit val es = initPartExecutionContext()
     val all0 = Range(0, numThreads).map(thid => Future {
       var i = thid
       while (i < vertSize) {
@@ -104,7 +104,8 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
       }
     })
     Await.ready(all, 1.hour)
-    es.shutdown()
+    closePartExecutionContext()
+
     results.iterator
   }
 
@@ -133,7 +134,7 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     @volatile var dllhs = 0D
     val abDenseSum = sum_abDense(alphak_denoms, beta)
 
-    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    implicit val es = initPartExecutionContext()
     val all = Future.traverse(lcSrcIds.indices.by(3).iterator)(lsi => Future {
       val si = lcSrcIds(lsi)
       val startPos = lcSrcIds(lsi + 1)
@@ -166,7 +167,8 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
       dllhs += dllhs_th
     })
     Await.ready(all, 2.hour)
-    es.shutdown()
+    closePartExecutionContext()
+
     (llhs, wllhs, dllhs)
   }
 

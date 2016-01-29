@@ -17,8 +17,6 @@
 
 package com.github.cloudml.zen.ml.clustering.algorithm
 
-import java.util.concurrent.Executors
-
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
@@ -42,7 +40,7 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
     val vertSize = vattrs.length
     val results = Array.tabulate(vertSize)(vi => (l2g(vi), BSV.zeros[Count](numTopics)))
 
-    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    implicit val es = initPartExecutionContext()
     val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
       val si = lcSrcIds(offset)
       val docTopics = results(si)._2
@@ -59,7 +57,8 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
       }
     }))
     Await.ready(all, 1.hour)
-    es.shutdown()
+    closePartExecutionContext()
+
     results.iterator
   }
 
@@ -87,7 +86,7 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
     @volatile var dllhs = 0D
     val abDenseSum = sum_abDense(alphak_denoms, beta)
 
-    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    implicit val es = initPartExecutionContext()
     val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
       val si = lcSrcIds(offset)
       val docTopics = vattrs(si).asInstanceOf[BSV[Count]]
@@ -116,7 +115,8 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
       dllhs += dllhs_th
     }))
     Await.ready(all, 2.hour)
-    es.shutdown()
+    closePartExecutionContext()
+
     (llhs, wllhs, dllhs)
   }
 

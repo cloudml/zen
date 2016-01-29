@@ -19,7 +19,7 @@ package com.github.cloudml.zen.ml.clustering.algorithm
 
 import java.lang.ref.SoftReference
 import java.util.Random
-import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
+import java.util.concurrent.ConcurrentLinkedQueue
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
@@ -67,7 +67,7 @@ class LightLDA(numTopics: Int, numThreads: Int)
     val dPFun = docProb(topicCounters, alpha, alphaAS, numTokens)_
     val wPFun = wordProb(topicCounters, numTerms, beta)_
 
-    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    implicit val es = initPartExecutionContext()
     val all = Future.traverse(lcSrcIds.indices.by(3).iterator)(lsi => Future {
       val thid = thq.poll()
       var gen = gens(thid)
@@ -143,7 +143,8 @@ class LightLDA(numTopics: Int, numThreads: Int)
       thq.add(thid)
     })
     Await.ready(all, 2.hour)
-    es.shutdown()
+    closePartExecutionContext()
+
     ep.withVertexAttributes(useds)
   }
 

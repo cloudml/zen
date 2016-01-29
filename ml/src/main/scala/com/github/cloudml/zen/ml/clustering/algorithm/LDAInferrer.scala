@@ -18,8 +18,8 @@
 package com.github.cloudml.zen.ml.clustering.algorithm
 
 import java.util.Random
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicIntegerArray
-import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, convert, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
@@ -67,7 +67,7 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
     val cdfDists = new Array[CumulativeDist[Double]](numThreads)
     resetDist_abDense(global, alphak_denoms, beta)
 
-    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    implicit val es = initPartExecutionContext()
     val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
       val thid = thq.poll()
       var gen = gens(thid)
@@ -97,7 +97,8 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
       thq.add(thid)
     }))
     Await.ready(all, 2.hour)
-    es.shutdown()
+    closePartExecutionContext()
+
     ep.withVertexAttributes(activeLens)
   }
 
@@ -161,7 +162,7 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
     val results = new Array[NvkPair](vertSize)
     val marks = new AtomicIntegerArray(vertSize)
 
-    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    implicit val es = initPartExecutionContext()
     val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
       val si = lcSrcIds(offset)
       var pos = offset
@@ -187,7 +188,8 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
       }
     }))
     Await.ready(all, 1.hour)
-    es.shutdown()
+    closePartExecutionContext()
+
     results.iterator.filter(_ != null)
   }
 
@@ -219,7 +221,7 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
     @volatile var wllhs = 0D
     @volatile var dllhs = 0D
 
-    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+    implicit val es = initPartExecutionContext()
     val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
       val si = lcSrcIds(offset)
       val termTopics = vattrs(si)
@@ -251,7 +253,8 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
       dllhs += dllhs_th
     }))
     Await.ready(all, 2.hour)
-    es.shutdown()
+    closePartExecutionContext()
+
     (llhs, wllhs, dllhs)
   }
 
@@ -263,7 +266,8 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
     val values = vp.values
     val results = new Array[BSV[Count]](totalSize)
     val marks = new AtomicIntegerArray(totalSize)
-    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+
+    implicit val es = initPartExecutionContext()
     val all = cntsIter.grouped(numThreads * 5).map(batch => Future {
       batch.foreach(Function.tupled((vid, counter) => {
         assert(isDocId(vid))
@@ -296,8 +300,8 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
       }
     })
     Await.ready(Future.sequence(all2), 1.hour)
+    closePartExecutionContext()
 
-    es.shutdown()
     vp.withValues(values)
   }
 

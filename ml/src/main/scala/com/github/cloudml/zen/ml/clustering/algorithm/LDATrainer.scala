@@ -17,7 +17,6 @@
 
 package com.github.cloudml.zen.ml.clustering.algorithm
 
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicIntegerArray
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, convert, sum}
@@ -39,7 +38,8 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
     val values = vp.values
     val results = new Array[Nvk](totalSize)
     val marks = new AtomicIntegerArray(totalSize)
-    implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+
+    implicit val es = initPartExecutionContext()
     val all = cntsIter.grouped(numThreads * 5).map(batch => Future {
       batch.foreach { case (vid, counter) =>
         val i = index.getPos(vid)
@@ -84,8 +84,8 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
       }
     })
     Await.ready(Future.sequence(all2), 1.hour)
+    closePartExecutionContext()
 
-    es.shutdown()
     vp.withValues(values)
   }
 

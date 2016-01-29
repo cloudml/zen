@@ -128,7 +128,7 @@ abstract class LDAAlgorithm(numTopics: Int,
       val rt = vp.routingTable
       val index = vp.index
       val values = vp.values
-      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+      implicit val es = initPartExecutionContext()
       Range(0, rt.numEdgePartitions).grouped(numThreads).flatMap(batch => {
         val all = Future.traverse(batch)(pid => Future {
           val vids = rt.routingTable(pid)._1
@@ -137,7 +137,7 @@ abstract class LDAAlgorithm(numTopics: Int,
         })
         Await.result(all, 1.hour)
       }) ++ {
-        es.shutdown()
+        closePartExecutionContext()
         Iterator.empty
       }
     })).partitionBy(edges.partitioner.get)
@@ -151,7 +151,7 @@ abstract class LDAAlgorithm(numTopics: Int,
         val thq = new ConcurrentLinkedQueue(0 until numThreads)
         val decomps = Array.fill(numThreads)(new BVDecompressor(numTopics))
 
-        implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+        implicit val es = initPartExecutionContext()
         val all = Future.traverse(vabsIter) { case (_, vab) => Future {
           val thid = thq.poll()
           val decomp = decomps(thid)
@@ -161,7 +161,8 @@ abstract class LDAAlgorithm(numTopics: Int,
           thq.add(thid)
         }}
         Await.ready(all, 1.hour)
-        es.shutdown()
+        closePartExecutionContext()
+
         (pid, ep.withVertexAttributes(results))
       }))
     )
@@ -178,7 +179,8 @@ abstract class LDAAlgorithm(numTopics: Int,
         val npt = totalSize / numThreads
         if (npt * numThreads == totalSize) npt else npt + 1
       }
-      implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+
+      implicit val es = initPartExecutionContext()
       val all = Range(0, numThreads).map(thid => Future {
         val decomp = new BVDecompressor(numTopics)
         val startPos = sizePerthrd * thid
@@ -198,8 +200,19 @@ abstract class LDAAlgorithm(numTopics: Int,
         agg
       })
       val aggs = Await.result(Future.sequence(all), 1.hour)
-      es.shutdown()
+      closePartExecutionContext()
+
       aggs.reduce(_ :+= _)
     })).collect().par.reduce(_ :+= _)
+  }
+
+  // note: should only be called in one partition!
+  protected def initPartExecutionContext(): ExecutionContextExecutorService = {
+    ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+  }
+
+  // note: should be called after finish using ExecutionContext
+  protected def closePartExecutionContext()(implicit es: ExecutionContextExecutorService): Unit = {
+    es.shutdown()
   }
 }
