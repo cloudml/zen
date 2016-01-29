@@ -39,7 +39,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     val lcSrcIds = ep.localSrcIds
     val lcDstIds = ep.localDstIds
     val zeros = new Array[Int](ep.vertexAttrs.length)
-    val newLcSrcIds = new Array[Int](srcSize << 1)  // two elements for each term: lcSrcId & endPos
+    val srcInfos = new Array[(Int, Int, Int)](srcSize)
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
     val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
       val si = lcSrcIds(startPos)
@@ -62,14 +62,12 @@ class ZenLDA(numTopics: Int, numThreads: Int)
       if (numLink > 1) {
         lcDstIds(anchor) = -numLink
       }
-      val lsi = ii << 1
-      newLcSrcIds(lsi) = si
-      newLcSrcIds(lsi + 1) = pos
+      srcInfos(ii) = (si, startPos, pos)
     }}
     Await.ready(all, 1.hour)
     es.shutdown()
-    new EdgePartition(newLcSrcIds, lcDstIds, ep.data, ep.index,
-      ep.global2local, ep.local2global, zeros, None)
+    val newLcSrcIds = srcInfos.toSeq.sorted.flatMap(t => Iterator(t._1, t._2, t._3)).toArray
+    new EdgePartition(newLcSrcIds, lcDstIds, ep.data, null, ep.global2local, ep.local2global, zeros, None)
   }
 
   override def samplePartition(numPartitions: Int,
@@ -105,7 +103,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     resetDist_abDense(global, alphak_denoms, beta)
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-    val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
+    val all = Future.traverse(lcSrcIds.indices.by(3).iterator)(lsi => Future {
       val thid = thq.poll()
       var gen = gens(thid)
       if (gen == null) {
@@ -117,14 +115,14 @@ class ZenLDA(numTopics: Int, numThreads: Int)
       val termDist = termDists(thid)
       val cdfDist = cdfDists(thid)
 
-      val lsi = ii << 1
       val si = lcSrcIds(lsi)
-      val endPos = lcSrcIds(lsi + 1)
-      val common = isCommon(gen, startPos, endPos, lcDstIds, vattrs)
+      val startPos = lcSrcIds(lsi + 1)
+      val endPos = lcSrcIds(lsi + 2)
       val termTopics = vattrs(si)
       useds(si) = termTopics.activeSize
       resetDist_waSparse(termDist, alphak_denoms, termTopics)
       val denseTermTopics = toBDV(termTopics)
+      val common = isCommon(gen, startPos, endPos, lcDstIds, vattrs)
       var pos = startPos
       if (common) {
         val termBeta_denoms = calc_termBeta_denoms(denoms, beta_denoms, termTopics)
@@ -177,7 +175,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
         }
       }
       thq.add(thid)
-    }}
+    })
     Await.ready(all, 2.hour)
     es.shutdown()
     ep.withVertexAttributes(useds)
@@ -250,7 +248,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     val results = new Array[NvkPair](vertSize)
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-    val all0 = Range(0, numThreads).map { thid => Future {
+    val all0 = Range(0, numThreads).map(thid => Future {
       var i = thid
       while (i < vertSize) {
         val vid = l2g(i)
@@ -264,13 +262,13 @@ class ZenLDA(numTopics: Int, numThreads: Int)
         results(i) = (vid, counter)
         i += numThreads
       }
-    }}
+    })
     Await.ready(Future.sequence(all0), 1.hour)
 
-    val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
-      val lsi = ii << 1
+    val all = Future.traverse(lcSrcIds.indices.by(3).iterator)(lsi => Future {
       val si = lcSrcIds(lsi)
-      val endPos = lcSrcIds(lsi + 1)
+      val startPos = lcSrcIds(lsi + 1)
+      val endPos = lcSrcIds(lsi + 2)
       val termTopics = results(si)._2
       var pos = startPos
       while (pos < endPos) {
@@ -305,7 +303,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
             results(si) = (l2g(si), toBSV(v, used))
           }
       }
-    }}
+    })
     Await.ready(all, 1.hour)
     es.shutdown()
     results.iterator
@@ -333,19 +331,19 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     val vertSize = vattrs.length
     val doc_denoms = new Array[Double](vertSize)
     val thq = new ConcurrentLinkedQueue(0 until numThreads)
-    val gens = Array.tabulate[XORShiftRandom](numThreads)(thid => new XORShiftRandom(73 * numThreads + thid))
+    val gens = Array.tabulate(numThreads)(thid => new XORShiftRandom(73 * numThreads + thid))
     @volatile var llhs = 0D
     @volatile var wllhs = 0D
     @volatile var dllhs = 0D
     val abDenseSum = sum_abDense(alphak_denoms, beta)
 
     implicit val es = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-    val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
+    val all = Future.traverse(lcSrcIds.indices.by(3).iterator)(lsi => Future {
       val thid = thq.poll()
-      val gen = gens(thid)
-      val lsi = ii << 1
       val si = lcSrcIds(lsi)
-      val endPos = lcSrcIds(lsi + 1)
+      val startPos = lcSrcIds(lsi + 1)
+      val endPos = lcSrcIds(lsi + 2)
+      val gen = gens(thid)
       val termTopics = vattrs(si)
       val waSparseSum = sum_waSparse(alphak_denoms, termTopics)
       val sum12 = abDenseSum + waSparseSum
@@ -433,7 +431,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
       wllhs += wllhs_th
       dllhs += dllhs_th
       thq.add(thid)
-    }}
+    })
     Await.ready(all, 2.hour)
     es.shutdown()
     (llhs, wllhs, dllhs)
