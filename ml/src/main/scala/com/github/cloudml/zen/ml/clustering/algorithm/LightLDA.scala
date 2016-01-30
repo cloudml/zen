@@ -99,11 +99,10 @@ class LightLDA(numTopics: Int, numThreads: Int)
         val docDist = dSparseCached(cache => cache == null || cache.get() == null || gen.nextDouble() < 1e-2,
           docCache, docTopics, di)
 
-        val topic = data(pos)
-        var docProposal = gen.nextDouble() < 0.5
-        var j = 0
-        while (j < 8) {
-          docProposal = !docProposal
+        var topic = data(pos)
+        var docProposal = gen.nextBoolean()
+        var mh = 0
+        while (mh < 8) {
           var proposalTopic = -1
           val q = if (docProposal) {
             val aSum = alphaDist.norm
@@ -135,9 +134,12 @@ class LightLDA(numTopics: Int, numThreads: Int)
               docTopics(topic) -= 1
               docTopics(newTopic) += 1
             }
+            topic = newTopic
           }
-          j += 1
+          docProposal = !docProposal
+          mh += 1
         }
+
         pos += 1
       }
       thq.add(thid)
