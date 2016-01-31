@@ -20,8 +20,9 @@ package com.github.cloudml.zen.ml.clustering.algorithm
 import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
+import breeze.numerics.lgamma
 import com.github.cloudml.zen.ml.clustering.LDADefines._
-import com.github.cloudml.zen.ml.clustering.LDAPerplexity
+import com.github.cloudml.zen.ml.clustering.{LDALogLikelihood, LDAPerplexity}
 import com.github.cloudml.zen.ml.util.BVDecompressor
 import org.apache.spark.graphx2.impl.{ShippableVertexPartition => VertPartition, _}
 
@@ -59,6 +60,13 @@ abstract class LDAAlgorithm(numTopics: Int,
     alphaAS: Double,
     beta: Double)
     (ep: EdgePartition[TA, Nvk]): (Double, Double, Double)
+
+  def logLikelihoodPartition(topicCounters: BDV[Count],
+    numTokens: Long,
+    alpha: Double,
+    beta: Double,
+    alphaAS: Double)
+    (vp: VertPartition[TC]): (Double, Double)
 
   def initEdgePartition(ep: EdgePartition[TA, _]): EdgePartition[TA, Int] = {
     ep.withVertexAttributes(new Array[Int](ep.vertexAttrs.length))
@@ -120,6 +128,25 @@ abstract class LDAAlgorithm(numTopics: Int,
     val wpplx = math.exp(-wllht.par.sum / numTokens)
     val dpplx = math.exp(-dllht.par.sum / numTokens)
     new LDAPerplexity(pplx, wpplx, dpplx)
+  }
+
+  def calcLogLikelihood(verts: VertexRDDImpl[TC],
+    topicCounters: BDV[Count],
+    numTokens: Long,
+    numDocs: Long,
+    numTerms: Int,
+    alpha: Double,
+    alphaAS: Double,
+    beta: Double): LDALogLikelihood = {
+    val alphaSum = alpha * numTopics
+    val betaSum = beta * numTerms
+    val lpf = logLikelihoodPartition(topicCounters, numTokens, alpha, beta, alphaAS)_
+    val sumPart = verts.partitionsRDD.mapPartitions(_.map(lpf))
+    val (wllht, dllht) = sumPart.collect().unzip
+    val normWord = Range(0, numTopics).par.map(i => lgamma(topicCounters(i) + betaSum)).sum
+    val wllh = wllht.par.sum + numTopics * lgamma(betaSum) - normWord
+    val dllh = dllht.par.sum + numDocs * lgamma(alphaSum)
+    new LDALogLikelihood(wllh, dllh)
   }
 
   def refreshEdgeAssociations(edges: EdgeRDDImpl[TA, _],

@@ -49,7 +49,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
       lda.runGibbsSampling(totalIterations)
-      pps(i) = LDAPerplexity(lda).getPerplexity
+      pps(i) = LDAMetrics(evalMetric, lda).getTotal
       i += 1
     }
 
@@ -98,7 +98,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
       lda.runGibbsSampling(totalIterations)
-      pps(i) = LDAPerplexity(lda).getPerplexity
+      pps(i) = LDAMetrics(evalMetric, lda).getTotal
       i += 1
     }
 
@@ -132,7 +132,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val startedAt = System.currentTimeMillis()
     while (i < incrementalLearning) {
       lda.runGibbsSampling(totalIterations)
-      pps(i) = LDAPerplexity(lda).getPerplexity
+      pps(i) = LDAMetrics(evalMetric, lda).getTotal
       i += 1
     }
 
@@ -166,6 +166,7 @@ object LDASuite {
   val burnInIterations = 1
   val incrementalLearning = 10
   val storageLevel = StorageLevel.MEMORY_AND_DISK
+  val evalMetric = "llh"
 
   /**
    * Generate a random LDA model, i.e. the topic-term matrix.

@@ -51,7 +51,7 @@ object LDADefines {
   val cs_partStrategy = "zen.lda.partStrategy"
   val cs_initStrategy = "zen.lda.initStrategy"
   val cs_chkptInterval = "zen.lda.chkptInterval"
-  val cs_calcPerplexity = "zen.lda.calcPerplexity"
+  val cs_evalMetric = "zen.lda.evalMetric"
   val cs_saveInterval = "zen.lda.saveInterval"
   val cs_inputPath = "zen.lda.inputPath"
   val cs_outputpath = "zen.lda.outputPath"

@@ -75,7 +75,7 @@ object LDADriver {
     conf.set(cs_partStrategy, options.getOrElse("partstrategy", "dbh"))
     conf.set(cs_initStrategy, options.getOrElse("initstrategy", "random"))
     conf.set(cs_chkptInterval, options.getOrElse("chkptinterval", "10"))
-    conf.set(cs_calcPerplexity, options.getOrElse("calcperplexity", "false"))
+    conf.set(cs_evalMetric, options.getOrElse("evalmetric", "none"))
     conf.set(cs_saveInterval, options.getOrElse("saveinterval", "0"))
     conf.set(cs_saveTransposed, options.getOrElse("savetransposed", "true"))
     conf.set(cs_saveAsSolid, options.getOrElse("saveassolid", "false"))
@@ -163,7 +163,7 @@ object LDADriver {
       "           -partStrategy=<Direct|ByTerm|ByDoc|Edge2D|*DBH|VSDLP|BBR>\n" +
       "           -initStrategy=<*Random|Sparse|Split>\n" +
       "           -chkptInterval=<Int(*10)> (0 or negative disables checkpoint)\n" +
-      "           -calcPerplexity=<true|*false>\n" +
+      "           -evalMetric=<*None|PPLX|LLH>\n" +
       "           -saveInterval=<Int(*0)> (0 or negative disables save at intervals)\n" +
       "           -saveTransposed=<*true|false>\n" +
       "           -saveAsSolid=<true|*false>\n" +

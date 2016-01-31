@@ -20,9 +20,10 @@ package com.github.cloudml.zen.ml.clustering.algorithm
 import java.util.concurrent.atomic.AtomicIntegerArray
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, convert, sum}
+import breeze.numerics._
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
-import com.github.cloudml.zen.ml.util.BVCompressor
+import com.github.cloudml.zen.ml.util.{BVDecompressor, BVCompressor}
 import org.apache.spark.graphx2.impl.{ShippableVertexPartition => VertPartition}
 
 import scala.concurrent._
@@ -87,6 +88,71 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
     closePartExecutionContext()
 
     vp.withValues(values)
+  }
+
+  override def logLikelihoodPartition(topicCounters: BDV[Count],
+    numTokens: Long,
+    alpha: Double,
+    beta: Double,
+    alphaAS: Double)
+    (vp: VertPartition[TC]): (Double, Double) = {
+    val alphaSum = alpha * numTopics
+    val alphaRatio = calc_alphaRatio(alphaSum, numTokens, alphaAS)
+    val alphaks = calc_alphaks(topicCounters, alphaAS, alphaRatio)
+    val lgamma_alphaks = alphaks.map(lgamma(_))
+    val lgamma_beta = lgamma(beta)
+
+    val totalSize = vp.capacity
+    val index = vp.index
+    val mask = vp.mask
+    val values = vp.values
+    @volatile var wllhs = 0.0
+    @volatile var dllhs = 0.0
+    val sizePerthrd = {
+      val npt = totalSize / numThreads
+      if (npt * numThreads == totalSize) npt else npt + 1
+    }
+
+    implicit val es = initPartExecutionContext()
+    val all = Future.traverse(Range(0, numThreads).iterator)(thid => Future {
+      val decomp = new BVDecompressor(numTopics)
+      val startPos = sizePerthrd * thid
+      val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
+      var wllh_th = 0.0
+      var dllh_th = 0.0
+      var pos = mask.nextSetBit(startPos)
+      while (pos < endPos && pos >= 0) {
+        val bv = decomp.CV2BV(values(pos))
+        if (isTermId(index.getValue(pos))) {
+          bv.activeValuesIterator.foreach(cnt =>
+            wllh_th += lgamma(cnt + beta)
+          )
+          wllh_th -= bv.activeSize * lgamma_beta
+        } else {
+          val docTopics = bv.asInstanceOf[BSV[Count]]
+          val used = docTopics.used
+          val index = docTopics.index
+          val data = docTopics.data
+          var nd = 0
+          var i = 0
+          while (i < used) {
+            val topic = index(i)
+            val cnt = data(i)
+            dllh_th += lgamma(cnt + alphaks(topic)) - lgamma_alphaks(topic)
+            nd += cnt
+            i += 1
+          }
+          dllh_th -= lgamma(nd + alphaSum)
+        }
+        pos = mask.nextSetBit(pos + 1)
+      }
+      wllhs += wllh_th
+      dllhs += dllh_th
+    })
+    Await.ready(all, 2.hour)
+    closePartExecutionContext()
+
+    (wllhs, dllhs)
   }
 
   def resetDist_abDense(ab: DiscreteSampler[Double],

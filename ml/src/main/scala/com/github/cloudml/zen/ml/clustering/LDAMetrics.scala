@@ -17,25 +17,41 @@
 
 package com.github.cloudml.zen.ml.clustering
 
-trait LDAMetrics
+trait LDAMetrics {
+  def getTotal: Double
+  def getWord: Double
+  def getDoc: Double
+  def output(writer: String => Unit): Unit
+}
 
 class LDAPerplexity(val pplx: Double, val wpplx: Double, val dpplx: Double) extends LDAMetrics {
+  override def getTotal: Double = pplx
 
-  @inline def getPerplexity: Double = pplx
+  override def getWord: Double = wpplx
 
-  @inline def getWordPerplexity: Double = wpplx
+  override def getDoc: Double = dpplx
 
-  @inline def getDocPerplexity: Double = dpplx
-
-  def output(writer: String => Unit): Unit = {
-    val o = s"perplexity=$pplx, word pplx=$wpplx, doc pplx=$dpplx"
+  override def output(writer: String => Unit): Unit = {
+    val o = s"perplexity=$getTotal, word pplx=$getWord, doc pplx=$getDoc"
     writer(o)
   }
 }
 
-object LDAPerplexity {
-  def apply(lda: LDA): LDAPerplexity = {
-    val edges = lda.edges
+class LDALogLikelihood(val wllh: Double, val dllh: Double) extends LDAMetrics {
+  override def getTotal: Double = wllh + dllh
+
+  override def getWord: Double = wllh
+
+  override def getDoc: Double = dllh
+
+  override def output(writer: String => Unit): Unit = {
+    val o = s"total llh=$getTotal, word llh=$getWord, doc llh=$getDoc"
+    writer(o)
+  }
+}
+
+object LDAMetrics {
+  def apply(evalMetric: String, lda: LDA): LDAMetrics = {
     val verts = lda.verts
     val topicCounters = lda.topicCounters
     val numTokens = lda.numTokens
@@ -43,7 +59,11 @@ object LDAPerplexity {
     val alpha = lda.alpha
     val alphaAS = lda.alphaAS
     val beta = lda.beta
-    lda.algo.calcPerplexity(edges, verts, topicCounters, numTokens, numTerms,
-      alpha, alphaAS, beta)
+    evalMetric match {
+      case "pplx" =>
+        lda.algo.calcPerplexity(lda.edges, verts, topicCounters, numTokens, numTerms, alpha, alphaAS, beta)
+      case "llh" =>
+        lda.algo.calcLogLikelihood(verts, topicCounters, numTokens, lda.numDocs, numTerms, alpha, alphaAS, beta)
+    }
   }
 }

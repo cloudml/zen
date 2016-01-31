@@ -96,19 +96,20 @@ class LDA(@transient var edges: EdgeRDDImpl[TA, _],
   }
 
   def runGibbsSampling(totalIter: Int): Unit = {
-    val pplx = scConf.getBoolean(cs_calcPerplexity, false)
+    val evalMetric = scConf.get(cs_evalMetric, "none")
+    val toEval = !evalMetric.equals("none")
     val saveIntv = scConf.getInt(cs_saveInterval, 0)
-    if (pplx) {
+    if (toEval) {
       println("Before Gibbs sampling:")
-      LDAPerplexity(this).output(println)
+      LDAMetrics(evalMetric, this).output(println)
     }
     var iter = 1
     while (iter <= totalIter) {
       println(s"\nStart Gibbs sampling (Iteration $iter/$totalIter)")
       val startedAt = System.nanoTime
       gibbsSampling(iter)
-      if (pplx) {
-        LDAPerplexity(this).output(println)
+      if (toEval) {
+        LDAMetrics(evalMetric, this).output(println)
       }
       if (saveIntv > 0 && iter % saveIntv == 0 && iter < totalIter) {
         val model = toLDAModel
