@@ -41,55 +41,73 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
     val results = new Array[NvkPair](vertSize)
 
     implicit val es = initPartExecutionContext()
-    val all0 = Future.traverse(Range(0, numThreads).iterator)(thid => Future {
-      var i = thid
-      while (i < vertSize) {
-        val vid = l2g(i)
-        val used = useds(i)
-        val counter: Nvk = if (isTermId(vid) && used >= dscp) {
-          new BDV(new Array[Count](numTopics))
-        } else {
-          val len = math.min(used >>> 1, 2)
-          new BSV(new Array[Int](len), new Array[Count](len), 0, numTopics)
+    val all0 = Future.traverse(Range(0, numThreads).iterator) { thid =>
+      val future = Future {
+        var i = thid
+        while (i < vertSize) {
+          val vid = l2g(i)
+          val used = useds(i)
+          val counter: Nvk = if (isTermId(vid) && used >= dscp) {
+            new BDV(new Array[Count](numTopics))
+          } else {
+            val len = math.min(used >>> 1, 2)
+            new BSV(new Array[Int](len), new Array[Count](len), 0, numTopics)
+          }
+          results(i) = (vid, counter)
+          i += numThreads
         }
-        results(i) = (vid, counter)
-        i += numThreads
       }
-    })
+      future.onFailure { case e =>
+        e.printStackTrace()
+      }
+      future
+    }
     Await.ready(all0, 1.hour)
 
-    val all = Future.traverse(ep.index.iterator) { case (_, startPos) => Future {
-      val si = lcSrcIds(startPos)
-      val docTopics = results(si)._2
-      var pos = startPos
-      while (pos < totalSize && lcSrcIds(pos) == si) {
-        val termTopics = results(lcDstIds(pos))._2
-        val topic = data(pos)
-        docTopics(topic) += 1
-        termTopics.synchronized {
-          termTopics(topic) += 1
+    val all = Future.traverse(ep.index.iterator) { case (_, startPos) =>
+      val future = Future {
+        val si = lcSrcIds(startPos)
+        val docTopics = results(si)._2
+        var pos = startPos
+        while (pos < totalSize && lcSrcIds(pos) == si) {
+          val termTopics = results(lcDstIds(pos))._2
+          val topic = data(pos)
+          docTopics(topic) += 1
+          termTopics.synchronized {
+            termTopics(topic) += 1
+          }
+          pos += 1
         }
-        pos += 1
       }
-    }}
+      future.onFailure { case e =>
+        e.printStackTrace()
+      }
+      future
+    }
     Await.ready(all, 1.hour)
 
-    val all2 = Future.traverse(Range(0, numThreads).iterator)(thid => Future {
-      var i = thid
-      while (i < vertSize) {
-        val tuple = results(i)
-        val vid = tuple._1
-        if (isTermId(vid)) tuple._2 match {
-          case v: BDV[Count] =>
-            val used = v.data.count(_ > 0)
-            if (used < dscp) {
-              results(i) = (vid, toBSV(v, used))
-            }
-          case _ =>
+    val all2 = Future.traverse(Range(0, numThreads).iterator) { thid =>
+      val future = Future {
+        var i = thid
+        while (i < vertSize) {
+          val tuple = results(i)
+          val vid = tuple._1
+          if (isTermId(vid)) tuple._2 match {
+            case v: BDV[Count] =>
+              val used = v.data.count(_ > 0)
+              if (used < dscp) {
+                results(i) = (vid, toBSV(v, used))
+              }
+            case _ =>
+          }
+          i += numThreads
         }
-        i += numThreads
       }
-    })
+      future.onFailure { case e =>
+        e.printStackTrace()
+      }
+      future
+    }
     Await.ready(all2, 1.hour)
     closePartExecutionContext()
 

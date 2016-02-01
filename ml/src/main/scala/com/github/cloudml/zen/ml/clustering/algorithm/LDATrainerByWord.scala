@@ -38,14 +38,20 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     val srcInfos = new Array[(Int, Int, Int)](srcSize)
 
     implicit val es = initPartExecutionContext()
-    val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) => Future {
-      val si = lcSrcIds(startPos)
-      var pos = startPos
-      while (pos < totalSize && lcSrcIds(pos) == si) {
-        pos += 1
+    val all = Future.traverse(ep.index.iterator.zipWithIndex) { case ((_, startPos), ii) =>
+      val future = Future {
+        val si = lcSrcIds(startPos)
+        var pos = startPos
+        while (pos < totalSize && lcSrcIds(pos) == si) {
+          pos += 1
+        }
+        srcInfos(ii) = (si, startPos, pos)
       }
-      srcInfos(ii) = (si, startPos, pos)
-    }}
+      future.onFailure { case e =>
+        e.printStackTrace()
+      }
+      future
+    }
     Await.ready(all, 1.hour)
     closePartExecutionContext()
 
@@ -63,47 +69,59 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     val results = new Array[NvkPair](vertSize)
 
     implicit val es = initPartExecutionContext()
-    val all0 = Future.traverse(Range(0, numThreads).iterator)(thid => Future {
-      var i = thid
-      while (i < vertSize) {
-        val vid = l2g(i)
-        val used = useds(i)
-        val counter: Nvk = if (isTermId(vid) && used >= dscp) {
-          new BDV(new Array[Count](numTopics))
-        } else {
-          val len = math.min(used >>> 1, 2)
-          new BSV(new Array[Int](len), new Array[Count](len), 0, numTopics)
+    val all0 = Future.traverse(Range(0, numThreads).iterator) { thid =>
+      val future = Future {
+        var i = thid
+        while (i < vertSize) {
+          val vid = l2g(i)
+          val used = useds(i)
+          val counter: Nvk = if (isTermId(vid) && used >= dscp) {
+            new BDV(new Array[Count](numTopics))
+          } else {
+            val len = math.min(used >>> 1, 2)
+            new BSV(new Array[Int](len), new Array[Count](len), 0, numTopics)
+          }
+          results(i) = (vid, counter)
+          i += numThreads
         }
-        results(i) = (vid, counter)
-        i += numThreads
       }
-    })
+      future.onFailure { case e =>
+        e.printStackTrace()
+      }
+      future
+    }
     Await.ready(all0, 1.hour)
 
-    val all = Future.traverse(lcSrcIds.indices.by(3).iterator)(lsi => Future {
-      val si = lcSrcIds(lsi)
-      val startPos = lcSrcIds(lsi + 1)
-      val endPos = lcSrcIds(lsi + 2)
-      val termTopics = results(si)._2
-      var pos = startPos
-      while (pos < endPos) {
-        val docTopics = results(lcDstIds(pos))._2
-        val topic = data(pos)
-        termTopics(topic) += 1
-        docTopics.synchronized {
-          docTopics(topic) += 1
-        }
-        pos += 1
-      }
-      termTopics match {
-        case v: BDV[Count] =>
-          val used = v.data.count(_ > 0)
-          if (used < dscp) {
-            results(si) = (l2g(si), toBSV(v, used))
+    val all = Future.traverse(lcSrcIds.indices.by(3).iterator) { lsi =>
+      val future= Future {
+        val si = lcSrcIds(lsi)
+        val startPos = lcSrcIds(lsi + 1)
+        val endPos = lcSrcIds(lsi + 2)
+        val termTopics = results(si)._2
+        var pos = startPos
+        while (pos < endPos) {
+          val docTopics = results(lcDstIds(pos))._2
+          val topic = data(pos)
+          termTopics(topic) += 1
+          docTopics.synchronized {
+            docTopics(topic) += 1
           }
+          pos += 1
+        }
+        termTopics match {
+          case v: BDV[Count] =>
+            val used = v.data.count(_ > 0)
+            if (used < dscp) {
+              results(si) = (l2g(si), toBSV(v, used))
+            }
         case _ =>
+        }
       }
-    })
+      future.onFailure { case e =>
+        e.printStackTrace()
+      }
+      future
+    }
     Await.ready(all, 1.hour)
     closePartExecutionContext()
 
@@ -136,37 +154,43 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     val abDenseSum = sum_abDense(alphak_denoms, beta)
 
     implicit val es = initPartExecutionContext()
-    val all = Future.traverse(lcSrcIds.indices.by(3).iterator)(lsi => Future {
-      val si = lcSrcIds(lsi)
-      val startPos = lcSrcIds(lsi + 1)
-      val endPos = lcSrcIds(lsi + 2)
-      val termTopics = vattrs(si)
-      val waSparseSum = sum_waSparse(alphak_denoms, termTopics)
-      val sum12 = abDenseSum + waSparseSum
-      var llhs_th = 0D
-      var wllhs_th = 0D
-      var dllhs_th = 0D
-      val denseTermTopics = toBDV(termTopics)
-      var pos = startPos
-      while (pos < endPos) {
-        val di = lcDstIds(pos)
-        val docTopics = vattrs(di).asInstanceOf[Ndk]
-        var doc_denom = doc_denoms(di)
-        if (doc_denom == 0.0) {
-          doc_denom = 1.0 / (sum(docTopics) + alphaSum)
-          doc_denoms(di) = doc_denom
+    val all = Future.traverse(lcSrcIds.indices.by(3).iterator) { lsi =>
+      val future = Future {
+        val si = lcSrcIds(lsi)
+        val startPos = lcSrcIds(lsi + 1)
+        val endPos = lcSrcIds(lsi + 2)
+        val termTopics = vattrs(si)
+        val waSparseSum = sum_waSparse(alphak_denoms, termTopics)
+        val sum12 = abDenseSum + waSparseSum
+        var llhs_th = 0D
+        var wllhs_th = 0D
+        var dllhs_th = 0D
+        val denseTermTopics = toBDV(termTopics)
+        var pos = startPos
+        while (pos < endPos) {
+          val di = lcDstIds(pos)
+          val docTopics = vattrs(di).asInstanceOf[Ndk]
+          var doc_denom = doc_denoms(di)
+          if (doc_denom == 0.0) {
+            doc_denom = 1.0 / (sum(docTopics) + alphaSum)
+            doc_denoms(di) = doc_denom
+          }
+          val dwbSparseSum = sum_dwbSparse(denoms, denseTermTopics, docTopics, beta)
+          llhs_th += Math.log((sum12 + dwbSparseSum) * doc_denom)
+          val topic = data(pos)
+          wllhs_th += Math.log((denseTermTopics(topic) + beta) * denoms(topic))
+          dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * doc_denom)
+          pos += 1
         }
-        val dwbSparseSum = sum_dwbSparse(denoms, denseTermTopics, docTopics, beta)
-        llhs_th += Math.log((sum12 + dwbSparseSum) * doc_denom)
-        val topic = data(pos)
-        wllhs_th += Math.log((denseTermTopics(topic) + beta) * denoms(topic))
-        dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * doc_denom)
-        pos += 1
+        llhs += llhs_th
+        wllhs += wllhs_th
+        dllhs += dllhs_th
       }
-      llhs += llhs_th
-      wllhs += wllhs_th
-      dllhs += dllhs_th
-    })
+      future.onFailure { case e =>
+        e.printStackTrace()
+      }
+      future
+    }
     Await.ready(all, 2.hour)
     closePartExecutionContext()
 

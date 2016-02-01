@@ -37,7 +37,12 @@ class CompositeSampler(implicit ev: spNum[Double])
     var curSampler = sampIter.next()
     var subNorm = curSampler.normDouble
     var remain = base
+    var i = 0
     while (remain >= subNorm) {
+      if (!sampIter.hasNext) {
+        println(s"base=$base, norm=$norm, remain=$remain, i=$i/${samplers.length}, subNorm=$subNorm")
+      }
+      i += 1
       remain -= subNorm
       curSampler = sampIter.next()
       subNorm = curSampler.normDouble

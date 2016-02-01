@@ -41,32 +41,38 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
     val marks = new AtomicIntegerArray(totalSize)
 
     implicit val es = initPartExecutionContext()
-    val all = Future.traverse(cntsIter.grouped(numThreads * 5).toIterator)(batch => Future {
-      batch.foreach { case (vid, counter) =>
-        val i = index.getPos(vid)
-        if (marks.getAndDecrement(i) == 0) {
-          results(i) = counter
-        } else {
-          while (marks.getAndSet(i, -1) <= 0) {}
-          val agg = results(i)
-          results(i) = if (isTermId(vid)) agg match {
-            case u: BDV[Count] => counter match {
-              case v: BDV[Count] => u :+= v
-              case v: BSV[Count] => u :+= v
-            }
-            case u: BSV[Count] => counter match {
-              case v: BDV[Count] => v :+= u
-              case v: BSV[Count] =>
-                u :+= v
-                if (u.activeSize >= dscp) toBDV(u) else u
-            }
+    val all = Future.traverse(cntsIter.grouped(numThreads * 5).toIterator) { batch =>
+      val future = Future {
+        batch.foreach { case (vid, counter) =>
+          val i = index.getPos(vid)
+          if (marks.getAndDecrement(i) == 0) {
+            results(i) = counter
           } else {
-            agg.asInstanceOf[Ndk] :+= counter.asInstanceOf[Ndk]
+            while (marks.getAndSet(i, -1) <= 0) {}
+            val agg = results(i)
+            results(i) = if (isTermId(vid)) agg match {
+              case u: BDV[Count] => counter match {
+                case v: BDV[Count] => u :+= v
+                case v: BSV[Count] => u :+= v
+              }
+              case u: BSV[Count] => counter match {
+                case v: BDV[Count] => v :+= u
+                case v: BSV[Count] =>
+                  u :+= v
+                  if (u.activeSize >= dscp) toBDV(u) else u
+              }
+            } else {
+              agg.asInstanceOf[Ndk] :+= counter.asInstanceOf[Ndk]
+            }
           }
+          marks.set(i, Int.MaxValue)
         }
-        marks.set(i, Int.MaxValue)
       }
-    })
+      future.onFailure { case e =>
+        e.printStackTrace()
+      }
+      future
+    }
     Await.ready(all, 1.hour)
 
     // compress counters
@@ -74,16 +80,22 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
       val npt = totalSize / numThreads
       if (npt * numThreads == totalSize) npt else npt + 1
     }
-    val all2 = Future.traverse(Range(0, numThreads).iterator)(thid => Future {
-      val comp = new BVCompressor(numTopics)
-      val startPos = sizePerthrd * thid
-      val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
-      var pos = mask.nextSetBit(startPos)
-      while (pos < endPos && pos >= 0) {
-        values(pos) = comp.BV2CV(results(pos))
-        pos = mask.nextSetBit(pos + 1)
+    val all2 = Future.traverse(Range(0, numThreads).iterator) { thid =>
+      val future = Future {
+        val comp = new BVCompressor(numTopics)
+        val startPos = sizePerthrd * thid
+        val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
+        var pos = mask.nextSetBit(startPos)
+        while (pos < endPos && pos >= 0) {
+          values(pos) = comp.BV2CV(results(pos))
+          pos = mask.nextSetBit(pos + 1)
+        }
       }
-    })
+      future.onFailure { case e =>
+        e.printStackTrace()
+      }
+      future
+    }
     Await.ready(all2, 1.hour)
     closePartExecutionContext()
 
@@ -114,41 +126,47 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
     }
 
     implicit val es = initPartExecutionContext()
-    val all = Future.traverse(Range(0, numThreads).iterator)(thid => Future {
-      val decomp = new BVDecompressor(numTopics)
-      val startPos = sizePerthrd * thid
-      val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
-      var wllh_th = 0.0
-      var dllh_th = 0.0
-      var pos = mask.nextSetBit(startPos)
-      while (pos < endPos && pos >= 0) {
-        val bv = decomp.CV2BV(values(pos))
-        if (isTermId(index.getValue(pos))) {
-          bv.activeValuesIterator.foreach(cnt =>
-            wllh_th += lgamma(cnt + beta)
-          )
-          wllh_th -= bv.activeSize * lgamma_beta
-        } else {
-          val docTopics = bv.asInstanceOf[BSV[Count]]
-          val used = docTopics.used
-          val index = docTopics.index
-          val data = docTopics.data
-          var nd = 0
-          var i = 0
-          while (i < used) {
-            val topic = index(i)
-            val cnt = data(i)
-            dllh_th += lgamma(cnt + alphaks(topic)) - lgamma_alphaks(topic)
-            nd += cnt
-            i += 1
+    val all = Future.traverse(Range(0, numThreads).iterator) { thid =>
+      val future = Future {
+        val decomp = new BVDecompressor(numTopics)
+        val startPos = sizePerthrd * thid
+        val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
+        var wllh_th = 0.0
+        var dllh_th = 0.0
+        var pos = mask.nextSetBit(startPos)
+        while (pos < endPos && pos >= 0) {
+          val bv = decomp.CV2BV(values(pos))
+          if (isTermId(index.getValue(pos))) {
+            bv.activeValuesIterator.foreach(cnt =>
+              wllh_th += lgamma(cnt + beta)
+            )
+            wllh_th -= bv.activeSize * lgamma_beta
+          } else {
+            val docTopics = bv.asInstanceOf[BSV[Count]]
+            val used = docTopics.used
+            val index = docTopics.index
+            val data = docTopics.data
+            var nd = 0
+            var i = 0
+            while (i < used) {
+              val topic = index(i)
+              val cnt = data(i)
+              dllh_th += lgamma(cnt + alphaks(topic)) - lgamma_alphaks(topic)
+              nd += cnt
+              i += 1
+            }
+            dllh_th -= lgamma(nd + alphaSum)
           }
-          dllh_th -= lgamma(nd + alphaSum)
+          pos = mask.nextSetBit(pos + 1)
         }
-        pos = mask.nextSetBit(pos + 1)
+        wllhs += wllh_th
+        dllhs += dllh_th
       }
-      wllhs += wllh_th
-      dllhs += dllh_th
-    })
+      future.onFailure { case e =>
+        e.printStackTrace()
+      }
+      future
+    }
     Await.ready(all, 2.hour)
     closePartExecutionContext()
 

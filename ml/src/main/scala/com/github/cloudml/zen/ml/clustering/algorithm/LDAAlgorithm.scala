@@ -157,11 +157,17 @@ abstract class LDAAlgorithm(numTopics: Int,
       val values = vp.values
       implicit val es = initPartExecutionContext()
       Range(0, rt.numEdgePartitions).grouped(numThreads).flatMap(batch => {
-        val all = Future.traverse(batch)(pid => Future {
-          val vids = rt.routingTable(pid)._1
-          val attrs = vids.map(vid => values(index.getPos(vid)))
-          (pid, new VertexAttributeBlock(vids, attrs))
-        })
+        val all = Future.traverse(batch) { pid =>
+          val future = Future {
+            val vids = rt.routingTable(pid)._1
+            val attrs = vids.map(vid => values(index.getPos(vid)))
+            (pid, new VertexAttributeBlock(vids, attrs))
+          }
+          future.onFailure { case e =>
+            e.printStackTrace()
+          }
+          future
+        }
         Await.result(all, 1.hour)
       }) ++ {
         closePartExecutionContext()
@@ -179,14 +185,20 @@ abstract class LDAAlgorithm(numTopics: Int,
         val decomps = Array.fill(numThreads)(new BVDecompressor(numTopics))
 
         implicit val es = initPartExecutionContext()
-        val all = Future.traverse(vabsIter) { case (_, vab) => Future {
-          val thid = thq.poll()
-          val decomp = decomps(thid)
-          vab.iterator.foreach { case (vid, vdata) =>
-            results(g2l(vid)) = decomp.CV2BV(vdata)
+        val all = Future.traverse(vabsIter) { case (_, vab) =>
+          val future = Future {
+            val thid = thq.poll()
+            val decomp = decomps(thid)
+            vab.iterator.foreach { case (vid, vdata) =>
+              results(g2l(vid)) = decomp.CV2BV(vdata)
+            }
+            thq.add(thid)
           }
-          thq.add(thid)
-        }}
+          future.onFailure { case e =>
+            e.printStackTrace()
+          }
+          future
+        }
         Await.ready(all, 1.hour)
         closePartExecutionContext()
 
@@ -208,24 +220,30 @@ abstract class LDAAlgorithm(numTopics: Int,
       }
 
       implicit val es = initPartExecutionContext()
-      val all = Future.traverse(Range(0, numThreads).iterator)(thid => Future {
-        val decomp = new BVDecompressor(numTopics)
-        val startPos = sizePerthrd * thid
-        val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
-        val agg = new BDV(new Array[Count](numTopics))
-        var pos = mask.nextSetBit(startPos)
-        while (pos < endPos && pos >= 0) {
-          if (isTermId(index.getValue(pos))) {
-            val bv = decomp.CV2BV(values(pos))
-            bv match {
-              case v: BDV[Count] => agg :+= v
-              case v: BSV[Count] => agg :+= v
+      val all = Future.traverse(Range(0, numThreads).iterator) { thid =>
+        val future = Future {
+          val decomp = new BVDecompressor(numTopics)
+          val startPos = sizePerthrd * thid
+          val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
+          val agg = new BDV(new Array[Count](numTopics))
+          var pos = mask.nextSetBit(startPos)
+          while (pos < endPos && pos >= 0) {
+            if (isTermId(index.getValue(pos))) {
+              val bv = decomp.CV2BV(values(pos))
+              bv match {
+                case v: BDV[Count] => agg :+= v
+                case v: BSV[Count] => agg :+= v
+              }
             }
+            pos = mask.nextSetBit(pos + 1)
           }
-          pos = mask.nextSetBit(pos + 1)
+          agg
         }
-        agg
-      })
+        future.onFailure { case e =>
+          e.printStackTrace()
+        }
+        future
+      }
       val aggs = Await.result(all, 1.hour)
       closePartExecutionContext()
 

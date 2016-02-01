@@ -154,7 +154,7 @@ class LDASuite extends FunSuite with SharedSparkContext {
 }
 
 object LDASuite {
-  val numTopics = 5
+  val numTopics = 50
   val numTerms = 1000
   val numDocs = 100
   val expectedDocLength = 300
