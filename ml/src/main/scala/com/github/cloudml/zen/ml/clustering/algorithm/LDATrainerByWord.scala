@@ -63,7 +63,7 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     val results = new Array[NvkPair](vertSize)
 
     implicit val es = initPartExecutionContext()
-    val all0 = Range(0, numThreads).map(thid => Future {
+    val all0 = Future.traverse(Range(0, numThreads).iterator)(thid => Future {
       var i = thid
       while (i < vertSize) {
         val vid = l2g(i)
@@ -78,7 +78,7 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
         i += numThreads
       }
     })
-    Await.ready(Future.sequence(all0), 1.hour)
+    Await.ready(all0, 1.hour)
 
     val all = Future.traverse(lcSrcIds.indices.by(3).iterator)(lsi => Future {
       val si = lcSrcIds(lsi)

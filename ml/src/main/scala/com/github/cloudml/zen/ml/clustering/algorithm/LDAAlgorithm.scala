@@ -208,7 +208,7 @@ abstract class LDAAlgorithm(numTopics: Int,
       }
 
       implicit val es = initPartExecutionContext()
-      val all = Range(0, numThreads).map(thid => Future {
+      val all = Future.traverse(Range(0, numThreads).iterator)(thid => Future {
         val decomp = new BVDecompressor(numTopics)
         val startPos = sizePerthrd * thid
         val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
@@ -226,7 +226,7 @@ abstract class LDAAlgorithm(numTopics: Int,
         }
         agg
       })
-      val aggs = Await.result(Future.sequence(all), 1.hour)
+      val aggs = Await.result(all, 1.hour)
       closePartExecutionContext()
 
       aggs.reduce(_ :+= _)

@@ -158,7 +158,7 @@ object LDADriver {
       "        -totalIter=<Int> -numPartitions=<Int>\n" +
       "  Options: -sampleRate=<Double(*1.0)>\n" +
       "           -numThreads=<Int(*1)>\n" +
-      "           -LDAAlgorithm=<*ZenLDA|LightLDA|F+LDA|SparseLDA>\n" +
+      "           -LDAAlgorithm=<*ZenLDA|LightLDA|F+LDA|AliasLDA|SparseLDA>\n" +
       "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK)>\n" +
       "           -partStrategy=<Direct|ByTerm|ByDoc|Edge2D|*DBH|VSDLP|BBR>\n" +
       "           -initStrategy=<*Random|Sparse|Split>\n" +

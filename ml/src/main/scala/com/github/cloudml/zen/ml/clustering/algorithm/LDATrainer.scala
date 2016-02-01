@@ -41,7 +41,7 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
     val marks = new AtomicIntegerArray(totalSize)
 
     implicit val es = initPartExecutionContext()
-    val all = cntsIter.grouped(numThreads * 5).map(batch => Future {
+    val all = Future.traverse(cntsIter.grouped(numThreads * 5).toIterator)(batch => Future {
       batch.foreach { case (vid, counter) =>
         val i = index.getPos(vid)
         if (marks.getAndDecrement(i) == 0) {
@@ -67,14 +67,14 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
         marks.set(i, Int.MaxValue)
       }
     })
-    Await.ready(Future.sequence(all), 1.hour)
+    Await.ready(all, 1.hour)
 
     // compress counters
     val sizePerthrd = {
       val npt = totalSize / numThreads
       if (npt * numThreads == totalSize) npt else npt + 1
     }
-    val all2 = Range(0, numThreads).map(thid => Future {
+    val all2 = Future.traverse(Range(0, numThreads).iterator)(thid => Future {
       val comp = new BVCompressor(numTopics)
       val startPos = sizePerthrd * thid
       val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
@@ -84,7 +84,7 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
         pos = mask.nextSetBit(pos + 1)
       }
     })
-    Await.ready(Future.sequence(all2), 1.hour)
+    Await.ready(all2, 1.hour)
     closePartExecutionContext()
 
     vp.withValues(values)
@@ -213,6 +213,9 @@ object LDATrainer {
       case "f+lda" =>
         println("using F+LDA sampling algorithm.")
         new FPlusLDA(numTopics, numThreads)
+      case "aliaslda" =>
+        println("using AliasLDA sampling algorithm.")
+        new AliasLDA(numTopics, numThreads)
       case "sparselda" =>
         println("using SparseLDA sampling algorithm")
         new SparseLDA(numTopics, numThreads)

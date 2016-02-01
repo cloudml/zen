@@ -334,8 +334,8 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
     val marks = new AtomicIntegerArray(totalSize)
 
     implicit val es = initPartExecutionContext()
-    val all = cntsIter.grouped(numThreads * 5).map(batch => Future {
-      batch.foreach(Function.tupled((vid, counter) => {
+    val all = Future.traverse(cntsIter.grouped(numThreads * 5).toIterator)(batch => Future {
+      batch.foreach { case (vid, counter) =>
         assert(isDocId(vid))
         val bsv = counter.asInstanceOf[BSV[Count]]
         val i = index.getPos(vid)
@@ -346,16 +346,16 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
           results(i) :+= bsv
         }
         marks.set(i, Int.MaxValue)
-      }))
+      }
     })
-    Await.ready(Future.sequence(all), 1.hour)
+    Await.ready(all, 1.hour)
 
     // compress counters
     val sizePerthrd = {
       val npt = totalSize / numThreads
       if (npt * numThreads == totalSize) npt else npt + 1
     }
-    val all2 = Range(0, numThreads).map(thid => Future {
+    val all2 = Future.traverse(Range(0, numThreads).iterator)(thid => Future {
       val comp = new BVCompressor(numTopics)
       val startPos = sizePerthrd * thid
       val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
@@ -365,7 +365,7 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
         pos = mask.nextSetBit(pos + 1)
       }
     })
-    Await.ready(Future.sequence(all2), 1.hour)
+    Await.ready(all2, 1.hour)
     closePartExecutionContext()
 
     vp.withValues(values)
