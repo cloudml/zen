@@ -27,19 +27,16 @@ import spire.math.{Numeric => spNum}
 
 class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Boolean)
   (implicit ev: spNum[T]) extends DiscreteSampler[T] with Serializable {
-  var _dist: StorageVector[T] = _
-  var _norm: T = _
+  private var _dist: StorageVector[T] = _
+  private var _norm: T = _
 
-  @inline def length: Int = _dist.length
+  protected def numer: spNum[T] = ev
 
-  @inline def used: Int = _dist.activeSize
+  def length: Int = _dist.length
 
-  @inline def norm: T = _norm
+  def used: Int = _dist.activeSize
 
-  def sampleRandom(gen: Random)(implicit gev: spNum[T]): Int = {
-    val u = gen.nextDouble() * gev.toDouble(_norm)
-    sampleFrom(gev.fromDouble(u), gen)
-  }
+  def norm: T = _norm
 
   def sampleFrom(base: T, gen: Random): Int = {
     assert(ev.lt(base, _norm))

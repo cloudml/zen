@@ -18,7 +18,6 @@
 package com.github.cloudml.zen.ml.clustering.algorithm
 
 import java.lang.ref.SoftReference
-import java.util.Random
 import java.util.concurrent.ConcurrentLinkedQueue
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
@@ -61,11 +60,13 @@ class LightLDA(numTopics: Int, numThreads: Int)
     val docCache = new Array[SoftReference[AliasTable[Count]]](vertSize)
     val gens = new Array[XORShiftRandom](numThreads)
     val termDists = new Array[AliasTable[Double]](numThreads)
+    val MHSamps = new Array[MetropolisHastings](numThreads)
+    val compSamps = new Array[CompositeSampler](numThreads)
     resetDist_aDense(alphaDist, topicCounters, numTopics, alphaRatio, alphaAS)
     resetDist_bDense(betaDist, topicCounters, numTopics, beta, betaSum)
-    val p = tokenTopicProb(topicCounters, beta, alpha, alphaAS, numTokens, numTerms)_
-    val dPFun = docProb(topicCounters, alpha, alphaAS, numTokens)_
-    val wPFun = wordProb(topicCounters, numTerms, beta)_
+    val CGSCurry = tokenOrigProb(topicCounters, alphaAS, beta, betaSum, alphaRatio)_
+    val wordPropCurry = wordProposal(topicCounters, beta, betaSum)_
+    val docPropCurry = docProposal(topicCounters, alphaAS, alphaRatio)_
 
     implicit val es = initPartExecutionContext()
     val all = Future.traverse(lcSrcIds.indices.by(3).iterator)(lsi => Future {
@@ -75,8 +76,12 @@ class LightLDA(numTopics: Int, numThreads: Int)
         gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
         gens(thid) = gen
         termDists(thid) = new AliasTable[Double] { reset(numTopics) }
+        MHSamps(thid) = new MetropolisHastings
+        compSamps(thid) = new CompositeSampler
       }
       val termDist = termDists(thid)
+      val MHSamp = MHSamps(thid)
+      val compSamp = compSamps(thid)
 
       val si = lcSrcIds(lsi)
       val startPos = lcSrcIds(lsi + 1)
@@ -84,6 +89,8 @@ class LightLDA(numTopics: Int, numThreads: Int)
       val termTopics = vattrs(si)
       useds(si) = termTopics.activeSize
       resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
+      val denseTermTopics = toBDV(termTopics)
+      val wordProp = wordPropCurry(denseTermTopics)
       var pos = startPos
       while (pos < endPos) {
         val di = lcDstIds(pos)
@@ -100,30 +107,18 @@ class LightLDA(numTopics: Int, numThreads: Int)
           docCache, docTopics, di)
 
         var topic = data(pos)
-        var docProposal = gen.nextBoolean()
+        val CGSFunc = CGSCurry(denseTermTopics, docTopics)
+        var docCycle = gen.nextBoolean()
         var mh = 0
         while (mh < 8) {
-          var proposalTopic = -1
-          val q = if (docProposal) {
-            val aSum = alphaDist.norm
-            val dPropSum = aSum + docDist.norm
-            if (gen.nextDouble() * dPropSum < aSum) {
-              proposalTopic = alphaDist.sampleRandom(gen)
-            } else {
-              val rr = 1.0 / docTopics(topic)
-              proposalTopic = docDist.resampleRandom(gen, topic, rr)
-            }
-            dPFun
+          if (docCycle) {
+            val dps = compSamp.resetComponents(Seq(docDist, alphaDist))
+            MHSamp.resetProb(CGSFunc, docPropCurry(docTopics), dps, topic)
           } else {
-            val wSum = termDist.norm
-            val wPropSum = wSum + betaDist.norm
-            val table = if (gen.nextDouble() * wPropSum < wSum) termDist else betaDist
-            proposalTopic = table.sampleRandom(gen)
-            wPFun
+            val wps = compSamp.resetComponents(Seq(termDist, betaDist))
+            MHSamp.resetProb(CGSFunc, wordProp, wps, topic)
           }
-
-          val newTopic = tokenSampling(gen, docTopics, termTopics, docProposal,
-            topic, proposalTopic, q, p)
+          val newTopic = MHSamp.sampleRandom(gen)
           if (newTopic != topic) {
             data(pos) = newTopic
             topicCounters(topic) -= 1
@@ -136,7 +131,7 @@ class LightLDA(numTopics: Int, numThreads: Int)
             }
             topic = newTopic
           }
-          docProposal = !docProposal
+          docCycle = !docCycle
           mh += 1
         }
 
@@ -150,92 +145,36 @@ class LightLDA(numTopics: Int, numThreads: Int)
     ep.withVertexAttributes(useds)
   }
 
-  /**
-    * Composition of both Gibbs sampler and Metropolis Hastings sampler
-    * time complexity for each sampling is: O(1)
-    * 1. sampling word-related parts of standard LDA formula via Gibbs Sampler:
-    * Formula (6) in Paper "LightLDA: Big Topic Models on Modest Compute Clusters":
-    * ( \frac{{n}_{kd}^{-di}+{\beta }_{w}}{{n}_{k}^{-di}+\bar{\beta }} )
-    * 2. given the computed probability in step 1 as proposal distribution q in Metropolis Hasting sampling,
-    * and we use asymmetric dirichlet prior, presented formula (3) in Paper "Rethinking LDA: Why Priors Matter"
-    * \frac{{n}_{kw}^{-di}+{\beta }_{w}}{{n}_{k}^{-di}+\bar{\beta}} \frac{{n}_{kd} ^{-di}+ \bar{\alpha}
-    * \frac{{n}_{k}^{-di} + \acute{\alpha}}{\sum{n}_{k} +\bar{\acute{\alpha}}}}{\sum{n}_{kd}^{-di} +\bar{\alpha}}
-    *
-    * where
-    * \bar{\beta}=\sum_{w}{\beta}_{w}
-    * \bar{\alpha}=\sum_{k}{\alpha}_{k}
-    * \bar{\acute{\alpha}}=\bar{\acute{\alpha}}=\sum_{k}\acute{\alpha}
-    * {n}_{kd} is the number of tokens in doc d that belong to topic k
-    * {n}_{kw} is the number of occurrence for word w that belong to topic k
-    * {n}_{k} is the number of tokens in corpus that belong to topic k
-    */
-  def tokenSampling(gen: Random,
-    docTopicCounter: Ndk,
-    termTopicCounter: Nwk,
-    docProposal: Boolean,
-    currentTopic: Int,
-    proposalTopic: Int,
-    q: (Nvk, Int, Boolean) => Double,
-    p: (Ndk, Nwk, Int, Boolean) => Double): Int = {
-    if (proposalTopic == currentTopic) return proposalTopic
-    val cp = p(docTopicCounter, termTopicCounter, currentTopic, true)
-    val np = p(docTopicCounter, termTopicCounter, proposalTopic, false)
-    val vd = if (docProposal) docTopicCounter else termTopicCounter
-    val cq = q(vd, currentTopic, true)
-    val nq = q(vd, proposalTopic, false)
-
-    val pi = (np * cq) / (cp * nq)
-    if (gen.nextDouble() < math.min(1.0, pi)) proposalTopic else currentTopic
-  }
-
-  // scalastyle:off
-  def tokenTopicProb(totalTopicCounter: BDV[Count],
+  def tokenOrigProb(topicCounters: BDV[Count],
+    alphaAS: Double,
     beta: Double,
-    alpha: Double,
+    betaSum: Double,
+    alphaRatio: Double)
+    (denseTermTopics: BDV[Count], docTopics: Ndk)
+    (curTopic: Int, i: Int): Double = {
+    val alphak = (topicCounters(i) + alphaAS) * alphaRatio
+    val adjust = if (i == curTopic) -1 else 0
+    (docTopics(i) + adjust + alphak) * (denseTermTopics(i) + adjust + beta) /
+      (topicCounters(i) + adjust + betaSum)
+  }
+
+  def wordProposal(topicCounters: BDV[Count],
+    beta: Double,
+    betaSum: Double)
+    (denseTermTopics: BDV[Count])
+    (curTopic: Int, i: Int): Double = {
+    (denseTermTopics(i) + beta) / (topicCounters(i) + betaSum)
+  }
+
+  def docProposal(topicCounters: BDV[Count],
     alphaAS: Double,
-    numTokens: Long,
-    numTerms: Int)(docTopicCounter: Ndk,
-    termTopicCounter: Nwk,
-    topic: Int,
-    isAdjustment: Boolean): Double = {
-    val numTopics = docTopicCounter.length
-    val adjustment = if (isAdjustment) -1 else 0
-    val ratio = (totalTopicCounter(topic) + adjustment + alphaAS) /
-      (numTokens - 1 + alphaAS * numTopics)
-    val asPrior = ratio * (alpha * numTopics)
-    // constant part is removed: (docLen - 1 + alpha * numTopics)
-    (termTopicCounter(topic) + adjustment + beta) *
-      (docTopicCounter(topic) + adjustment + asPrior) /
-      (totalTopicCounter(topic) + adjustment + (numTerms * beta))
-
-    // original form is formula (3) in Paper: "Rethinking LDA: Why Priors Matter"
-    // val docLen = brzSum(docTopicCounter)
-    // (termTopicCounter(topic) + adjustment + beta) * (docTopicCounter(topic) + adjustment + asPrior) /
-    //   ((totalTopicCounter(topic) + adjustment + (numTerms * beta)) * (docLen - 1 + alpha * numTopics))
+    alphaRatio: Double)
+    (docTopics: Ndk)
+    (curTopic: Int, i: Int): Double = {
+    val alphak = (topicCounters(i) + alphaAS) * alphaRatio
+    docTopics(i) + alphak
   }
 
-  // scalastyle:on
-
-  def wordProb(totalTopicCounter: BDV[Count],
-    numTerms: Int,
-    beta: Double)(termTopicCounter: Nvk, topic: Int, isAdjustment: Boolean): Double = {
-    (termTopicCounter(topic) + beta) / (totalTopicCounter(topic) + beta * numTerms)
-  }
-
-  def docProb(totalTopicCounter: BDV[Count],
-    alpha: Double,
-    alphaAS: Double,
-    numTokens: Long)(docTopicCounter: Nvk, topic: Int, isAdjustment: Boolean): Double = {
-    val adjustment = if (isAdjustment) -1 else 0
-    val numTopics = totalTopicCounter.length
-    val ratio = (totalTopicCounter(topic) + alphaAS) / (numTokens - 1 + alphaAS * numTopics)
-    val asPrior = ratio * (alpha * numTopics)
-    docTopicCounter(topic) + adjustment + asPrior
-  }
-
-  /**
-    * \frac{{\beta}_{w}}{{n}_{k}+\bar{\beta}}
-    */
   def resetDist_bDense(b: AliasTable[Double],
     topicCounters: BDV[Count],
     numTopics: Int,
@@ -252,9 +191,6 @@ class LightLDA(numTopics: Int, numThreads: Int)
     }
   }
 
-  /**
-    * \frac{{n}_{kw}}{{n}_{k}+\bar{\beta}}
-    */
   def resetDist_wSparse(ws: AliasTable[Double],
     topicCounters: BDV[Count],
     termTopics: Nwk,
@@ -313,7 +249,11 @@ class LightLDA(numTopics: Int, numThreads: Int)
     if (!updatePred(docCache)) {
       docCache.get
     } else {
-      val table = AliasTable.generateAlias(docTopics)
+      val used = docTopics.used
+      val index = docTopics.index
+      val data = docTopics.data
+      val table = new AliasTable[Int]
+      table.resetDist(data, index, used)
       cacheArray(lcDocId) = new SoftReference(table)
       table
     }

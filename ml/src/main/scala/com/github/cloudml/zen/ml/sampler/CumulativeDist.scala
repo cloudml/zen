@@ -32,6 +32,8 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](implici
   var _space: Array[Int] = _
   var _used: Int = _
 
+  protected def numer: spNum[T] = ev
+
   def length: Int = _cdf.length
 
   def size: Int  = length
@@ -44,11 +46,6 @@ class CumulativeDist[@specialized(Double, Int, Float, Long) T: ClassTag](implici
     } else {
       _cdf(_used - 1)
     }
-  }
-
-  def sampleRandom(gen: Random)(implicit gev: spNum[T]): Int = {
-    val u = gen.nextDouble() * gev.toDouble(_cdf(_used - 1))
-    sampleFrom(gev.fromDouble(u), gen)
   }
 
   def sampleFrom(base: T, gen: Random): Int = {

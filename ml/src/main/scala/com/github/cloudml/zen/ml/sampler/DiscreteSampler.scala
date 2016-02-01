@@ -23,12 +23,9 @@ import scala.annotation.tailrec
 import spire.math.{Numeric => spNum}
 
 
-trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
+trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] extends Sampler[T] {
   def length: Int
   def used: Int
-  def norm: T
-  def sampleRandom(gen: Random)(implicit gev: spNum[T]): Int
-  def sampleFrom(base: T, gen: Random): Int
   def update(state: Int, value: => T): Unit
   def deltaUpdate(state: Int, delta: => T): Unit
   def resetDist(probs: Array[T], space: Array[Int], psize: Int): DiscreteSampler[T]
@@ -38,7 +35,7 @@ trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
   @tailrec final def resampleRandom(gen: Random,
     state: Int,
     residualRate: Double,
-    numResampling: Int = 2)(implicit gev: spNum[T]): Int = {
+    numResampling: Int = 2)(implicit ev: spNum[T]): Int = {
     val newState = sampleRandom(gen)
     if (newState == state && numResampling >= 0 && used > 1 &&
       (residualRate >= 1.0 || gen.nextDouble() < residualRate)) {
@@ -52,11 +49,11 @@ trait DiscreteSampler[@specialized(Double, Int, Float, Long) T] {
     gen: Random,
     state: Int,
     residualRate: Double,
-    numResampling: Int = 2)(implicit gev: spNum[T]): Int = {
+    numResampling: Int = 2)(implicit ev: spNum[T]): Int = {
     val newState = sampleFrom(base, gen)
     if (newState == state && numResampling >= 0 && used > 1 &&
       (residualRate >= 1.0 || gen.nextDouble() < residualRate)) {
-      val newBase = gev.fromDouble(gen.nextDouble() * gev.toDouble(norm))
+      val newBase = ev.fromDouble(gen.nextDouble() * ev.toDouble(norm))
       resampleFrom(newBase, gen, state, residualRate, numResampling - 1)
     } else {
       newState
