@@ -101,6 +101,7 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
           if (used < dscp) {
             results(si) = (l2g(si), toBSV(v, used))
           }
+        case _ =>
       }
     })
     Await.ready(all, 1.hour)
