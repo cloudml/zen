@@ -276,7 +276,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
           val counter: Nvk = if (isTermId(vid) && used >= dscp) {
             new BDV(new Array[Count](numTopics))
           } else {
-            val len = math.min(used >>> 1, 2)
+            val len = math.max(used >>> 1, 2)
             new BSV(new Array[Int](len), new Array[Count](len), 0, numTopics)
           }
           results(i) = (vid, counter)

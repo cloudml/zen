@@ -115,10 +115,10 @@ class LightLDA(numTopics: Int, numThreads: Int)
           var mh = 0
           while (mh < 8) {
             if (docCycle) {
-              val dps = compSamp.resetComponents(Seq(docDist, alphaDist))
+              val dps = compSamp.resetComponents(docDist, alphaDist)
               MHSamp.resetProb(CGSFunc, docPropCurry(docTopics), dps, topic)
             } else {
-              val wps = compSamp.resetComponents(Seq(termDist, betaDist))
+              val wps = compSamp.resetComponents(termDist, betaDist)
               MHSamp.resetProb(CGSFunc, wordProp, wps, topic)
             }
             val newTopic = MHSamp.sampleRandom(gen)

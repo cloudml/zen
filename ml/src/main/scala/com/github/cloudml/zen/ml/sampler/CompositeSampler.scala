@@ -50,7 +50,7 @@ class CompositeSampler(implicit ev: spNum[Double])
     curSampler.sampleFromDouble(remain, gen)
   }
 
-  def resetComponents(samplers: Seq[Sampler[_]]): CompositeSampler = {
+  def resetComponents(samplers: Sampler[_]*): CompositeSampler = {
     this.samplers = samplers
     this
   }
