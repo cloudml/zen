@@ -17,18 +17,19 @@
 
 package com.github.cloudml.zen.ml.clustering.algorithm
 
-import java.util.concurrent.{ConcurrentLinkedQueue, Executors}
+import java.util.concurrent.ConcurrentLinkedQueue
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
-import breeze.numerics.lgamma
+import breeze.numerics._
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.clustering.{LDALogLikelihood, LDAPerplexity}
 import com.github.cloudml.zen.ml.util.BVDecompressor
+import com.github.cloudml.zen.ml.util.Concurrent._
 import org.apache.spark.graphx2.impl.{ShippableVertexPartition => VertPartition, _}
 
 import scala.collection.JavaConversions._
-import scala.concurrent._
-import scala.concurrent.duration._
+import scala.collection.mutable
+import scala.concurrent.Future
 import scala.language.existentials
 
 
@@ -151,29 +152,25 @@ abstract class LDAAlgorithm(numTopics: Int,
 
   def refreshEdgeAssociations(edges: EdgeRDDImpl[TA, _],
     verts: VertexRDDImpl[TC]): EdgeRDDImpl[TA, Nvk] = {
-    val shippedVerts = verts.partitionsRDD.mapPartitions(_.flatMap(vp => {
+    val shippedVerts = verts.partitionsRDD.mapPartitions(_.flatMap { vp =>
       val rt = vp.routingTable
       val index = vp.index
       val values = vp.values
-      implicit val es = initPartExecutionContext()
-      Range(0, rt.numEdgePartitions).grouped(numThreads).flatMap(batch => {
-        val all = Future.traverse(batch) { pid =>
-          val future = Future {
-            val vids = rt.routingTable(pid)._1
-            val attrs = vids.map(vid => values(index.getPos(vid)))
-            (pid, new VertexAttributeBlock(vids, attrs))
-          }
-          future.onFailure { case e =>
-            e.printStackTrace()
-          }
-          future
-        }
-        Await.result(all, 1.hour)
-      }) ++ {
-        closePartExecutionContext()
+      val alls = mutable.Buffer[Future[Iterator[(Int, VertexAttributeBlock[TC])]]]()
+      implicit val es = initExecutionContext(numThreads)
+      Range(0, rt.numEdgePartitions).grouped(numThreads).flatMap { batch =>
+        val all = Future.traverse(batch.iterator) { pid => withFuture {
+          val vids = rt.routingTable(pid)._1
+          val attrs = vids.map(vid => values(index.getPos(vid)))
+          (pid, new VertexAttributeBlock(vids, attrs))
+        }}
+        alls += all
+        withAwaitResult(all)
+      } ++ {
+        withAwaitReadyAndClose(Future.sequence(alls.iterator))
         Iterator.empty
       }
-    })).partitionBy(edges.partitioner.get)
+    }).partitionBy(edges.partitioner.get)
 
     // Below identical map is used to isolate the impact of locality of CheckpointRDD
     val isoRDD = edges.partitionsRDD.mapPartitions(_.seq, preservesPartitioning=true)
@@ -184,23 +181,16 @@ abstract class LDAAlgorithm(numTopics: Int,
         val thq = new ConcurrentLinkedQueue(0 until numThreads)
         val decomps = Array.fill(numThreads)(new BVDecompressor(numTopics))
 
-        implicit val es = initPartExecutionContext()
-        val all = Future.traverse(vabsIter) { case (_, vab) =>
-          val future = Future {
-            val thid = thq.poll()
-            val decomp = decomps(thid)
-            vab.iterator.foreach { case (vid, vdata) =>
-              results(g2l(vid)) = decomp.CV2BV(vdata)
-            }
-            thq.add(thid)
+        implicit val es = initExecutionContext(numThreads)
+        val all = Future.traverse(vabsIter) { case (_, vab) => withFuture {
+          val thid = thq.poll()
+          val decomp = decomps(thid)
+          vab.iterator.foreach { case (vid, vdata) =>
+            results(g2l(vid)) = decomp.CV2BV(vdata)
           }
-          future.onFailure { case e =>
-            e.printStackTrace()
-          }
-          future
-        }
-        Await.ready(all, 1.hour)
-        closePartExecutionContext()
+          thq.add(thid)
+        }}
+        withAwaitReadyAndClose(all)
 
         (pid, ep.withVertexAttributes(results))
       }))
@@ -209,7 +199,7 @@ abstract class LDAAlgorithm(numTopics: Int,
   }
 
   def collectTopicCounters(verts: VertexRDDImpl[TC]): BDV[Count] = {
-    verts.partitionsRDD.mapPartitions(_.map(vp => {
+    verts.partitionsRDD.mapPartitions(_.map { vp =>
       val totalSize = vp.capacity
       val index = vp.index
       val mask = vp.mask
@@ -219,45 +209,26 @@ abstract class LDAAlgorithm(numTopics: Int,
         if (npt * numThreads == totalSize) npt else npt + 1
       }
 
-      implicit val es = initPartExecutionContext()
-      val all = Future.traverse(Range(0, numThreads).iterator) { thid =>
-        val future = Future {
-          val decomp = new BVDecompressor(numTopics)
-          val startPos = sizePerthrd * thid
-          val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
-          val agg = new BDV(new Array[Count](numTopics))
-          var pos = mask.nextSetBit(startPos)
-          while (pos < endPos && pos >= 0) {
-            if (isTermId(index.getValue(pos))) {
-              val bv = decomp.CV2BV(values(pos))
-              bv match {
-                case v: BDV[Count] => agg :+= v
-                case v: BSV[Count] => agg :+= v
-              }
+      implicit val es = initExecutionContext(numThreads)
+      val all = Range(0, numThreads).map { thid => withFuture {
+        val decomp = new BVDecompressor(numTopics)
+        val startPos = sizePerthrd * thid
+        val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
+        val agg = new BDV(new Array[Count](numTopics))
+        var pos = mask.nextSetBit(startPos)
+        while (pos < endPos && pos >= 0) {
+          if (isTermId(index.getValue(pos))) {
+            val bv = decomp.CV2BV(values(pos))
+            bv match {
+              case v: BDV[Count] => agg :+= v
+              case v: BSV[Count] => agg :+= v
             }
-            pos = mask.nextSetBit(pos + 1)
           }
-          agg
+          pos = mask.nextSetBit(pos + 1)
         }
-        future.onFailure { case e =>
-          e.printStackTrace()
-        }
-        future
-      }
-      val aggs = Await.result(all, 1.hour)
-      closePartExecutionContext()
-
-      aggs.reduce(_ :+= _)
-    })).collect().par.reduce(_ :+= _)
-  }
-
-  // note: should only be called in one partition!
-  protected def initPartExecutionContext(): ExecutionContextExecutorService = {
-    ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
-  }
-
-  // note: should be called after finish using ExecutionContext
-  protected def closePartExecutionContext()(implicit es: ExecutionContextExecutorService): Unit = {
-    es.shutdown()
+        agg
+      }}
+      withAwaitResultAndClose(Future.reduce(all)(_ :+= _))
+    }).collect().par.reduce(_ :+= _)
   }
 }

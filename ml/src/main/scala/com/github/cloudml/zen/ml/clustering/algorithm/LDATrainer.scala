@@ -23,11 +23,11 @@ import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, convert, sum}
 import breeze.numerics._
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
-import com.github.cloudml.zen.ml.util.{BVDecompressor, BVCompressor}
+import com.github.cloudml.zen.ml.util.Concurrent._
+import com.github.cloudml.zen.ml.util.{BVCompressor, BVDecompressor}
 import org.apache.spark.graphx2.impl.{ShippableVertexPartition => VertPartition}
 
-import scala.concurrent._
-import scala.concurrent.duration._
+import scala.concurrent.Future
 
 
 abstract class LDATrainer(numTopics: Int, numThreads: Int)
@@ -40,64 +40,51 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
     val results = new Array[Nvk](totalSize)
     val marks = new AtomicIntegerArray(totalSize)
 
-    implicit val es = initPartExecutionContext()
-    val all = Future.traverse(cntsIter.grouped(numThreads * 5).toIterator) { batch =>
-      val future = Future {
-        batch.foreach { case (vid, counter) =>
-          val i = index.getPos(vid)
-          if (marks.getAndDecrement(i) == 0) {
-            results(i) = counter
-          } else {
-            while (marks.getAndSet(i, -1) <= 0) {}
-            val agg = results(i)
-            results(i) = if (isTermId(vid)) agg match {
-              case u: BDV[Count] => counter match {
-                case v: BDV[Count] => u :+= v
-                case v: BSV[Count] => u :+= v
-              }
-              case u: BSV[Count] => counter match {
-                case v: BDV[Count] => v :+= u
-                case v: BSV[Count] =>
-                  u :+= v
-                  if (u.activeSize >= dscp) toBDV(u) else u
-              }
-            } else {
-              agg.asInstanceOf[Ndk] :+= counter.asInstanceOf[Ndk]
+    implicit val es = initExecutionContext(numThreads)
+    val all = Future.traverse(cntsIter.grouped(numThreads * 5).toIterator) { batch => withFuture {
+      batch.foreach { case (vid, counter) =>
+        val i = index.getPos(vid)
+        if (marks.getAndDecrement(i) == 0) {
+          results(i) = counter
+        } else {
+          while (marks.getAndSet(i, -1) <= 0) {}
+          val agg = results(i)
+          results(i) = if (isTermId(vid)) agg match {
+            case u: BDV[Count] => counter match {
+              case v: BDV[Count] => u :+= v
+              case v: BSV[Count] => u :+= v
             }
+            case u: BSV[Count] => counter match {
+              case v: BDV[Count] => v :+= u
+              case v: BSV[Count] =>
+                u :+= v
+                if (u.activeSize >= dscp) toBDV(u) else u
+            }
+          } else {
+            agg.asInstanceOf[Ndk] :+= counter.asInstanceOf[Ndk]
           }
-          marks.set(i, Int.MaxValue)
         }
+        marks.set(i, Int.MaxValue)
       }
-      future.onFailure { case e =>
-        e.printStackTrace()
-      }
-      future
-    }
-    Await.ready(all, 1.hour)
+    }}
+    withAwaitReady(all)
 
     // compress counters
     val sizePerthrd = {
       val npt = totalSize / numThreads
       if (npt * numThreads == totalSize) npt else npt + 1
     }
-    val all2 = Future.traverse(Range(0, numThreads).iterator) { thid =>
-      val future = Future {
-        val comp = new BVCompressor(numTopics)
-        val startPos = sizePerthrd * thid
-        val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
-        var pos = mask.nextSetBit(startPos)
-        while (pos < endPos && pos >= 0) {
-          values(pos) = comp.BV2CV(results(pos))
-          pos = mask.nextSetBit(pos + 1)
-        }
+    val all2 = Future.traverse(Range(0, numThreads).iterator) { thid => withFuture {
+      val comp = new BVCompressor(numTopics)
+      val startPos = sizePerthrd * thid
+      val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
+      var pos = mask.nextSetBit(startPos)
+      while (pos < endPos && pos >= 0) {
+        values(pos) = comp.BV2CV(results(pos))
+        pos = mask.nextSetBit(pos + 1)
       }
-      future.onFailure { case e =>
-        e.printStackTrace()
-      }
-      future
-    }
-    Await.ready(all2, 1.hour)
-    closePartExecutionContext()
+    }}
+    withAwaitReadyAndClose(all2)
 
     vp.withValues(values)
   }
@@ -125,50 +112,43 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
       if (npt * numThreads == totalSize) npt else npt + 1
     }
 
-    implicit val es = initPartExecutionContext()
-    val all = Future.traverse(Range(0, numThreads).iterator) { thid =>
-      val future = Future {
-        val decomp = new BVDecompressor(numTopics)
-        val startPos = sizePerthrd * thid
-        val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
-        var wllh_th = 0.0
-        var dllh_th = 0.0
-        var pos = mask.nextSetBit(startPos)
-        while (pos < endPos && pos >= 0) {
-          val bv = decomp.CV2BV(values(pos))
-          if (isTermId(index.getValue(pos))) {
-            bv.activeValuesIterator.foreach(cnt =>
-              wllh_th += lgamma(cnt + beta)
-            )
-            wllh_th -= bv.activeSize * lgamma_beta
-          } else {
-            val docTopics = bv.asInstanceOf[BSV[Count]]
-            val used = docTopics.used
-            val index = docTopics.index
-            val data = docTopics.data
-            var nd = 0
-            var i = 0
-            while (i < used) {
-              val topic = index(i)
-              val cnt = data(i)
-              dllh_th += lgamma(cnt + alphaks(topic)) - lgamma_alphaks(topic)
-              nd += cnt
-              i += 1
-            }
-            dllh_th -= lgamma(nd + alphaSum)
+    implicit val es = initExecutionContext(numThreads)
+    val all = Future.traverse(Range(0, numThreads).iterator) { thid => withFuture {
+      val decomp = new BVDecompressor(numTopics)
+      val startPos = sizePerthrd * thid
+      val endPos = math.min(sizePerthrd * (thid + 1), totalSize)
+      var wllh_th = 0.0
+      var dllh_th = 0.0
+      var pos = mask.nextSetBit(startPos)
+      while (pos < endPos && pos >= 0) {
+        val bv = decomp.CV2BV(values(pos))
+        if (isTermId(index.getValue(pos))) {
+          bv.activeValuesIterator.foreach(cnt =>
+            wllh_th += lgamma(cnt + beta)
+          )
+          wllh_th -= bv.activeSize * lgamma_beta
+        } else {
+          val docTopics = bv.asInstanceOf[BSV[Count]]
+          val used = docTopics.used
+          val index = docTopics.index
+          val data = docTopics.data
+          var nd = 0
+          var i = 0
+          while (i < used) {
+            val topic = index(i)
+            val cnt = data(i)
+            dllh_th += lgamma(cnt + alphaks(topic)) - lgamma_alphaks(topic)
+            nd += cnt
+            i += 1
           }
-          pos = mask.nextSetBit(pos + 1)
+          dllh_th -= lgamma(nd + alphaSum)
         }
-        wllhs += wllh_th
-        dllhs += dllh_th
+        pos = mask.nextSetBit(pos + 1)
       }
-      future.onFailure { case e =>
-        e.printStackTrace()
-      }
-      future
-    }
-    Await.ready(all, 2.hour)
-    closePartExecutionContext()
+      wllhs += wllh_th
+      dllhs += dllh_th
+    }}
+    withAwaitReadyAndClose(all)
 
     (wllhs, dllhs)
   }

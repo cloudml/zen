@@ -20,10 +20,10 @@ package com.github.cloudml.zen.ml.clustering.algorithm
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
+import com.github.cloudml.zen.ml.util.Concurrent._
 import org.apache.spark.graphx2.impl.EdgePartition
 
 import scala.concurrent._
-import scala.concurrent.duration._
 
 
 abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
@@ -40,76 +40,57 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
     val vertSize = useds.length
     val results = new Array[NvkPair](vertSize)
 
-    implicit val es = initPartExecutionContext()
-    val all0 = Future.traverse(Range(0, numThreads).iterator) { thid =>
-      val future = Future {
-        var i = thid
-        while (i < vertSize) {
-          val vid = l2g(i)
-          val used = useds(i)
-          val counter: Nvk = if (isTermId(vid) && used >= dscp) {
-            new BDV(new Array[Count](numTopics))
-          } else {
-            val len = math.max(used >>> 1, 2)
-            new BSV(new Array[Int](len), new Array[Count](len), 0, numTopics)
-          }
-          results(i) = (vid, counter)
-          i += numThreads
+    implicit val es = initExecutionContext(numThreads)
+    val all0 = Future.traverse(Range(0, numThreads).iterator) { thid => withFuture {
+      var i = thid
+      while (i < vertSize) {
+        val vid = l2g(i)
+        val used = useds(i)
+        val counter: Nvk = if (isTermId(vid) && used >= dscp) {
+          new BDV(new Array[Count](numTopics))
+        } else {
+          val len = math.max(used >>> 1, 2)
+          new BSV(new Array[Int](len), new Array[Count](len), 0, numTopics)
         }
+        results(i) = (vid, counter)
+        i += numThreads
       }
-      future.onFailure { case e =>
-        e.printStackTrace()
-      }
-      future
-    }
-    Await.ready(all0, 1.hour)
+    }}
+    withAwaitReady(all0)
 
-    val all = Future.traverse(ep.index.iterator) { case (_, startPos) =>
-      val future = Future {
-        val si = lcSrcIds(startPos)
-        val docTopics = results(si)._2
-        var pos = startPos
-        while (pos < totalSize && lcSrcIds(pos) == si) {
-          val termTopics = results(lcDstIds(pos))._2
-          val topic = data(pos)
-          docTopics(topic) += 1
-          termTopics.synchronized {
-            termTopics(topic) += 1
-          }
-          pos += 1
+    val all = Future.traverse(ep.index.iterator) { case (_, startPos) => withFuture {
+      val si = lcSrcIds(startPos)
+      val docTopics = results(si)._2
+      var pos = startPos
+      while (pos < totalSize && lcSrcIds(pos) == si) {
+        val termTopics = results(lcDstIds(pos))._2
+        val topic = data(pos)
+        docTopics(topic) += 1
+        termTopics.synchronized {
+          termTopics(topic) += 1
         }
+        pos += 1
       }
-      future.onFailure { case e =>
-        e.printStackTrace()
-      }
-      future
-    }
-    Await.ready(all, 1.hour)
+    }}
+    withAwaitReady(all)
 
-    val all2 = Future.traverse(Range(0, numThreads).iterator) { thid =>
-      val future = Future {
-        var i = thid
-        while (i < vertSize) {
-          val tuple = results(i)
-          val vid = tuple._1
-          if (isTermId(vid)) tuple._2 match {
-            case v: BDV[Count] =>
-              val used = v.data.count(_ > 0)
-              if (used < dscp) {
-                results(i) = (vid, toBSV(v, used))
-              }
-            case _ =>
-          }
-          i += numThreads
+    val all2 = Future.traverse(Range(0, numThreads).iterator) { thid => withFuture {
+      var i = thid
+      while (i < vertSize) {
+        val tuple = results(i)
+        val vid = tuple._1
+        if (isTermId(vid)) tuple._2 match {
+          case v: BDV[Count] =>
+            val used = v.data.count(_ > 0)
+            if (used < dscp) {
+              results(i) = (vid, toBSV(v, used))
+            }
+          case _ =>
         }
+        i += numThreads
       }
-      future.onFailure { case e =>
-        e.printStackTrace()
-      }
-      future
-    }
-    Await.ready(all2, 1.hour)
-    closePartExecutionContext()
+    }}
+    withAwaitReadyAndClose(all2)
 
     results.iterator
   }
@@ -138,8 +119,8 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
     @volatile var dllhs = 0D
     val abDenseSum = sum_abDense(alphak_denoms, beta)
 
-    implicit val es = initPartExecutionContext()
-    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+    implicit val es = initExecutionContext(numThreads)
+    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => withFuture {
       val si = lcSrcIds(offset)
       val docTopics = vattrs(si).asInstanceOf[BSV[Count]]
       val doc_denom = 1.0 / (sum(docTopics) + alphaSum)
@@ -166,8 +147,7 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
       wllhs += wllhs_th
       dllhs += dllhs_th
     }))
-    Await.ready(all, 2.hour)
-    closePartExecutionContext()
+    withAwaitReadyAndClose(all)
 
     (llhs, wllhs, dllhs)
   }

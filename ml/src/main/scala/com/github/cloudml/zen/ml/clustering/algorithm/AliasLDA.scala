@@ -23,12 +23,12 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
+import com.github.cloudml.zen.ml.util.Concurrent._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
 import org.apache.spark.graphx2.impl.EdgePartition
 
 import scala.collection.JavaConversions._
-import scala.concurrent._
-import scala.concurrent.duration._
+import scala.concurrent.Future
 
 
 class AliasLDA(numTopics: Int, numThreads: Int)
@@ -62,8 +62,8 @@ class AliasLDA(numTopics: Int, numThreads: Int)
     val global = new FlatDist[Double](isSparse=false)
     resetDist_abDense(global, alphak_denoms, beta)
 
-    implicit val es = initPartExecutionContext()
-    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => Future {
+    implicit val es = initExecutionContext(numThreads)
+    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => withFuture {
       val thid = thq.poll()
       var gen = gens(thid)
       if (gen == null) {
@@ -92,8 +92,7 @@ class AliasLDA(numTopics: Int, numThreads: Int)
       }
       thq.add(thid)
     }))
-    Await.ready(all, 2.hour)
-    closePartExecutionContext()
+    withAwaitReadyAndClose(all)
 
     ep.withVertexAttributes(useds)
   }

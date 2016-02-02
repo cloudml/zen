@@ -23,12 +23,12 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
+import com.github.cloudml.zen.ml.util.Concurrent._
 import com.github.cloudml.zen.ml.util.XORShiftRandom
 import org.apache.spark.graphx2.impl.EdgePartition
 
 import scala.collection.JavaConversions._
-import scala.concurrent._
-import scala.concurrent.duration._
+import scala.concurrent.Future
 
 
 class LightLDA(numTopics: Int, numThreads: Int)
@@ -68,86 +68,79 @@ class LightLDA(numTopics: Int, numThreads: Int)
     val wordPropCurry = wordProposal(topicCounters, beta, betaSum)_
     val docPropCurry = docProposal(topicCounters, alphaAS, alphaRatio)_
 
-    implicit val es = initPartExecutionContext()
-    val all = Future.traverse(lcSrcIds.indices.by(3).iterator) { lsi =>
-      val future = Future {
-        val thid = thq.poll()
-        var gen = gens(thid)
-        if (gen == null) {
-          gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
-          gens(thid) = gen
-          termDists(thid) = new AliasTable[Double] {
-            reset(numTopics)
-          }
-          MHSamps(thid) = new MetropolisHastings
-          compSamps(thid) = new CompositeSampler
+    implicit val es = initExecutionContext(numThreads)
+    val all = Future.traverse(lcSrcIds.indices.by(3).iterator) { lsi => withFuture {
+      val thid = thq.poll()
+      var gen = gens(thid)
+      if (gen == null) {
+        gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
+        gens(thid) = gen
+        termDists(thid) = new AliasTable[Double] {
+          reset(numTopics)
         }
-        val termDist = termDists(thid)
-        val MHSamp = MHSamps(thid)
-        val compSamp = compSamps(thid)
+        MHSamps(thid) = new MetropolisHastings
+        compSamps(thid) = new CompositeSampler
+      }
+      val termDist = termDists(thid)
+      val MHSamp = MHSamps(thid)
+      val compSamp = compSamps(thid)
 
-        val si = lcSrcIds(lsi)
-        val startPos = lcSrcIds(lsi + 1)
-        val endPos = lcSrcIds(lsi + 2)
-        val termTopics = vattrs(si)
-        useds(si) = termTopics.activeSize
-        resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
-        val wordProp = wordPropCurry(termTopics)
-        var pos = startPos
-        while (pos < endPos) {
-          val di = lcDstIds(pos)
-          val docTopics = vattrs(di).asInstanceOf[Ndk]
-          useds(di) = docTopics.activeSize
-          if (gen.nextDouble() < 1e-6) {
-            resetDist_aDense(alphaDist, topicCounters, alphaAS, alphaRatio)
-            resetDist_bDense(betaDist, topicCounters, beta, betaSum)
-          }
-          if (gen.nextDouble() < 1e-4) {
-            resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
-          }
-          val docDist = dSparseCached(cache => cache == null || cache.get() == null || gen.nextDouble() < 1e-2,
-            docCache, docTopics, di)
-
-          var topic = data(pos)
-          val CGSFunc = CGSCurry(termTopics, docTopics)
-          var docCycle = gen.nextBoolean()
-          var mh = 0
-          while (mh < 8) {
-            if (docCycle) {
-              val dps = compSamp.resetComponents(docDist, alphaDist)
-              MHSamp.resetProb(CGSFunc, docPropCurry(docTopics), dps, topic)
-            } else {
-              val wps = compSamp.resetComponents(termDist, betaDist)
-              MHSamp.resetProb(CGSFunc, wordProp, wps, topic)
-            }
-            val newTopic = MHSamp.sampleRandom(gen)
-            if (newTopic != topic) {
-              data(pos) = newTopic
-              topicCounters(topic) -= 1
-              topicCounters(newTopic) += 1
-              termTopics(topic) -= 1
-              termTopics(newTopic) += 1
-              docTopics.synchronized {
-                docTopics(topic) -= 1
-                docTopics(newTopic) += 1
-              }
-              topic = newTopic
-            }
-            docCycle = !docCycle
-            mh += 1
-          }
-
-          pos += 1
+      val si = lcSrcIds(lsi)
+      val startPos = lcSrcIds(lsi + 1)
+      val endPos = lcSrcIds(lsi + 2)
+      val termTopics = vattrs(si)
+      useds(si) = termTopics.activeSize
+      resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
+      val wordProp = wordPropCurry(termTopics)
+      var pos = startPos
+      while (pos < endPos) {
+        val di = lcDstIds(pos)
+        val docTopics = vattrs(di).asInstanceOf[Ndk]
+        useds(di) = docTopics.activeSize
+        if (gen.nextDouble() < 1e-6) {
+          resetDist_aDense(alphaDist, topicCounters, alphaAS, alphaRatio)
+          resetDist_bDense(betaDist, topicCounters, beta, betaSum)
         }
-        thq.add(thid)
+        if (gen.nextDouble() < 1e-4) {
+          resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
+        }
+        val docDist = dSparseCached(cache => cache == null || cache.get() == null || gen.nextDouble() < 1e-2,
+          docCache, docTopics, di)
+
+        var topic = data(pos)
+        val CGSFunc = CGSCurry(termTopics, docTopics)
+        var docCycle = gen.nextBoolean()
+        var mh = 0
+        while (mh < 8) {
+          if (docCycle) {
+            val dps = compSamp.resetComponents(docDist, alphaDist)
+            MHSamp.resetProb(CGSFunc, docPropCurry(docTopics), dps, topic)
+          } else {
+            val wps = compSamp.resetComponents(termDist, betaDist)
+            MHSamp.resetProb(CGSFunc, wordProp, wps, topic)
+          }
+          val newTopic = MHSamp.sampleRandom(gen)
+          if (newTopic != topic) {
+            data(pos) = newTopic
+            topicCounters(topic) -= 1
+            topicCounters(newTopic) += 1
+            termTopics(topic) -= 1
+            termTopics(newTopic) += 1
+            docTopics.synchronized {
+              docTopics(topic) -= 1
+              docTopics(newTopic) += 1
+            }
+            topic = newTopic
+          }
+          docCycle = !docCycle
+          mh += 1
+        }
+
+        pos += 1
       }
-      future.onFailure { case e =>
-        e.printStackTrace()
-      }
-      future
-    }
-    Await.ready(all, 2.hour)
-    closePartExecutionContext()
+      thq.add(thid)
+    }}
+    withAwaitReadyAndClose(all)
 
     ep.withVertexAttributes(useds)
   }
