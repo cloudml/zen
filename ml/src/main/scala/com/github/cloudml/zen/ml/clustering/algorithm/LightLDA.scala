@@ -92,8 +92,7 @@ class LightLDA(numTopics: Int, numThreads: Int)
         val termTopics = vattrs(si)
         useds(si) = termTopics.activeSize
         resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
-        val denseTermTopics = toBDV(termTopics)
-        val wordProp = wordPropCurry(denseTermTopics)
+        val wordProp = wordPropCurry(termTopics)
         var pos = startPos
         while (pos < endPos) {
           val di = lcDstIds(pos)
@@ -110,7 +109,7 @@ class LightLDA(numTopics: Int, numThreads: Int)
             docCache, docTopics, di)
 
           var topic = data(pos)
-          val CGSFunc = CGSCurry(denseTermTopics, docTopics)
+          val CGSFunc = CGSCurry(termTopics, docTopics)
           var docCycle = gen.nextBoolean()
           var mh = 0
           while (mh < 8) {
@@ -158,20 +157,20 @@ class LightLDA(numTopics: Int, numThreads: Int)
     beta: Double,
     betaSum: Double,
     alphaRatio: Double)
-    (denseTermTopics: BDV[Count], docTopics: Ndk)
+    (termTopics: Nwk, docTopics: Ndk)
     (curTopic: Int, i: Int): Double = {
     val alphak = (topicCounters(i) + alphaAS) * alphaRatio
     val adjust = if (i == curTopic) -1 else 0
-    (docTopics(i) + adjust + alphak) * (denseTermTopics(i) + adjust + beta) /
+    (docTopics(i) + adjust + alphak) * (termTopics(i) + adjust + beta) /
       (topicCounters(i) + adjust + betaSum)
   }
 
   def wordProposal(topicCounters: BDV[Count],
     beta: Double,
     betaSum: Double)
-    (denseTermTopics: BDV[Count])
+    (termTopics: Nwk)
     (curTopic: Int, i: Int): Double = {
-    (denseTermTopics(i) + beta) / (topicCounters(i) + betaSum)
+    (termTopics(i) + beta) / (topicCounters(i) + betaSum)
   }
 
   def docProposal(topicCounters: BDV[Count],
