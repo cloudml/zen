@@ -24,16 +24,15 @@ import spire.math.{Numeric => spNum}
 
 trait Sampler[@specialized(Double, Int, Float, Long) T] {
   protected def numer: spNum[T]
+  def apply(state: Int): T
   def norm: T
   def sampleFrom(base: T, gen: Random): Int
 
-  def normDouble: Double = {
-    numer.toDouble(norm)
-  }
+  def applyDouble(state: Int): Double = numer.toDouble(apply(state))
 
-  def sampleFromDouble(base: Double, gen: Random): Int = {
-    sampleFrom(numer.fromDouble(base), gen)
-  }
+  def normDouble: Double = numer.toDouble(norm)
+
+  def sampleFromDouble(base: Double, gen: Random): Int = sampleFrom(numer.fromDouble(base), gen)
 
   def sampleRandom(gen: Random): Int = {
     val u = gen.nextDouble() * normDouble

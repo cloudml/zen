@@ -24,19 +24,20 @@ import spire.math.{Numeric => spNum}
 
 class MetropolisHastings(implicit ev: spNum[Double])
   extends Sampler[Double] {
-  type CondProb = (Int, Int) => Double
+  type TransProb = Int => Double
 
-  private var origFunc: CondProb = _
-  private var proposal: CondProb = _
-  private var propSampler: Sampler[Double] = _
+  private var origFunc: TransProb = _
+  private var proposal: Sampler[Double] = _
   private var state: Int = _
 
   protected def numer: spNum[Double] = ev
 
-  def norm: Double = propSampler.norm
+  def apply(state: Int): Double = origFunc(state)
+
+  def norm: Double = proposal.norm
 
   def sampleFrom(base: Double, gen: Random): Int = {
-    val newState = propSampler.sampleFrom(base, gen)
+    val newState = proposal.sampleFrom(base, gen)
     if (newState != state) {
       val ar = acceptRate(newState)
       if (ar >= 1.0 || gen.nextDouble() < ar) {
@@ -47,29 +48,25 @@ class MetropolisHastings(implicit ev: spNum[Double])
   }
 
   private def acceptRate(newState:Int): Double = {
-    origFunc(state, newState) * proposal(state, state) /
-      (origFunc(state, state) * proposal(state, newState))
+    origFunc(newState) * proposal(state) /
+      (origFunc(state) * proposal(newState))
   }
 
-  def resetProb(origFunc: CondProb,
-    proposal: CondProb,
-    propSampler: Sampler[Double],
+  def resetProb(origFunc: TransProb,
+    proposal: Sampler[Double],
     initState: Int): MetropolisHastings = {
     this.origFunc = origFunc
     this.proposal = proposal
-    this.propSampler = propSampler
     this.state = initState
     this
   }
 
-  def resetProb(origFunc: CondProb,
-    proposal: CondProb,
-    propSampler: Sampler[Double],
+  def resetProb(origFunc: TransProb,
+    proposal: Sampler[Double],
     gen: Random): MetropolisHastings = {
     this.origFunc = origFunc
     this.proposal = proposal
-    this.propSampler = propSampler
-    this.state = propSampler.sampleRandom(gen)
+    this.state = proposal.sampleRandom(gen)
     this
   }
 }

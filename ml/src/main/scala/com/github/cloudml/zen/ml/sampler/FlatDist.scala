@@ -59,6 +59,8 @@ class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse:
     _dist.indexAt(idx)
   }
 
+  def apply(state: Int): T = _dist(state)
+
   def update(state: Int, value: => T): Unit = {
     val prev = _dist(state)
     _dist(state) = value
@@ -73,9 +75,10 @@ class FlatDist[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse:
   }
 
   def resetDist(probs: Array[T], space: Array[Int], psize: Int): FlatDist[T] = {
+    reset(psize)
     implicit val zero = Zero(ev.zero)
     _dist = if (isSparse) {
-      new brSV[T](space, probs, psize, probs.length)
+      new brSV[T](space, probs, psize, _dist.length)
     } else {
       new brDV[T](probs)
     }

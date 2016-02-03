@@ -32,6 +32,7 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](implicit ev
   private var _p: Array[T] = _
   private var _used: Int = _
   private var _norm: T = _
+  private var _auxDist: DiscreteSampler[T] = _
 
   protected def numer: spNum[T] = ev
 
@@ -58,6 +59,8 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](implicit ev
     }
   }
 
+  def apply(state: Int): T = _auxDist(state)
+
   def update(state: Int, value: => T): Unit = {}
 
   def deltaUpdate(state: Int, delta: => T): Unit = {}
@@ -65,30 +68,28 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](implicit ev
   def resetDist(probs: Array[T], space: Array[Int], psize: Int): AliasTable[T] = {
     // @inline def isClose(a: Double, b: Double): Boolean = math.abs(a - b) <= (1e-8 + math.abs(a) * 1e-6)
     reset(psize)
-    var sum = ev.zero
-    sum match {
+    val sum = if (_auxDist != null) {
+      _auxDist.resetDist(probs, space, psize)
+      _auxDist.norm
+    } else ev.zero match {
       case _: Double =>
         val dprobs = probs.asInstanceOf[Array[Double]]
-        val dscale = psize.toDouble
         val dsum = blas.dasum(psize, dprobs, 1)
-        sum = ev.fromDouble(dsum)
-        blas.dscal(psize, dscale, dprobs, 1)
+        ev.fromDouble(dsum)
       case _: Float =>
         val fprobs = probs.asInstanceOf[Array[Float]]
-        val fscale = psize.toFloat
         val fsum = blas.sasum(psize, fprobs, 1)
-        sum = ev.fromFloat(fsum)
-        blas.sscal(psize, fscale, fprobs, 1)
+        ev.fromFloat(fsum)
       case _ =>
-        val scale = ev.fromInt(psize)
+        var _sum = ev.zero
         var i = 0
         while (i < psize) {
-          val prob = probs(i)
-          sum = ev.plus(sum, prob)
-          probs(i) = ev.times(prob, scale)
+          _sum = ev.plus(_sum, probs(i))
           i += 1
         }
+        _sum
     }
+    val scale = ev.fromInt(psize)
     var ls = 0
     var le = 0
     var he = psize
@@ -97,7 +98,7 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](implicit ev
     var qi = 0
     var i = 0
     while (i < psize) {
-      val prob = probs(i)
+      val prob = ev.times(probs(i), scale)
       val state = if (space == null) i else space(i)
       if (ev.lt(prob, sum)) {
         _l(le) = state
@@ -143,11 +144,19 @@ class AliasTable[@specialized(Double, Int, Float, Long) T: ClassTag](implicit ev
     resetDist(probs.toArray, space.toArray, psize)
   }
 
+  def addAuxDist(auxDist: DiscreteSampler[T]): AliasTable[T] = {
+    _auxDist = auxDist
+    this
+  }
+
   def reset(newSize: Int): AliasTable[T] = {
     if (_l == null || _l.length < newSize) {
       _l = new Array[Int](newSize)
       _h = new Array[Int](newSize)
       _p = new Array[T](newSize)
+    }
+    if (_auxDist != null) {
+      _auxDist.reset(newSize)
     }
     _used = newSize
     _norm = ev.zero

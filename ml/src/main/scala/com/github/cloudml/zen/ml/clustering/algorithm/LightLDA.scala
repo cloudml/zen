@@ -53,11 +53,11 @@ class LightLDA(numTopics: Int, numThreads: Int)
     val data = ep.data
     val vertSize = vattrs.length
     val useds = new Array[Int](vertSize)
-    val thq = new ConcurrentLinkedQueue(0 until numThreads)
-
-    val alphaDist = new AliasTable[Double]
-    val betaDist = new AliasTable[Double]
     val docCache = new Array[SoftReference[AliasTable[Count]]](vertSize)
+
+    val alphaDist = new AliasTable[Double].addAuxDist(new FlatDist(isSparse=false))
+    val betaDist = new AliasTable[Double].addAuxDist(new FlatDist(isSparse=false))
+    val thq = new ConcurrentLinkedQueue(0 until numThreads)
     val gens = new Array[XORShiftRandom](numThreads)
     val termDists = new Array[AliasTable[Double]](numThreads)
     val MHSamps = new Array[MetropolisHastings](numThreads)
@@ -65,8 +65,6 @@ class LightLDA(numTopics: Int, numThreads: Int)
     resetDist_aDense(alphaDist, topicCounters, alphaAS, alphaRatio)
     resetDist_bDense(betaDist, topicCounters, beta, betaSum)
     val CGSCurry = tokenOrigProb(topicCounters, alphaAS, beta, betaSum, alphaRatio)_
-    val wordPropCurry = wordProposal(topicCounters, beta, betaSum)_
-    val docPropCurry = docProposal(topicCounters, alphaAS, alphaRatio)_
 
     implicit val es = initExecutionContext(numThreads)
     val all = Future.traverse(lcSrcIds.indices.by(3).iterator) { lsi => withFuture {
@@ -75,8 +73,7 @@ class LightLDA(numTopics: Int, numThreads: Int)
       if (gen == null) {
         gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
         gens(thid) = gen
-        termDists(thid) = new AliasTable[Double]
-        termDists(thid).reset(numTopics)
+        termDists(thid) = new AliasTable[Double].addAuxDist(new FlatDist(isSparse=true)).reset(numTopics)
         MHSamps(thid) = new MetropolisHastings
         compSamps(thid) = new CompositeSampler
       }
@@ -90,7 +87,6 @@ class LightLDA(numTopics: Int, numThreads: Int)
       val termTopics = vattrs(si)
       useds(si) = termTopics.activeSize
       resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
-      val wordProp = wordPropCurry(termTopics)
       var pos = startPos
       while (pos < endPos) {
         val di = lcDstIds(pos)
@@ -103,22 +99,21 @@ class LightLDA(numTopics: Int, numThreads: Int)
         if (gen.nextDouble() < 1e-4) {
           resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
         }
-        val docDist = dSparseCached(cache => cache == null || cache.get() == null || gen.nextDouble() < 1e-2,
-          docCache, docTopics, di)
-
+        val docDist = dSparseCached(docCache, di, gen.nextDouble() < 1e-2).getOrElse {
+          resetCache_dSparse(docCache, di, docTopics)
+        }
         var topic = data(pos)
-        val CGSFunc = CGSCurry(termTopics, docTopics)
-        val docProp = docPropCurry(docTopics)
+        val CGSCurry2 = CGSCurry(termTopics, docTopics)
         var docCycle = gen.nextBoolean()
         var mh = 0
         while (mh < 8) {
+          val CGSFunc = CGSCurry2(topic)
           if (docCycle) {
             compSamp.resetComponents(docDist, alphaDist)
-            MHSamp.resetProb(CGSFunc, docProp, compSamp, topic)
           } else {
             compSamp.resetComponents(termDist, betaDist)
-            MHSamp.resetProb(CGSFunc, wordProp, compSamp, topic)
           }
+          MHSamp.resetProb(CGSFunc, compSamp, topic)
           val newTopic = MHSamp.sampleRandom(gen)
           if (newTopic != topic) {
             data(pos) = newTopic
@@ -151,30 +146,12 @@ class LightLDA(numTopics: Int, numThreads: Int)
     betaSum: Double,
     alphaRatio: Double)
     (termTopics: Nwk, docTopics: Ndk)
-    (curTopic: Int, i: Int): Double = {
+    (curTopic: Int)(i: Int): Double = {
     val adjust = if (i == curTopic) -1 else 0
+    val nk = topicCounters(i)
     val ndk = docTopics.synchronized(docTopics(i))
-    val alphak = (topicCounters(i) + alphaAS) * alphaRatio
-    (ndk + adjust + alphak) * (termTopics(i) + adjust + beta) /
-      (topicCounters(i) + adjust + betaSum)
-  }
-
-  def wordProposal(topicCounters: BDV[Count],
-    beta: Double,
-    betaSum: Double)
-    (termTopics: Nwk)
-    (curTopic: Int, i: Int): Double = {
-    (termTopics(i) + beta) / (topicCounters(i) + betaSum)
-  }
-
-  def docProposal(topicCounters: BDV[Count],
-    alphaAS: Double,
-    alphaRatio: Double)
-    (docTopics: Ndk)
-    (curTopic: Int, i: Int): Double = {
-    val ndk = docTopics.synchronized(docTopics(i))
-    val alphak = (topicCounters(i) + alphaAS) * alphaRatio
-    ndk + alphak
+    val alphak = (nk + alphaAS) * alphaRatio
+    (ndk + adjust + alphak) * (termTopics(i) + adjust + beta) / (nk + adjust + betaSum)
   }
 
   def resetDist_bDense(b: AliasTable[Double],
@@ -222,7 +199,7 @@ class LightLDA(numTopics: Int, numThreads: Int)
         probs(i) = data(i) / (topicCounters(index(i)) + betaSum)
         i += 1
       }
-      ws.resetDist(probs, index, used)
+      ws.resetDist(probs, index.clone(), used)
   }
 
   def resetDist_aDense(a: AliasTable[Double],
@@ -240,22 +217,27 @@ class LightLDA(numTopics: Int, numThreads: Int)
     }
   }
 
-  def dSparseCached(updatePred: SoftReference[AliasTable[Count]] => Boolean,
-    cacheArray: Array[SoftReference[AliasTable[Count]]],
-    docTopics: Ndk,
-    lcDocId: Int): AliasTable[Count] = {
-    val docCache = cacheArray(lcDocId)
-    if (!updatePred(docCache)) {
-      docCache.get
+  def dSparseCached(cache: Array[SoftReference[AliasTable[Count]]],
+    ci: Int,
+    needRefresh: => Boolean): Option[AliasTable[Count]] = {
+    val docCache = cache(ci)
+    if (docCache == null || docCache.get == null || needRefresh) {
+      None
     } else {
-      val tmpDocTopics = docTopics.synchronized(docTopics.copy)
-      val used = tmpDocTopics.used
-      val index = tmpDocTopics.index
-      val data = tmpDocTopics.data
-      val table = new AliasTable[Count]
-      table.resetDist(data, index, used)
-      cacheArray(lcDocId) = new SoftReference(table)
-      table
+      Some(docCache.get)
     }
+  }
+
+  def resetCache_dSparse(cache: Array[SoftReference[AliasTable[Count]]],
+    ci: Int,
+    docTopics: Ndk): AliasTable[Count] = {
+    val tmpDocTopics = docTopics.synchronized(docTopics.copy)
+    val used = tmpDocTopics.used
+    val index = tmpDocTopics.index
+    val data = tmpDocTopics.data
+    val table = new AliasTable[Count].addAuxDist(new FlatDist[Count](isSparse=true).reset(numTopics))
+    table.resetDist(data, index, used)
+    cache(ci) = new SoftReference(table)
+    table
   }
 }

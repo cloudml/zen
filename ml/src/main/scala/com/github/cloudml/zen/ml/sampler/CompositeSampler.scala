@@ -28,6 +28,8 @@ class CompositeSampler(implicit ev: spNum[Double])
 
   protected def numer: spNum[Double] = ev
 
+  def apply(state: Int): Double = samplers.iterator.map(_.applyDouble(state)).sum
+
   def norm: Double = samplers.iterator.map(_.normDouble).sum
 
   def sampleFrom(base: Double, gen: Random): Int = {

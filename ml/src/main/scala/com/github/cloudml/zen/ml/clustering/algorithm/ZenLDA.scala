@@ -110,10 +110,8 @@ class ZenLDA(numTopics: Int, numThreads: Int)
       if (gen == null) {
         gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
         gens(thid) = gen
-        termDists(thid) = new AliasTable[Double]
-        cdfDists(thid) = new CumulativeDist[Double]
-        termDists(thid).reset(numTopics)
-        cdfDists(thid).reset(numTopics)
+        termDists(thid) = new AliasTable[Double].reset(numTopics)
+        cdfDists(thid) = new CumulativeDist[Double].reset(numTopics)
       }
       val termDist = termDists(thid)
       val cdfDist = cdfDists(thid)

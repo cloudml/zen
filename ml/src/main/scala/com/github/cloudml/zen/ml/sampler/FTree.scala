@@ -97,6 +97,19 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Bo
     }
   }
 
+  def apply(state: Int): T = {
+    if (!isSparse) {
+      getLeaf(state)
+    } else {
+      val i = binarySearch(_space, state, 0, _used)
+      if (i < 0 || _space(i) != state) {
+        ev.zero
+      } else {
+        getLeaf(i)
+      }
+    }
+  }
+
   def update(state: Int, value: => T): Unit = {
     assert(ev.lteqv(value, ev.zero))
     var pos = toTreePos(state)
