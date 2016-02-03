@@ -94,8 +94,8 @@ class AliasLDA(numTopics: Int, numThreads: Int)
         val termDist = waSparseCached(termCache, di, gen.nextDouble() < 1e-4).getOrElse {
           resetCache_waSparse(termCache, di, topicCounters, termTopics, alphaAS, betaSum, alphaRatio)
         }
-        resetDist_dwbSparse(docDist, topicCounters, termTopics, docTopics, beta, betaSum)
         val topic = data(pos)
+        resetDist_dwbSparse_wAdjust(docDist, topicCounters, termTopics, docTopics, beta, betaSum, topic)
         val CGSFunc = CGSCurry(termTopics, docTopics)(topic)
         compSamp.resetComponents(docDist, termDist, global)
         MHSamp.resetProb(CGSFunc, compSamp, topic)
@@ -153,12 +153,13 @@ class AliasLDA(numTopics: Int, numThreads: Int)
     }
   }
 
-  def resetDist_dwbSparse(dwb: AliasTable[Double],
-    topicCounter: BDV[Count],
+  def resetDist_dwbSparse_wAdjust(dwb: AliasTable[Double],
+    topicCounters: BDV[Count],
     termTopics: Nwk,
     docTopics: Ndk,
     beta: Double,
-    betaSum: Double): AliasTable[Double] = {
+    betaSum: Double,
+    curTopic: Int): AliasTable[Double] = {
     val tmpDocTopics = termTopics.synchronized(termTopics.copy)
     val used = docTopics.used
     val index = docTopics.index
@@ -167,7 +168,9 @@ class AliasLDA(numTopics: Int, numThreads: Int)
     var i = 0
     while (i < used) {
       val topic = index(i)
-      probs(i) = (tmpDocTopics(topic) + beta) * data(i) / (topicCounter(topic) + betaSum)
+      val adjust = if (topic == curTopic) -1 else 0
+      probs(i) = (tmpDocTopics(topic) + adjust + beta) * (data(i) + adjust) /
+        (topicCounters(topic) + adjust + betaSum)
       i += 1
     }
     dwb.resetDist(probs, index.clone(), used)
