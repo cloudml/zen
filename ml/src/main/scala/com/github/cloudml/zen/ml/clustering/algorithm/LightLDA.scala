@@ -75,9 +75,8 @@ class LightLDA(numTopics: Int, numThreads: Int)
       if (gen == null) {
         gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
         gens(thid) = gen
-        termDists(thid) = new AliasTable[Double] {
-          reset(numTopics)
-        }
+        termDists(thid) = new AliasTable[Double]
+        termDists(thid).reset(numTopics)
         MHSamps(thid) = new MetropolisHastings
         compSamps(thid) = new CompositeSampler
       }
@@ -109,15 +108,16 @@ class LightLDA(numTopics: Int, numThreads: Int)
 
         var topic = data(pos)
         val CGSFunc = CGSCurry(termTopics, docTopics)
+        val docProp = docPropCurry(docTopics)
         var docCycle = gen.nextBoolean()
         var mh = 0
         while (mh < 8) {
           if (docCycle) {
-            val dps = compSamp.resetComponents(docDist, alphaDist)
-            MHSamp.resetProb(CGSFunc, docPropCurry(docTopics), dps, topic)
+            compSamp.resetComponents(docDist, alphaDist)
+            MHSamp.resetProb(CGSFunc, docProp, compSamp, topic)
           } else {
-            val wps = compSamp.resetComponents(termDist, betaDist)
-            MHSamp.resetProb(CGSFunc, wordProp, wps, topic)
+            compSamp.resetComponents(termDist, betaDist)
+            MHSamp.resetProb(CGSFunc, wordProp, compSamp, topic)
           }
           val newTopic = MHSamp.sampleRandom(gen)
           if (newTopic != topic) {
@@ -152,9 +152,10 @@ class LightLDA(numTopics: Int, numThreads: Int)
     alphaRatio: Double)
     (termTopics: Nwk, docTopics: Ndk)
     (curTopic: Int, i: Int): Double = {
-    val alphak = (topicCounters(i) + alphaAS) * alphaRatio
     val adjust = if (i == curTopic) -1 else 0
-    (docTopics(i) + adjust + alphak) * (termTopics(i) + adjust + beta) /
+    val ndk = docTopics.synchronized(docTopics(i))
+    val alphak = (topicCounters(i) + alphaAS) * alphaRatio
+    (ndk + adjust + alphak) * (termTopics(i) + adjust + beta) /
       (topicCounters(i) + adjust + betaSum)
   }
 
@@ -171,8 +172,9 @@ class LightLDA(numTopics: Int, numThreads: Int)
     alphaRatio: Double)
     (docTopics: Ndk)
     (curTopic: Int, i: Int): Double = {
+    val ndk = docTopics.synchronized(docTopics(i))
     val alphak = (topicCounters(i) + alphaAS) * alphaRatio
-    docTopics(i) + alphak
+    ndk + alphak
   }
 
   def resetDist_bDense(b: AliasTable[Double],
@@ -246,7 +248,12 @@ class LightLDA(numTopics: Int, numThreads: Int)
     if (!updatePred(docCache)) {
       docCache.get
     } else {
-      val table = AliasTable.generateAlias(docTopics)
+      val tmpDocTopics = docTopics.synchronized(docTopics.copy)
+      val used = tmpDocTopics.used
+      val index = tmpDocTopics.index
+      val data = tmpDocTopics.data
+      val table = new AliasTable[Count]
+      table.resetDist(data, index, used)
       cacheArray(lcDocId) = new SoftReference(table)
       table
     }

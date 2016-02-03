@@ -28,7 +28,7 @@ object Concurrent extends Serializable {
     Future(body)(es)
   }
 
-  @inline def withAwaitReady[T](future: Future[T])(implicit es: ExecutionContextExecutorService): Unit = {
+  @inline def withAwaitReady[T](future: Future[T]): Unit = {
     Await.ready(future, 1.hour)
   }
 
@@ -37,7 +37,7 @@ object Concurrent extends Serializable {
     closeExecutionContext(es)
   }
 
-  @inline def withAwaitResult[T](future: Future[T])(implicit es: ExecutionContextExecutorService): T = {
+  @inline def withAwaitResult[T](future: Future[T]): T = {
     Await.result(future, 1.hour)
   }
 
@@ -65,7 +65,7 @@ object DebugConcurrent extends Serializable {
     future
   }
 
-  def withAwaitReady[T](future: Future[T])(implicit es: ExecutionContextExecutorService): Unit = {
+  def withAwaitReady[T](future: Future[T]): Unit = {
     Await.ready(future, 1.hour)
   }
 
@@ -76,7 +76,7 @@ object DebugConcurrent extends Serializable {
     Await.ready(future, 1.hour)
   }
 
-  def withAwaitResult[T](future: Future[T])(implicit es: ExecutionContextExecutorService): T = {
+  def withAwaitResult[T](future: Future[T]): T = {
     Await.result(future, 1.hour)
   }
 

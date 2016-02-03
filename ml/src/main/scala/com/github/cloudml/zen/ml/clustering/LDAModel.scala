@@ -88,7 +88,8 @@ class LocalLDAModel(@transient val termTopicsArr: Array[Nwk],
     val tokens = vector2Array(doc)
     val topics = new Array[Int](tokens.length)
     var docTopics = uniformDistSampler(gen, tokens, topics, numTopics)
-    val docCdf = new CumulativeDist[Double] { reset(numTopics) }
+    val docCdf = new CumulativeDist[Double]
+    docCdf.reset(numTopics)
     for (i <- 1 to burnIn + runIter) {
       docTopics = sampleDoc(gen, docTopics, tokens, topics, docCdf)
       if (i > burnIn) topicDist :+= docTopics

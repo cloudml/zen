@@ -69,8 +69,10 @@ class SparseLDA(numTopics: Int, numThreads: Int)
       if (gen == null) {
         gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
         gens(thid) = gen
-        docDists(thid) = new FlatDist[Double](isSparse=true) { reset(numTopics) }
-        mainDists(thid) = new FlatDist[Double](isSparse=true) { reset(numTopics) }
+        docDists(thid) = new FlatDist[Double](isSparse=true)
+        mainDists(thid) = new FlatDist[Double](isSparse=true)
+        docDists(thid).reset(numTopics)
+        mainDists(thid).reset(numTopics)
       }
       val docDist = docDists(thid)
       val si = lcSrcIds(offset)
