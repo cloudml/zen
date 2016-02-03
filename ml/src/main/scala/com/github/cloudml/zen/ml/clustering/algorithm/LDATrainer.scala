@@ -128,7 +128,7 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
           )
           wllh_th -= bv.activeSize * lgamma_beta
         } else {
-          val docTopics = bv.asInstanceOf[BSV[Count]]
+          val docTopics = bv.asInstanceOf[Ndk]
           val used = docTopics.used
           val index = docTopics.index
           val data = docTopics.data

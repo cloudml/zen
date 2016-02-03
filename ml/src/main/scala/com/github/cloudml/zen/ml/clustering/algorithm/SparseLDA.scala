@@ -77,34 +77,23 @@ class SparseLDA(numTopics: Int, numThreads: Int)
       val compSamp = compSamps(thid)
 
       val si = lcSrcIds(startPos)
-      val docTopics = vattrs(si).asInstanceOf[BSV[Count]]
+      val docTopics = vattrs(si).asInstanceOf[Ndk]
       useds(si) = docTopics.activeSize
       resetDist_dbSparse(docDist, topicCounters, docTopics, beta, betaSum)
+      val updateCurry = updateTopicAssign(global, docDist, topicCounters, alphaAS, beta, betaSum, alphaRatio)_
       var pos = startPos
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
         val termTopics = vattrs(di)
         useds(di) = termTopics.activeSize
+        val tokenUpdate = updateCurry(termTopics, docTopics)
         val topic = data(pos)
-        topicCounters(topic) -= 1
-        docTopics(topic) -= 1
-        termTopics.synchronized {
-          termTopics(topic) -= 1
-        }
-        global.update(topic, (topicCounters(topic) + alphaAS) * alphaRatio * beta / (topicCounters(topic) + betaSum))
-        docDist.update(topic, docTopics(topic) * beta / (topicCounters(topic) + betaSum))
-        resetDist_wdaSparse_wAdjust(mainDist, topicCounters, termTopics, docTopics, alphaAS, betaSum, alphaRatio, topic)
+        tokenUpdate(topic, -1)
+        resetDist_wdaSparse(mainDist, topicCounters, termTopics, docTopics, alphaAS, betaSum, alphaRatio, topic)
         compSamp.resetComponents(mainDist, docDist, global)
         val newTopic = compSamp.sampleRandom(gen)
+        tokenUpdate(newTopic, 1)
         data(pos) = newTopic
-        topicCounters(newTopic) += 1
-        docTopics(newTopic) += 1
-        termTopics.synchronized {
-          termTopics(newTopic) += 1
-        }
-        global.update(newTopic,
-          (topicCounters(newTopic) + alphaAS) * alphaRatio * beta / (topicCounters(newTopic) + betaSum))
-        docDist.update(newTopic, docTopics(newTopic) * beta / (topicCounters(newTopic) + betaSum))
         pos += 1
       }
       thq.add(thid)
@@ -112,6 +101,28 @@ class SparseLDA(numTopics: Int, numThreads: Int)
     withAwaitReadyAndClose(all)
 
     ep.withVertexAttributes(useds)
+  }
+
+  def updateTopicAssign(ab: FlatDist[Double],
+    db: FlatDist[Double],
+    topicCounters: BDV[Count],
+    alphaAS: Double,
+    beta: Double,
+    betaSum: Double,
+    alphaRatio: Double)
+    (termTopics: Nwk, docTopics: Ndk)
+    (topic: Int, delta: Int): Unit = {
+    topicCounters(topic) += delta
+    docTopics(topic) += delta
+    termTopics.synchronized {
+      termTopics(topic) += delta
+    }
+    val ns = topicCounters(topic)
+    val nds = docTopics(topic)
+    val betaDenom = beta / (ns + betaSum)
+    val alphak = (ns + alphaAS) * alphaRatio
+    ab(topic) = alphak * betaDenom
+    db(topic) = nds * betaDenom
   }
 
   def resetDist_abDense(ab: FlatDist[Double],
@@ -147,49 +158,50 @@ class SparseLDA(numTopics: Int, numThreads: Int)
       probs(i) = data(i) * beta / (topicCounters(index(i)) + betaSum)
       i += 1
     }
-    db.resetDist(probs, index, used)
+    db.resetDist(probs, index.clone(), used)
   }
 
-  def resetDist_wdaSparse_wAdjust(wda: FlatDist[Double],
+  def resetDist_wdaSparse(wda: FlatDist[Double],
     topicCounters: BDV[Count],
     termTopics: Nwk,
     docTopics: Ndk,
     alphaAS: Double,
     betaSum: Double,
     alphaRatio: Double,
-    curTopic: Int): FlatDist[Double] = termTopics match {
-    case v: BDV[Count] =>
-      val probs = new Array[Double](numTopics)
-      val space = new Array[Int](numTopics)
-      var psize = 0
-      var i = 0
-      while (i < numTopics) {
-        val cnt = v(i)
-        if (cnt > 0) {
-          val adjust = if (i == curTopic) -1 else 0
-          val nk = topicCounters(i)
-          val alphak = (nk + alphaAS) * alphaRatio
-          probs(psize) = (docTopics(i) + adjust + alphak) * (cnt + adjust) / (nk + adjust + betaSum)
-          space(psize) = i
-          psize += 1
+    curTopic: Int): FlatDist[Double] = {
+    val tmpTermTopics = termTopics.synchronized(termTopics.copy)
+    tmpTermTopics match {
+      case v: BDV[Count] =>
+        val probs = new Array[Double](numTopics)
+        val space = new Array[Int](numTopics)
+        var psize = 0
+        var i = 0
+        while (i < numTopics) {
+          val cnt = v(i)
+          if (cnt > 0) {
+            val nk = topicCounters(i)
+            val alphak = (nk + alphaAS) * alphaRatio
+            probs(psize) = (docTopics(i) + alphak) * cnt / (nk + betaSum)
+            space(psize) = i
+            psize += 1
+          }
+          i += 1
         }
-        i += 1
-      }
-      wda.resetDist(probs, space, psize)
-    case v: BSV[Count] =>
-      val used = v.used
-      val index = v.index
-      val data = v.data
-      val probs = new Array[Double](used)
-      var i = 0
-      while (i < used) {
-        val topic = index(i)
-        val adjust = if (topic == curTopic) -1 else 0
-        val nk = topicCounters(topic)
-        val alphak = (nk + alphaAS) * alphaRatio
-        probs(i) = (docTopics(topic) + adjust + alphak) * (data(i) + adjust) / (nk + adjust + betaSum)
-        i += 1
-      }
-      wda.resetDist(probs, index, used)
+        wda.resetDist(probs, space, psize)
+      case v: BSV[Count] =>
+        val used = v.used
+        val index = v.index
+        val data = v.data
+        val probs = new Array[Double](used)
+        var i = 0
+        while (i < used) {
+          val topic = index(i)
+          val nk = topicCounters(topic)
+          val alphak = (nk + alphaAS) * alphaRatio
+          probs(i) = (docTopics(topic) + alphak) * data(i) / (nk + betaSum)
+          i += 1
+        }
+        wda.resetDist(probs, index, used)
+    }
   }
 }

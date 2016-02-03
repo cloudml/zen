@@ -121,7 +121,7 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
     implicit val es = initExecutionContext(numThreads)
     val all = Future.traverse(ep.index.iterator) { case (_, startPos) => withFuture {
       val si = lcSrcIds(startPos)
-      val docTopics = vattrs(si).asInstanceOf[BSV[Count]]
+      val docTopics = vattrs(si).asInstanceOf[Ndk]
       val docNorm = 1.0 / (sum(docTopics) + alphaSum)
       val doc_denoms = calc_doc_denoms(denoms, docTopics)
       val dbSparseSum = sum_dbSparse(doc_denoms, beta)

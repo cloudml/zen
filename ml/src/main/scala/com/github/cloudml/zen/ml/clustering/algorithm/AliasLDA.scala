@@ -81,7 +81,7 @@ class AliasLDA(numTopics: Int, numThreads: Int)
       val compSamp = compSamps(thid)
 
       val si = lcSrcIds(startPos)
-      val docTopics = vattrs(si).asInstanceOf[BSV[Count]]
+      val docTopics = vattrs(si).asInstanceOf[Ndk]
       useds(si) = docTopics.activeSize
       var pos = startPos
       while (pos < totalSize && lcSrcIds(pos) == si) {
