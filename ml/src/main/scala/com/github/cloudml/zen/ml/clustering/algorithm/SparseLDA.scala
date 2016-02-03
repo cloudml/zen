@@ -17,7 +17,6 @@
 
 package com.github.cloudml.zen.ml.clustering.algorithm
 
-import java.util.Random
 import java.util.concurrent.ConcurrentLinkedQueue
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
@@ -46,8 +45,6 @@ class SparseLDA(numTopics: Int, numThreads: Int)
     val alphaSum = alpha * numTopics
     val betaSum = beta * numTerms
     val alphaRatio = calc_alphaRatio(alphaSum, numTokens, alphaAS)
-    val denoms = calc_denoms(topicCounters, betaSum)
-    val alphak_denoms = calc_alphak_denoms(denoms, alphaAS, betaSum, alphaRatio)
 
     val totalSize = ep.size
     val lcSrcIds = ep.localSrcIds
@@ -55,15 +52,17 @@ class SparseLDA(numTopics: Int, numThreads: Int)
     val vattrs = ep.vertexAttrs
     val useds = new Array[Int](vattrs.length)
     val data = ep.data
+
+    val global = new FlatDist[Double](isSparse=false)
     val thq = new ConcurrentLinkedQueue(0 until numThreads)
     val gens = new Array[XORShiftRandom](numThreads)
     val docDists = new Array[FlatDist[Double]](numThreads)
     val mainDists = new Array[FlatDist[Double]](numThreads)
-    val global = new FlatDist[Double](isSparse=false)
-    resetDist_abDense(global, alphak_denoms, beta)
+    val compSamps = new Array[CompositeSampler](numThreads)
+    resetDist_abDense(global, topicCounters, alphaAS, beta, betaSum, alphaRatio)
 
     implicit val es = initExecutionContext(numThreads)
-    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => withFuture {
+    val all = Future.traverse(ep.index.iterator) { case (_, offset) => withFuture {
       val thid = thq.poll()
       var gen = gens(thid)
       if (gen == null) {
@@ -71,46 +70,119 @@ class SparseLDA(numTopics: Int, numThreads: Int)
         gens(thid) = gen
         docDists(thid) = new FlatDist[Double](isSparse=true).reset(numTopics)
         mainDists(thid) = new FlatDist[Double](isSparse=true).reset(numTopics)
+        compSamps(thid) = new CompositeSampler
       }
       val docDist = docDists(thid)
+      val compSamp = compSamps(thid)
+
       val si = lcSrcIds(offset)
       val docTopics = vattrs(si).asInstanceOf[BSV[Count]]
       useds(si) = docTopics.activeSize
-      val nkd_denoms = calc_nkd_denoms(denoms, docTopics)
-      resetDist_dbSparse(docDist, nkd_denoms, beta)
-      val docAlphaK_denoms = calc_docAlphaK_denoms(alphak_denoms, nkd_denoms)
+      resetDist_dbSparse(docDist, topicCounters, docTopics, beta, betaSum)
       val mainDist = mainDists(thid)
       var pos = offset
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
         val termTopics = vattrs(di)
         useds(di) = termTopics.activeSize
-        resetDist_wdaSparse(mainDist, docAlphaK_denoms, termTopics)
+        resetDist_wdaSparse(mainDist, topicCounters, termTopics, docTopics, alphaAS, betaSum, alphaRatio)
+
         val topic = data(pos)
-        data(pos) = tokenSampling(gen, global, docDist, mainDist)
+        compSamp.resetComponents(mainDist, docDist, global)
+        val newTopic = compSamp.sampleRandom(gen)
+        if (newTopic != topic) {
+          data(pos) = newTopic
+          topicCounters(topic) -= 1
+          topicCounters(newTopic) += 1
+          docTopics(topic) -= 1
+          docTopics(newTopic) += 1
+          termTopics.synchronized {
+            termTopics(topic) -= 1
+            termTopics(newTopic) += 1
+          }
+        }
         pos += 1
       }
       thq.add(thid)
-    }))
+    }}
     withAwaitReadyAndClose(all)
 
     ep.withVertexAttributes(useds)
   }
 
-  def tokenSampling(gen: Random,
-    ab: FlatDist[Double],
-    db: FlatDist[Double],
-    wda: FlatDist[Double]): Int = {
-    val wdaSum = wda.norm
-    val sum23 = wdaSum + db.norm
-    val distSum = sum23 + ab.norm
-    val genSum = gen.nextDouble() * distSum
-    if (genSum < wdaSum) {
-      wda.sampleFrom(genSum, gen)
-    } else if (genSum < sum23) {
-      db.sampleFrom(genSum - wdaSum, gen)
-    } else {
-      ab.sampleFrom(genSum - sum23, gen)
+  def resetDist_abDense(ab: FlatDist[Double],
+    topicCounters: BDV[Count],
+    alphaAS: Double,
+    beta: Double,
+    betaSum: Double,
+    alphaRatio: Double): DiscreteSampler[Double] = {
+    val probs = new Array[Double](numTopics)
+    var i = 0
+    while (i < numTopics) {
+      val nk = topicCounters(i)
+      val alphak = (nk + alphaAS) * alphaRatio
+      probs(i) = alphak * beta / (nk + betaSum)
+      i += 1
     }
+    ab.synchronized {
+      ab.resetDist(probs, null, numTopics)
+    }
+  }
+
+  def resetDist_dbSparse(db: FlatDist[Double],
+    topicCounters: BDV[Count],
+    docTopics: Ndk,
+    beta: Double,
+    betaSum: Double): FlatDist[Double] = {
+    val used = docTopics.used
+    val index = docTopics.index
+    val data = docTopics.data
+    val probs = new Array[Double](used)
+    var i = 0
+    while (i < used) {
+      probs(i) = data(i) * beta / (topicCounters(index(i)) + betaSum)
+      i += 1
+    }
+    db.resetDist(probs, index, used)
+  }
+
+  def resetDist_wdaSparse(wda: FlatDist[Double],
+    topicCounters: BDV[Count],
+    termTopics: Nwk,
+    docTopics: Ndk,
+    alphaAS: Double,
+    betaSum: Double,
+    alphaRatio: Double): FlatDist[Double] = termTopics match {
+    case v: BDV[Count] =>
+      val probs = new Array[Double](numTopics)
+      val space = new Array[Int](numTopics)
+      var psize = 0
+      var i = 0
+      while (i < numTopics) {
+        val cnt = v(i)
+        if (cnt > 0) {
+          val nk = topicCounters(i)
+          val alphak = (nk + alphaAS) * alphaRatio
+          probs(psize) = (docTopics(i) + alphak) * cnt / (nk + betaSum)
+          space(psize) = i
+          psize += 1
+        }
+        i += 1
+      }
+      wda.resetDist(probs, space, psize)
+    case v: BSV[Count] =>
+      val used = v.used
+      val index = v.index
+      val data = v.data
+      val probs = new Array[Double](used)
+      var i = 0
+      while (i < used) {
+        val topic = index(i)
+        val nk = topicCounters(topic)
+        val alphak = (nk + alphaAS) * alphaRatio
+        probs(i) = (docTopics(index(i)) + alphak) * data(i) / (nk + betaSum)
+        i += 1
+      }
+      wda.resetDist(probs, index, used)
   }
 }

@@ -19,11 +19,10 @@ package com.github.cloudml.zen.ml.clustering.algorithm
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
-import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util.Concurrent._
 import org.apache.spark.graphx2.impl.EdgePartition
 
-import scala.concurrent._
+import scala.concurrent.Future
 
 
 abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
@@ -114,104 +113,49 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
     val lcDstIds = ep.localDstIds
     val vattrs = ep.vertexAttrs
     val data = ep.data
-    @volatile var llhs = 0D
-    @volatile var wllhs = 0D
-    @volatile var dllhs = 0D
+    @volatile var llhs = 0.0
+    @volatile var wllhs = 0.0
+    @volatile var dllhs = 0.0
     val abDenseSum = sum_abDense(alphak_denoms, beta)
 
     implicit val es = initExecutionContext(numThreads)
-    val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => withFuture {
-      val si = lcSrcIds(offset)
+    val all = Future.traverse(ep.index.iterator) { case (_, startPos) => withFuture {
+      val si = lcSrcIds(startPos)
       val docTopics = vattrs(si).asInstanceOf[BSV[Count]]
-      val doc_denom = 1.0 / (sum(docTopics) + alphaSum)
-      val nkd_denoms = calc_nkd_denoms(denoms, docTopics)
-      val dbSparseSum = sum_dbSparse(nkd_denoms, beta)
+      val docNorm = 1.0 / (sum(docTopics) + alphaSum)
+      val doc_denoms = calc_doc_denoms(denoms, docTopics)
+      val dbSparseSum = sum_dbSparse(doc_denoms, beta)
       val sum12 = abDenseSum + dbSparseSum
-      val docAlphaK_denoms = calc_docAlphaK_denoms(alphak_denoms, nkd_denoms)
-      var llhs_th = 0D
-      var wllhs_th = 0D
-      var dllhs_th = 0D
-      var pos = offset
+      var llhs_th = 0.0
+      var wllhs_th = 0.0
+      var dllhs_th = 0.0
+      var pos = startPos
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
         val termTopics = vattrs(di)
         val topic = data(pos)
-        val wdaSparseSum = sum_wdaSparse(docAlphaK_denoms, termTopics)
-        val prob = (sum12 + wdaSparseSum) * doc_denom
-        llhs_th += Math.log(prob)
+        val wdaSparseSum = sum_wdaSparse(alphak_denoms, doc_denoms, termTopics)
+        llhs_th += Math.log((sum12 + wdaSparseSum) * docNorm)
         wllhs_th += Math.log((termTopics(topic) + beta) * denoms(topic))
-        dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * doc_denom)
+        dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * docNorm)
         pos += 1
       }
       llhs += llhs_th
       wllhs += wllhs_th
       dllhs += dllhs_th
-    }))
+    }}
     withAwaitReadyAndClose(all)
 
     (llhs, wllhs, dllhs)
   }
 
-  def resetDist_dbSparse(db: FlatDist[Double],
-    nkd_denoms: BSV[Double],
-    beta: Double): FlatDist[Double] = {
-    val used = nkd_denoms.used
-    val index = nkd_denoms.index
-    val data = nkd_denoms.data
-    val probs = new Array[Double](used)
-    var i = 0
-    while (i < used) {
-      probs(i) = beta * data(i)
-      i += 1
-    }
-    db.resetDist(probs, index, used)
-  }
-
-  def sum_dbSparse(nkd_denoms: BSV[Double],
+  def sum_dbSparse(doc_denoms: BSV[Double],
     beta: Double): Double = {
-    val used = nkd_denoms.used
-    val data = nkd_denoms.data
-    var sum = 0.0
-    var i = 0
-    while (i < used) {
-      sum += beta * data(i)
-      i += 1
-    }
-    sum
+    sum(doc_denoms) * beta
   }
 
-  def resetDist_wdaSparse(wda: FlatDist[Double],
-    docAlphaK_Denoms: BDV[Double],
-    termTopics: Nwk): FlatDist[Double] = termTopics match {
-    case v: BDV[Count] =>
-      val probs = new Array[Double](numTopics)
-      val space = new Array[Int](numTopics)
-      var psize = 0
-      var i = 0
-      while (i < numTopics) {
-        val cnt = v(i)
-        if (cnt > 0) {
-          probs(psize) = docAlphaK_Denoms(i) * cnt
-          space(psize) = i
-          psize += 1
-        }
-        i += 1
-      }
-      wda.resetDist(probs, space, psize)
-    case v: BSV[Count] =>
-      val used = v.used
-      val index = v.index
-      val data = v.data
-      val probs = new Array[Double](used)
-      var i = 0
-      while (i < used) {
-        probs(i) = docAlphaK_Denoms(index(i)) * data(i)
-        i += 1
-      }
-      wda.resetDist(probs, index, used)
-  }
-
-  def sum_wdaSparse(docAlphaK_Denoms: BDV[Double],
+  def sum_wdaSparse(alphak_denoms: BDV[Double],
+    doc_denoms: BSV[Double],
     termTopics: Nwk): Double = termTopics match {
     case v: BDV[Count] =>
       var sum = 0.0
@@ -219,7 +163,7 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
       while (i < numTopics) {
         val cnt = v(i)
         if (cnt > 0) {
-          sum += docAlphaK_Denoms(i) * cnt
+          sum += (doc_denoms(i) + alphak_denoms(i)) * cnt
         }
         i += 1
       }
@@ -231,13 +175,14 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
       var sum = 0.0
       var i = 0
       while (i < used) {
-        sum += docAlphaK_Denoms(index(i)) * data(i)
+        val topic = index(i)
+        sum += (doc_denoms(topic) + alphak_denoms(topic)) * data(i)
         i += 1
       }
       sum
   }
 
-  def calc_nkd_denoms(denoms: BDV[Double],
+  def calc_doc_denoms(denoms: BDV[Double],
     docTopics: Ndk): BSV[Double] = {
     val used = docTopics.used
     val index = docTopics.index
@@ -248,20 +193,6 @@ abstract class LDATrainerByDoc(numTopics: Int, numThreads: Int)
       arr(i) = data(i) * denoms(index(i))
       i += 1
     }
-    new BSV(index, arr, used, denoms.length)
-  }
-
-  def calc_docAlphaK_denoms(alphak_denoms: BDV[Double],
-    nkd_denoms: BSV[Double]): BDV[Double] = {
-    val bdv = alphak_denoms.copy
-    val used = nkd_denoms.used
-    val index = nkd_denoms.index
-    val data = nkd_denoms.data
-    var i = 0
-    while (i < used) {
-      bdv(index(i)) += data(i)
-      i += 1
-    }
-    bdv
+    new BSV(index, arr, used, numTopics)
   }
 }

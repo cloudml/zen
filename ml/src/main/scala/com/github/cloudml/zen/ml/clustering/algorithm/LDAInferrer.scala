@@ -214,11 +214,11 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
     val vattrs = ep.vertexAttrs
     val data = ep.data
     val vertSize = vattrs.length
-    val doc_denoms = new Array[Double](vertSize)
+    val docNorms = new Array[Double](vertSize)
     val marks = new AtomicIntegerArray(vertSize)
-    @volatile var llhs = 0D
-    @volatile var wllhs = 0D
-    @volatile var dllhs = 0D
+    @volatile var llhs = 0.0
+    @volatile var wllhs = 0.0
+    @volatile var dllhs = 0.0
 
     implicit val es = initExecutionContext(numThreads)
     val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => withFuture {
@@ -227,24 +227,24 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
       val waSparseSum = sum_waSparse(alphak_denoms, termTopics)
       val sum12 = abDenseSum + waSparseSum
       val termBeta_denoms = calc_termBeta_denoms(denoms, beta_denoms, termTopics)
-      var llhs_th = 0D
-      var wllhs_th = 0D
-      var dllhs_th = 0D
+      var llhs_th = 0.0
+      var wllhs_th = 0.0
+      var dllhs_th = 0.0
       var pos = offset
       while (pos < totalSize && lcSrcIds(pos) == si) {
         val di = lcDstIds(pos)
         val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
         if (marks.get(di) == 0) {
-          doc_denoms(di) = 1.0 / (sum(docTopics) + alphaSum)
+          docNorms(di) = 1.0 / (sum(docTopics) + alphaSum)
           marks.set(di, 1)
         }
-        val doc_denom = doc_denoms(di)
+        val docNorm = docNorms(di)
         val topic = data(pos)
         val dwbSparseSum = sum_dwbSparse(termBeta_denoms, docTopics)
-        val prob = (sum12 + dwbSparseSum) * doc_denom
+        val prob = (sum12 + dwbSparseSum) * docNorm
         llhs_th += Math.log(prob)
         wllhs_th += Math.log(termBeta_denoms(topic))
-        dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * doc_denom)
+        dllhs_th += Math.log((docTopics(topic) + alphaks(topic)) * docNorm)
         pos += 1
       }
       llhs += llhs_th
