@@ -24,6 +24,39 @@ import scala.concurrent.duration._
 
 
 object Concurrent extends Serializable {
+  @inline def withFuture[T](body: => T)(implicit es: ExecutionContextExecutorService): Future[T] = {
+    Future(body)(es)
+  }
+
+  @inline def withAwaitReady[T](future: Future[T])(implicit es: ExecutionContextExecutorService): Unit = {
+    Await.ready(future, 1.hour)
+  }
+
+  def withAwaitReadyAndClose[T](future: Future[T])(implicit es: ExecutionContextExecutorService): Unit = {
+    Await.ready(future, 1.hour)
+    closeExecutionContext(es)
+  }
+
+  @inline def withAwaitResult[T](future: Future[T])(implicit es: ExecutionContextExecutorService): T = {
+    Await.result(future, 1.hour)
+  }
+
+  def withAwaitResultAndClose[T](future: Future[T])(implicit es: ExecutionContextExecutorService): T = {
+    val res = Await.result(future, 1.hour)
+    closeExecutionContext(es)
+    res
+  }
+
+  @inline def initExecutionContext(numThreads: Int): ExecutionContextExecutorService = {
+    ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(numThreads))
+  }
+
+  @inline def closeExecutionContext(es: ExecutionContextExecutorService): Unit = {
+    es.shutdown()
+  }
+}
+
+object DebugConcurrent extends Serializable {
   def withFuture[T](body: => T)(implicit es: ExecutionContextExecutorService): Future[T] = {
     val future = Future(body)(es)
     future.onFailure { case e =>
