@@ -21,7 +21,7 @@ import java.io.File
 import java.util.Random
 
 import LDADefines._
-import com.github.cloudml.zen.ml.clustering.algorithm.{ZenLDA, SparseLDA, LightLDA}
+import com.github.cloudml.zen.ml.clustering.algorithm.{AliasLDA, ZenLDA, SparseLDA, LightLDA}
 import com.github.cloudml.zen.ml.util.SharedSparkContext
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
@@ -125,6 +125,40 @@ class LDASuite extends FunSuite with SharedSparkContext {
     val data = sc.parallelize(corpus, 2)
     data.cache()
     val algo = new SparseLDA(numTopics, numThreads)
+    val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, algo, storageLevel)
+    val pps = new Array[Double](incrementalLearning)
+    val lda = LDA(docs, numTopics, alpha, beta, alphaAS, algo, storageLevel)
+    var i = 0
+    val startedAt = System.currentTimeMillis()
+    while (i < incrementalLearning) {
+      lda.runGibbsSampling(totalIterations)
+      pps(i) = LDAMetrics(evalMetric, lda).getTotal
+      i += 1
+    }
+
+    println((System.currentTimeMillis() - startedAt) / 1e3)
+    pps.foreach(println)
+
+    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
+    assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
+    assert(pps.head - pps.last > 0)
+
+    val ldaModel = lda.toLDAModel.toLocalLDAModel
+    data.collect().foreach { case (_, sv) =>
+      val a = ldaModel.inference(sv)
+      val b = ldaModel.inference(sv)
+      val sim: Double = euclideanDistance(a, b)
+      assert(sim < 0.1)
+    }
+  }
+
+  test("AliasLDA || Metropolis Hasting sampling") {
+    val model = generateRandomLDAModel(numTopics, numTerms)
+    val corpus = sampleCorpus(model, numDocs, numTerms, numTopics)
+
+    val data = sc.parallelize(corpus, 2)
+    data.cache()
+    val algo = new AliasLDA(numTopics, numThreads)
     val docs = LDA.initializeCorpusEdges(data, "bow", numTopics, algo, storageLevel)
     val pps = new Array[Double](incrementalLearning)
     val lda = LDA(docs, numTopics, alpha, beta, alphaAS, algo, storageLevel)
