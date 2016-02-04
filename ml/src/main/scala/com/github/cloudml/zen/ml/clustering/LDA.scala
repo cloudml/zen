@@ -339,10 +339,10 @@ object LDA {
     numTopics: Int,
     ignDid: Boolean,
     byDoc: Boolean): RDD[Edge[TA]] = {
-    rawDocs.mapPartitionsWithIndex((pid, iter) => {
+    rawDocs.mapPartitionsWithIndex { (pid, iter) =>
       val gen = new XORShiftRandom(pid + 117)
       var pidMark = pid.toLong << 48
-      iter.flatMap(line => {
+      iter.flatMap { line =>
         val tokens = line.split(raw"\t|\s+").view
         val docId = if (ignDid) {
           pidMark += 1
@@ -350,7 +350,7 @@ object LDA {
         } else {
           tokens.head.toLong
         }
-        tokens.tail.flatMap(field => {
+        tokens.tail.flatMap { field =>
           val pairs = field.split(":")
           val termId = pairs(0).toInt
           val termCnt = if (pairs.length > 1) pairs(1).toInt else 1
@@ -363,34 +363,34 @@ object LDA {
           } else {
             Iterator.empty
           }
-        })
-      })
-    })
+        }
+      }
+    }
   }
 
   def convertBowDocs(bowDocs: RDD[BOW],
     numTopics: Int,
     ignDid: Boolean,
     byDoc: Boolean): RDD[Edge[TA]] = {
-    bowDocs.mapPartitionsWithIndex((pid, iter) => {
+    bowDocs.mapPartitionsWithIndex { (pid, iter) =>
       val gen = new XORShiftRandom(pid + 117)
       var pidMark = pid.toLong << 48
-      iter.flatMap(Function.tupled((oDocId, tokens) => {
+      iter.flatMap { case (oDocId, tokens) =>
         val docId = if (ignDid) {
           pidMark += 1
           pidMark
         } else {
           oDocId
         }
-        tokens.activeIterator.filter(_._2 > 0).flatMap(Function.tupled((termId, termCnt) =>
+        tokens.activeIterator.filter(_._2 > 0).flatMap { case (termId, termCnt) =>
           Range(0, termCnt).map(_ => if (byDoc) {
             Edge(genNewDocId(docId), termId, gen.nextInt(numTopics))
           } else {
             Edge(termId, genNewDocId(docId), gen.nextInt(numTopics))
           })
-        ))
-      }))
-    })
+        }
+      }
+    }
   }
 
   def partitionCorpus(corpus: Graph[TC, TA],
@@ -437,29 +437,45 @@ object LDA {
     case "random" =>
       println("fully randomized initialization.")
       corpus
-    case "sparse" =>
+    case "sparseterm" =>
       println("sparsely init on terms.")
       corpus.persist(storageLevel)
       val gen = new XORShiftRandom
-      val tMin = math.min(1000, numTopics / 100)
+      val tMin = math.max(100, numTopics / 10)
       val degGraph = GraphImpl(corpus.degrees, corpus.edges)
-      val reSampledGraph = degGraph.mapVertices((vid, deg) => {
+      val reSampledGraph = degGraph.mapVertices { (vid, deg) =>
         if (isTermId(vid) && deg > tMin) {
           Array.fill(tMin)(gen.nextInt(numTopics))
         } else {
           null
         }
-      }).mapTriplets((pid, iter) => {
+      }.mapTriplets((pid, iter) => {
         val gen = new XORShiftRandom(pid + 223)
-        iter.map(triplet => {
+        iter.map { triplet =>
           val wc = triplet.srcAttr
-          if (wc == null) {
-            triplet.attr
-          } else {
-            wc(gen.nextInt(wc.length))
-          }
-        })
+          if (wc == null) triplet.attr else wc(gen.nextInt(wc.length))
+        }
       }, TripletFields.Src)
+      GraphImpl(corpus.vertices, reSampledGraph.edges)
+    case "sparsedoc" =>
+      println("sparsely init on docs.")
+      corpus.persist(storageLevel)
+      val gen = new XORShiftRandom
+      val degGraph = GraphImpl(corpus.degrees, corpus.edges)
+      val reSampledGraph = degGraph.mapVertices { (vid, deg) =>
+        val tMin = math.max(10, deg / 10)
+        if (isDocId(vid) && deg > tMin) {
+          Array.fill(tMin)(gen.nextInt(numTopics))
+        } else {
+          null
+        }
+      }.mapTriplets((pid, iter) => {
+        val gen = new XORShiftRandom(pid + 223)
+        iter.map { triplet =>
+          val wc = triplet.dstAttr
+          if (wc == null) triplet.attr else wc(gen.nextInt(wc.length))
+        }
+      }, TripletFields.Dst)
       GraphImpl(corpus.vertices, reSampledGraph.edges)
     case _ =>
       throw new NoSuchMethodException("No this algorithm or not implemented.")

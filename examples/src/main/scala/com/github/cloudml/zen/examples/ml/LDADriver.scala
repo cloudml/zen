@@ -161,7 +161,7 @@ object LDADriver {
       "           -LDAAlgorithm=<*ZenLDA|LightLDA|F+LDA|AliasLDA|SparseLDA>\n" +
       "           -storageLevel=<StorageLevel(*MEMORY_AND_DISK)>\n" +
       "           -partStrategy=<Direct|ByTerm|ByDoc|Edge2D|*DBH|VSDLP|BBR>\n" +
-      "           -initStrategy=<*Random|Sparse|Split>\n" +
+      "           -initStrategy=<*Random|SparseTerm|SparseDoc>\n" +
       "           -chkptInterval=<Int(*10)> (0 or negative disables checkpoint)\n" +
       "           -evalMetric=<*None|PPLX|LLH>\n" +
       "           -saveInterval=<Int(*0)> (0 or negative disables save at intervals)\n" +
