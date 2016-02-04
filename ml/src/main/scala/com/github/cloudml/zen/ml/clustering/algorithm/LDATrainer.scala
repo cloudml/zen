@@ -22,7 +22,6 @@ import java.util.concurrent.atomic.AtomicIntegerArray
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, convert, sum}
 import breeze.numerics._
 import com.github.cloudml.zen.ml.clustering.LDADefines._
-import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util.Concurrent._
 import com.github.cloudml.zen.ml.util.{BVCompressor, BVDecompressor}
 import org.apache.spark.graphx2.impl.{ShippableVertexPartition => VertPartition}
@@ -151,13 +150,6 @@ abstract class LDATrainer(numTopics: Int, numThreads: Int)
     withAwaitReadyAndClose(all)
 
     (wllhs, dllhs)
-  }
-
-  def resetDist_abDense(ab: DiscreteSampler[Double],
-    alphak_denoms: BDV[Double],
-    beta: Double): DiscreteSampler[Double] = {
-    val probs = alphak_denoms.copy :*= beta
-    ab.resetDist(probs.data, null, probs.length)
   }
 
   def sum_abDense(alphak_denoms: BDV[Double],

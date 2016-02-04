@@ -57,7 +57,7 @@ class LightLDA(numTopics: Int, numThreads: Int)
 
     val alphaDist = new AliasTable[Double].addAuxDist(new FlatDist(isSparse=false))
     val betaDist = new AliasTable[Double].addAuxDist(new FlatDist(isSparse=false))
-    val thq = new ConcurrentLinkedQueue(0 until numThreads)
+    val thq = new ConcurrentLinkedQueue(1 to numThreads)
     val gens = new Array[XORShiftRandom](numThreads)
     val termDists = new Array[AliasTable[Double]](numThreads)
     val MHSamps = new Array[MetropolisHastings](numThreads)
@@ -68,72 +68,75 @@ class LightLDA(numTopics: Int, numThreads: Int)
 
     implicit val es = initExecutionContext(numThreads)
     val all = Future.traverse(lcSrcIds.indices.by(3).iterator) { lsi => withFuture {
-      val thid = thq.poll()
-      var gen = gens(thid)
-      if (gen == null) {
-        gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
-        gens(thid) = gen
-        termDists(thid) = new AliasTable[Double].addAuxDist(new FlatDist(isSparse=true)).reset(numTopics)
-        MHSamps(thid) = new MetropolisHastings
-        compSamps(thid) = new CompositeSampler
-      }
-      val termDist = termDists(thid)
-      val MHSamp = MHSamps(thid)
-      val compSamp = compSamps(thid)
+      val thid = thq.poll() - 1
+      try {
+        var gen = gens(thid)
+        if (gen == null) {
+          gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
+          gens(thid) = gen
+          termDists(thid) = new AliasTable[Double].addAuxDist(new FlatDist(isSparse = true)).reset(numTopics)
+          MHSamps(thid) = new MetropolisHastings
+          compSamps(thid) = new CompositeSampler
+        }
+        val termDist = termDists(thid)
+        val MHSamp = MHSamps(thid)
+        val compSamp = compSamps(thid)
 
-      val si = lcSrcIds(lsi)
-      val startPos = lcSrcIds(lsi + 1)
-      val endPos = lcSrcIds(lsi + 2)
-      val termTopics = vattrs(si)
-      useds(si) = termTopics.activeSize
-      resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
-      var pos = startPos
-      while (pos < endPos) {
-        val di = lcDstIds(pos)
-        val docTopics = vattrs(di).asInstanceOf[Ndk]
-        useds(di) = docTopics.activeSize
-        if (gen.nextDouble() < 1e-6) {
-          resetDist_aDense(alphaDist, topicCounters, alphaAS, alphaRatio)
-          resetDist_bDense(betaDist, topicCounters, beta, betaSum)
-        }
-        if (gen.nextDouble() < 1e-4) {
-          resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
-        }
-        val docDist = dSparseCached(docCache, di, gen.nextDouble() < 1e-2).getOrElse {
-          resetCache_dSparse(docCache, di, docTopics)
-        }
-        var topic = data(pos)
-        val CGSCurry2 = CGSCurry(termTopics, docTopics)
-        var docCycle = gen.nextBoolean()
-        var mh = 0
-        while (mh < 8) {
-          val CGSFunc = CGSCurry2(topic)
-          if (docCycle) {
-            compSamp.resetComponents(docDist, alphaDist)
-          } else {
-            compSamp.resetComponents(termDist, betaDist)
+        val si = lcSrcIds(lsi)
+        val startPos = lcSrcIds(lsi + 1)
+        val endPos = lcSrcIds(lsi + 2)
+        val termTopics = vattrs(si)
+        useds(si) = termTopics.activeSize
+        resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
+        var pos = startPos
+        while (pos < endPos) {
+          val di = lcDstIds(pos)
+          val docTopics = vattrs(di).asInstanceOf[Ndk]
+          useds(di) = docTopics.activeSize
+          if (gen.nextDouble() < 1e-6) {
+            resetDist_aDense(alphaDist, topicCounters, alphaAS, alphaRatio)
+            resetDist_bDense(betaDist, topicCounters, beta, betaSum)
           }
-          MHSamp.resetProb(CGSFunc, compSamp, topic)
-          val newTopic = MHSamp.sampleRandom(gen)
-          if (newTopic != topic) {
-            data(pos) = newTopic
-            topicCounters(topic) -= 1
-            topicCounters(newTopic) += 1
-            termTopics(topic) -= 1
-            termTopics(newTopic) += 1
-            docTopics.synchronized {
-              docTopics(topic) -= 1
-              docTopics(newTopic) += 1
+          if (gen.nextDouble() < 1e-4) {
+            resetDist_wSparse(termDist, topicCounters, termTopics, betaSum)
+          }
+          val docDist = dSparseCached(docCache, di, gen.nextDouble() < 1e-2).getOrElse {
+            resetCache_dSparse(docCache, di, docTopics)
+          }
+          var topic = data(pos)
+          val CGSCurry2 = CGSCurry(termTopics, docTopics)
+          var docCycle = gen.nextBoolean()
+          var mh = 0
+          while (mh < 8) {
+            val CGSFunc = CGSCurry2(topic)
+            if (docCycle) {
+              compSamp.resetComponents(docDist, alphaDist)
+            } else {
+              compSamp.resetComponents(termDist, betaDist)
             }
-            topic = newTopic
+            MHSamp.resetProb(CGSFunc, compSamp, topic)
+            val newTopic = MHSamp.sampleRandom(gen)
+            if (newTopic != topic) {
+              data(pos) = newTopic
+              topicCounters(topic) -= 1
+              topicCounters(newTopic) += 1
+              termTopics(topic) -= 1
+              termTopics(newTopic) += 1
+              docTopics.synchronized {
+                docTopics(topic) -= 1
+                docTopics(newTopic) += 1
+              }
+              topic = newTopic
+            }
+            docCycle = !docCycle
+            mh += 1
           }
-          docCycle = !docCycle
-          mh += 1
-        }
 
-        pos += 1
+          pos += 1
+        }
+      } finally {
+        thq.add(thid + 1)
       }
-      thq.add(thid)
     }}
     withAwaitReadyAndClose(all)
 

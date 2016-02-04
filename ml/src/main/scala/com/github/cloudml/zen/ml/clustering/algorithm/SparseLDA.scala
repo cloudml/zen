@@ -54,7 +54,7 @@ class SparseLDA(numTopics: Int, numThreads: Int)
     val data = ep.data
 
     val global = new FlatDist[Double](isSparse=false)
-    val thq = new ConcurrentLinkedQueue(0 until numThreads)
+    val thq = new ConcurrentLinkedQueue(1 to numThreads)
     val gens = new Array[XORShiftRandom](numThreads)
     val docDists = new Array[FlatDist[Double]](numThreads)
     val mainDists = new Array[FlatDist[Double]](numThreads)
@@ -63,40 +63,43 @@ class SparseLDA(numTopics: Int, numThreads: Int)
 
     implicit val es = initExecutionContext(numThreads)
     val all = Future.traverse(ep.index.iterator) { case (_, startPos) => withFuture {
-      val thid = thq.poll()
-      var gen = gens(thid)
-      if (gen == null) {
-        gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
-        gens(thid) = gen
-        docDists(thid) = new FlatDist[Double](isSparse=true).reset(numTopics)
-        mainDists(thid) = new FlatDist[Double](isSparse=true).reset(numTopics)
-        compSamps(thid) = new CompositeSampler
-      }
-      val docDist = docDists(thid)
-      val mainDist = mainDists(thid)
-      val compSamp = compSamps(thid)
+      val thid = thq.poll() - 1
+      try {
+        var gen = gens(thid)
+        if (gen == null) {
+          gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
+          gens(thid) = gen
+          docDists(thid) = new FlatDist[Double](isSparse = true).reset(numTopics)
+          mainDists(thid) = new FlatDist[Double](isSparse = true).reset(numTopics)
+          compSamps(thid) = new CompositeSampler
+        }
+        val docDist = docDists(thid)
+        val mainDist = mainDists(thid)
+        val compSamp = compSamps(thid)
 
-      val si = lcSrcIds(startPos)
-      val docTopics = vattrs(si).asInstanceOf[Ndk]
-      useds(si) = docTopics.activeSize
-      resetDist_dbSparse(docDist, topicCounters, docTopics, beta, betaSum)
-      val updateCurry = updateTopicAssign(global, docDist, topicCounters, alphaAS, beta, betaSum, alphaRatio)_
-      var pos = startPos
-      while (pos < totalSize && lcSrcIds(pos) == si) {
-        val di = lcDstIds(pos)
-        val termTopics = vattrs(di)
-        useds(di) = termTopics.activeSize
-        val tokenUpdate = updateCurry(termTopics, docTopics)
-        val topic = data(pos)
-        tokenUpdate(topic, -1)
-        resetDist_wdaSparse(mainDist, topicCounters, termTopics, docTopics, alphaAS, betaSum, alphaRatio, topic)
-        compSamp.resetComponents(mainDist, docDist, global)
-        val newTopic = compSamp.sampleRandom(gen)
-        tokenUpdate(newTopic, 1)
-        data(pos) = newTopic
-        pos += 1
+        val si = lcSrcIds(startPos)
+        val docTopics = vattrs(si).asInstanceOf[Ndk]
+        useds(si) = docTopics.activeSize
+        resetDist_dbSparse(docDist, topicCounters, docTopics, beta, betaSum)
+        val updateCurry = updateTopicAssign(global, docDist, topicCounters, alphaAS, beta, betaSum, alphaRatio) _
+        var pos = startPos
+        while (pos < totalSize && lcSrcIds(pos) == si) {
+          val di = lcDstIds(pos)
+          val termTopics = vattrs(di)
+          useds(di) = termTopics.activeSize
+          val tokenUpdate = updateCurry(termTopics, docTopics)
+          val topic = data(pos)
+          tokenUpdate(topic, -1)
+          resetDist_wdaSparse(mainDist, topicCounters, termTopics, docTopics, alphaAS, betaSum, alphaRatio, topic)
+          compSamp.resetComponents(mainDist, docDist, global)
+          val newTopic = compSamp.sampleRandom(gen)
+          tokenUpdate(newTopic, 1)
+          data(pos) = newTopic
+          pos += 1
+        }
+      } finally {
+        thq.add(thid + 1)
       }
-      thq.add(thid)
     }}
     withAwaitReadyAndClose(all)
 
@@ -130,7 +133,7 @@ class SparseLDA(numTopics: Int, numThreads: Int)
     alphaAS: Double,
     beta: Double,
     betaSum: Double,
-    alphaRatio: Double): DiscreteSampler[Double] = {
+    alphaRatio: Double): FlatDist[Double] = {
     val probs = new Array[Double](numTopics)
     var i = 0
     while (i < numTopics) {

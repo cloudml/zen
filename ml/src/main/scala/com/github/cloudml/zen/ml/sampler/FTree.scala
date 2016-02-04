@@ -174,27 +174,23 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Bo
   }
 
   def resetDist(probs: Array[T], space: Array[Int], psize: Int): FTree[T] = {
-    resetDist(space.iterator.zip(probs.iterator), psize)
-  }
-
-  def resetDist(distIter: Iterator[(Int, T)], psize: Int): FTree[T] = {
     reset(psize)
-    if (!isSparse) {
-      while (distIter.hasNext) {
-        val (i, prob) = distIter.next()
-        setLeaf(i, prob)
+    var i = 0
+    while (i < psize) {
+      setLeaf(i, probs(i))
+      if (isSparse) {
+        _space(i) = space(i)
       }
-    } else {
-      var i = 0
-      while (i < psize) {
-        val (state, prob) = distIter.next()
-        setLeaf(i, prob)
-        _space(i) = state
-        i += 1
-      }
+      i += 1
     }
     buildFTree()
     this
+  }
+
+  def resetDist(distIter: Iterator[(Int, T)], psize: Int): FTree[T] = {
+    val (space, probs) = distIter.toArray.unzip
+    assert(probs.length == psize)
+    resetDist(probs.toArray, space.toArray, psize)
   }
 
   private def buildFTree(): FTree[T] = {

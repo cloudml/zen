@@ -178,17 +178,20 @@ abstract class LDAAlgorithm(numTopics: Int,
       (epIter, vabsIter) => epIter.map(Function.tupled((pid, ep) => {
         val g2l = ep.global2local
         val results = new Array[Nvk](ep.vertexAttrs.length)
-        val thq = new ConcurrentLinkedQueue(0 until numThreads)
+        val thq = new ConcurrentLinkedQueue(1 to numThreads)
         val decomps = Array.fill(numThreads)(new BVDecompressor(numTopics))
 
         implicit val es = initExecutionContext(numThreads)
         val all = Future.traverse(vabsIter) { case (_, vab) => withFuture {
-          val thid = thq.poll()
-          val decomp = decomps(thid)
-          vab.iterator.foreach { case (vid, vdata) =>
-            results(g2l(vid)) = decomp.CV2BV(vdata)
+          val thid = thq.poll() - 1
+          try {
+            val decomp = decomps(thid)
+            vab.iterator.foreach { case (vid, vdata) =>
+              results(g2l(vid)) = decomp.CV2BV(vdata)
+            }
+          } finally {
+            thq.add(thid + 1)
           }
-          thq.add(thid)
         }}
         withAwaitReadyAndClose(all)
 

@@ -58,7 +58,7 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
     val vattrs = ep.vertexAttrs
     val data = ep.data
     val activeLens = new Array[Int](vattrs.length)
-    val thq = new ConcurrentLinkedQueue(0 until numThreads)
+    val thq = new ConcurrentLinkedQueue(1 to numThreads)
     // table/ftree is a per term data structure
     // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
     // so, use below simple cache to avoid calculating table each time
@@ -70,32 +70,35 @@ class LDAInferrer(numTopics: Int, numThreads: Int)
 
     implicit val es = initExecutionContext(numThreads)
     val all = Future.traverse(ep.index.iterator)(Function.tupled((_, offset) => withFuture {
-      val thid = thq.poll()
-      var gen = gens(thid)
-      if (gen == null) {
-        gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
-        gens(thid) = gen
-        termDists(thid) = new AliasTable[Double].reset(numTopics)
-        cdfDists(thid) = new CumulativeDist[Double].reset(numTopics)
+      val thid = thq.poll() - 1
+      try {
+        var gen = gens(thid)
+        if (gen == null) {
+          gen = new XORShiftRandom(((seed + sampIter) * numPartitions + pid) * numThreads + thid)
+          gens(thid) = gen
+          termDists(thid) = new AliasTable[Double].reset(numTopics)
+          cdfDists(thid) = new CumulativeDist[Double].reset(numTopics)
+        }
+        val termDist = termDists(thid)
+        val si = lcSrcIds(offset)
+        val termTopics = vattrs(si)
+        activeLens(si) = termTopics.activeSize
+        resetDist_waSparse(termDist, alphak_denoms, termTopics)
+        val denseTermTopics = toBDV(termTopics)
+        val termBeta_denoms = calc_termBeta_denoms(denoms, beta_denoms, termTopics)
+        val cdfDist = cdfDists(thid)
+        var pos = offset
+        while (pos < totalSize && lcSrcIds(pos) == si) {
+          val di = lcDstIds(pos)
+          val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
+          val topic = data(pos)
+          resetDist_dwbSparse_withAdjust(cdfDist, denoms, termBeta_denoms, docTopics, topic)
+          data(pos) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
+          pos += 1
+        }
+      } finally {
+        thq.add(thid + 1)
       }
-      val termDist = termDists(thid)
-      val si = lcSrcIds(offset)
-      val termTopics = vattrs(si)
-      activeLens(si) = termTopics.activeSize
-      resetDist_waSparse(termDist, alphak_denoms, termTopics)
-      val denseTermTopics = toBDV(termTopics)
-      val termBeta_denoms = calc_termBeta_denoms(denoms, beta_denoms, termTopics)
-      val cdfDist = cdfDists(thid)
-      var pos = offset
-      while (pos < totalSize && lcSrcIds(pos) == si) {
-        val di = lcDstIds(pos)
-        val docTopics = vattrs(di).asInstanceOf[BSV[Count]]
-        val topic = data(pos)
-        resetDist_dwbSparse_withAdjust(cdfDist, denoms, termBeta_denoms, docTopics, topic)
-        data(pos) = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
-        pos += 1
-      }
-      thq.add(thid)
     }))
     withAwaitReadyAndClose(all)
 
