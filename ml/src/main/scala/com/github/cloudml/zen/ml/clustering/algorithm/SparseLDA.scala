@@ -173,19 +173,17 @@ class SparseLDA(numTopics: Int, numThreads: Int)
       val probs = new Array[Double](numTopics)
       val space = new Array[Int](numTopics)
       var psize = 0
-      v.synchronized {
-        var i = 0
-        while (i < numTopics) {
-          val cnt = v(i)
-          if (cnt > 0) {
-            val nk = topicCounters(i)
-            val alphak = (nk + alphaAS) * alphaRatio
-            probs(psize) = (docTopics(i) + alphak) * cnt / (nk + betaSum)
-            space(psize) = i
-            psize += 1
-          }
-          i += 1
+      var i = 0
+      while (i < numTopics) {
+        val cnt = v(i)
+        if (cnt > 0) {
+          val nk = topicCounters(i)
+          val alphak = (nk + alphaAS) * alphaRatio
+          probs(psize) = (docTopics(i) + alphak) * cnt / (nk + betaSum)
+          space(psize) = i
+          psize += 1
         }
+        i += 1
       }
       wda.resetDist(probs, space, psize)
     case v: BSV[Count] =>
