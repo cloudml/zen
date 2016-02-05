@@ -131,7 +131,6 @@ class LightLDA(numTopics: Int, numThreads: Int)
             docCycle = !docCycle
             mh += 1
           }
-
           pos += 1
         }
       } finally {

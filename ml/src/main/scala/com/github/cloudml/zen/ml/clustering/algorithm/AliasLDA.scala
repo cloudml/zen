@@ -163,18 +163,19 @@ class AliasLDA(numTopics: Int, numThreads: Int)
     beta: Double,
     betaSum: Double,
     curTopic: Int): AliasTable[Double] = {
-    val tmpDocTopics = termTopics.synchronized(termTopics.copy)
     val used = docTopics.used
     val index = docTopics.index
     val data = docTopics.data
     val probs = new Array[Double](used)
-    var i = 0
-    while (i < used) {
-      val topic = index(i)
-      val adjust = if (topic == curTopic) -1 else 0
-      probs(i) = (tmpDocTopics(topic) + adjust + beta) * (data(i) + adjust) /
-        (topicCounters(topic) + adjust + betaSum)
-      i += 1
+    termTopics.synchronized {
+      var i = 0
+      while (i < used) {
+        val topic = index(i)
+        val adjust = if (topic == curTopic) -1 else 0
+        probs(i) = (termTopics(topic) + adjust + beta) * (data(i) + adjust) /
+          (topicCounters(topic) + adjust + betaSum)
+        i += 1
+      }
     }
     dwb.resetDist(probs, index.clone(), used)
   }
