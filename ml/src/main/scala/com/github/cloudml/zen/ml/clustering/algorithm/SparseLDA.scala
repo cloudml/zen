@@ -168,13 +168,12 @@ class SparseLDA(numTopics: Int, numThreads: Int)
     alphaAS: Double,
     betaSum: Double,
     alphaRatio: Double,
-    curTopic: Int): FlatDist[Double] = {
-    val tmpTermTopics = termTopics.synchronized(termTopics.copy)
-    tmpTermTopics match {
-      case v: BDV[Count] =>
-        val probs = new Array[Double](numTopics)
-        val space = new Array[Int](numTopics)
-        var psize = 0
+    curTopic: Int): FlatDist[Double] = termTopics match {
+    case v: BDV[Count] =>
+      val probs = new Array[Double](numTopics)
+      val space = new Array[Int](numTopics)
+      var psize = 0
+      v.synchronized {
         var i = 0
         while (i < numTopics) {
           val cnt = v(i)
@@ -187,8 +186,10 @@ class SparseLDA(numTopics: Int, numThreads: Int)
           }
           i += 1
         }
-        wda.resetDist(probs, space, psize)
-      case v: BSV[Count] =>
+      }
+      wda.resetDist(probs, space, psize)
+    case v: BSV[Count] =>
+      v.synchronized {
         val used = v.used
         val index = v.index
         val data = v.data
@@ -201,7 +202,7 @@ class SparseLDA(numTopics: Int, numThreads: Int)
           probs(i) = (docTopics(topic) + alphak) * data(i) / (nk + betaSum)
           i += 1
         }
-        wda.resetDist(probs, index, used)
-    }
+        wda.resetDist(probs, index.clone(), used)
+      }
   }
 }

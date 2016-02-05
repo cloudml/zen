@@ -151,9 +151,7 @@ class AliasLDA(numTopics: Int, numThreads: Int)
       probs(i) = alphak * beta / (nk + betaSum)
       i += 1
     }
-    ab.synchronized {
-      ab.resetDist(probs, null, numTopics)
-    }
+    ab.resetDist(probs, null, numTopics)
   }
 
   def resetDist_dwbSparse_wAdjust(dwb: AliasTable[Double],
