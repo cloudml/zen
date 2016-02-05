@@ -77,7 +77,7 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Bo
   }
 
   def sampleFrom(base: T, gen: Random): Int = {
-    assert(ev.lt(base, _tree(1)))
+    // assert(ev.lt(base, _tree(1)))
     if (_used == 1) {
       toState(1)
     } else {
@@ -111,7 +111,6 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Bo
   }
 
   def update(state: Int, value: => T): Unit = {
-    assert(ev.lteqv(value, ev.zero))
     var pos = toTreePos(state)
     if (pos < leafOffset) {
       pos = addState()
