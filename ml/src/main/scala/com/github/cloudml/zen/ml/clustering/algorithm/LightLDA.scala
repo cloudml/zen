@@ -107,7 +107,7 @@ class LightLDA(numTopics: Int, numThreads: Int)
           val CGSCurry2 = CGSCurry(termTopics, docTopics)
           var docCycle = gen.nextBoolean()
           var mh = 0
-          while (mh < 8) {
+          while (mh < 2) {
             val CGSFunc = CGSCurry2(topic)
             if (docCycle) {
               compSamp.resetComponents(docDist, alphaDist)
@@ -167,9 +167,7 @@ class LightLDA(numTopics: Int, numThreads: Int)
       probs(i) = beta / (topicCounters(i) + betaSum)
       i += 1
     }
-    b.synchronized {
-      b.resetDist(probs, null, numTopics)
-    }
+    b.resetDist(probs, null, numTopics)
   }
 
   def resetDist_wSparse(ws: AliasTable[Double],
@@ -215,9 +213,7 @@ class LightLDA(numTopics: Int, numThreads: Int)
       probs(i) = alphaRatio * (topicCounters(i) + alphaAS)
       i += 1
     }
-    a.synchronized {
-      a.resetDist(probs, null, numTopics)
-    }
+    a.resetDist(probs, null, numTopics)
   }
 
   def dSparseCached(cache: Array[SoftReference[AliasTable[Count]]],
