@@ -30,7 +30,7 @@ import com.github.cloudml.zen.ml.util.{BVCompressor, BVDecompressor, XORShiftRan
 import org.apache.spark.graphx2.impl.{EdgePartition, ShippableVertexPartition => VertPartition}
 
 import scala.collection.JavaConversions._
-import scala.concurrent._
+import scala.concurrent.Future
 
 
 class LDAInferrer(numTopics: Int, numThreads: Int)

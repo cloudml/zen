@@ -63,7 +63,7 @@ class AliasLDA(numTopics: Int, numThreads: Int)
     val MHSamps = new Array[MetropolisHastings](numThreads)
     val compSamps = new Array[CompositeSampler](numThreads)
     resetDist_abDense(global, topicCounters, alphaAS, beta, betaSum, alphaRatio)
-    val CGSCurry = tokenOrigProb(topicCounters, alphaAS, beta, betaSum, alphaRatio)_
+    val CGSCurry = tokenOrigProb(topicCounters, alphaAS, beta, betaSum, alphaRatio) _
 
     implicit val es = initExecutionContext(numThreads)
     val all = Future.traverse(ep.index.iterator) { case (_, startPos) => withFuture {

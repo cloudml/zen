@@ -97,7 +97,7 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     val global = new AliasTable[Double]
     val thq = new ConcurrentLinkedQueue(1 to numThreads)
     val gens = new Array[XORShiftRandom](numThreads)
-    val termDists = new Array[DiscreteSampler[Double]](numThreads)
+    val termDists = new Array[AliasTable[Double]](numThreads)
     val cdfDists = new Array[CumulativeDist[Double]](numThreads)
     resetDist_abDense(global, alphak_denoms, beta)
 
@@ -196,8 +196,8 @@ class ZenLDA(numTopics: Int, numThreads: Int)
   }
 
   def tokenSampling(gen: Random,
-    ab: DiscreteSampler[Double],
-    wa: DiscreteSampler[Double],
+    ab: AliasTable[Double],
+    wa: AliasTable[Double],
     dwb: CumulativeDist[Double],
     denseTermTopics: BDV[Count],
     curTopic: Int): Int = {
@@ -216,8 +216,8 @@ class ZenLDA(numTopics: Int, numThreads: Int)
   }
 
   def tokenResampling(gen: Random,
-    ab: DiscreteSampler[Double],
-    wa: DiscreteSampler[Double],
+    ab: AliasTable[Double],
+    wa: AliasTable[Double],
     dwb: CumulativeDist[Double],
     denseTermTopics: BDV[Count],
     docTopics: Ndk,
@@ -448,5 +448,165 @@ class ZenLDA(numTopics: Int, numThreads: Int)
     beta: Double): AliasTable[Double] = {
     val probs = alphak_denoms.copy :*= beta
     ab.resetDist(probs.data, null, probs.length)
+  }
+
+  def resetDist_waSparse(wa: AliasTable[Double],
+    alphak_denoms: BDV[Double],
+    termTopics: Nwk): AliasTable[Double] = termTopics match {
+    case v: BDV[Count] =>
+      val probs = new Array[Double](numTopics)
+      val space = new Array[Int](numTopics)
+      var psize = 0
+      var i = 0
+      while (i < numTopics) {
+        val cnt = v(i)
+        if (cnt > 0) {
+          probs(psize) = alphak_denoms(i) * cnt
+          space(psize) = i
+          psize += 1
+        }
+        i += 1
+      }
+      wa.resetDist(probs, space, psize)
+    case v: BSV[Count] =>
+      val used = v.used
+      val index = v.index
+      val data = v.data
+      val probs = new Array[Double](used)
+      var i = 0
+      while (i < used) {
+        probs(i) = alphak_denoms(index(i)) * data(i)
+        i += 1
+      }
+      wa.resetDist(probs, index, used)
+  }
+
+  def resetDist_dwbSparse(dwb: CumulativeDist[Double],
+    denoms: BDV[Double],
+    denseTermTopics: BDV[Count],
+    docTopics: Ndk,
+    beta: Double): CumulativeDist[Double] = {
+    val used = docTopics.used
+    val index = docTopics.index
+    val data = docTopics.data
+    // DANGER operations for performance
+    dwb._used = used
+    val cdf = dwb._cdf
+    var sum = 0.0
+    var i = 0
+    while (i < used) {
+      val topic = index(i)
+      sum += (denseTermTopics(topic) + beta) * data(i) * denoms(topic)
+      cdf(i) = sum
+      i += 1
+    }
+    dwb._space = index
+    dwb
+  }
+
+  def resetDist_dwbSparse_wAdjust(dwb: CumulativeDist[Double],
+    denoms: BDV[Double],
+    denseTermTopics: BDV[Count],
+    docTopics: Ndk,
+    curTopic: Int,
+    beta: Double): CumulativeDist[Double] = {
+    val used = docTopics.used
+    val index = docTopics.index
+    val data = docTopics.data
+    // DANGER operations for performance
+    dwb._used = used
+    val cdf = dwb._cdf
+    var sum = 0.0
+    var i = 0
+    while (i < used) {
+      val topic = index(i)
+      val docCnt = data(i)
+      val termBeta = denseTermTopics(topic) + beta
+      val numer = if (topic == curTopic) {
+        (termBeta - 1.0) * (docCnt - 1)
+      } else {
+        termBeta * docCnt
+      }
+      sum += numer * denoms(topic)
+      cdf(i) = sum
+      i += 1
+    }
+    dwb._space = index
+    dwb
+  }
+
+  def resetDist_dwbSparse_wOpt(dwb: CumulativeDist[Double],
+    termBeta_denoms: BDV[Double],
+    docTopics: Ndk): CumulativeDist[Double] = {
+    val used = docTopics.used
+    val index = docTopics.index
+    val data = docTopics.data
+    // DANGER operations for performance
+    dwb._used = used
+    val cdf = dwb._cdf
+    var sum = 0.0
+    var i = 0
+    while (i < used) {
+      sum += termBeta_denoms(index(i)) * data(i)
+      cdf(i) = sum
+      i += 1
+    }
+    dwb._space = index
+    dwb
+  }
+
+  def resetDist_dwbSparse_wOptAdjust(dwb: CumulativeDist[Double],
+    denoms: BDV[Double],
+    termBeta_denoms: BDV[Double],
+    docTopics: Ndk,
+    curTopic: Int): CumulativeDist[Double] = {
+    val used = docTopics.used
+    val index = docTopics.index
+    val data = docTopics.data
+    // DANGER operations for performance
+    dwb._used = used
+    val cdf = dwb._cdf
+    var sum = 0.0
+    var i = 0
+    while (i < used) {
+      val topic = index(i)
+      val docCnt = data(i)
+      val termBeta_denom = termBeta_denoms(topic)
+      val prob = if (topic == curTopic) {
+        (termBeta_denom - denoms(topic)) * (docCnt - 1)
+      } else {
+        termBeta_denom * docCnt
+      }
+      sum += prob
+      cdf(i) = sum
+      i += 1
+    }
+    dwb._space = index
+    dwb
+  }
+
+  def calc_termBeta_denoms(denoms: BDV[Double],
+    beta_denoms: BDV[Double],
+    termTopics: Nwk): BDV[Double] = {
+    val bdv = beta_denoms.copy
+    termTopics match {
+      case v: BDV[Count] =>
+        var i = 0
+        while (i < numTopics) {
+          bdv(i) += denoms(i) * v(i)
+          i += 1
+        }
+      case v: BSV[Count] =>
+        val used = v.used
+        val index = v.index
+        val data = v.data
+        var i = 0
+        while (i < used) {
+          val topic = index(i)
+          bdv(topic) += denoms(topic) * data(i)
+          i += 1
+        }
+    }
+    bdv
   }
 }

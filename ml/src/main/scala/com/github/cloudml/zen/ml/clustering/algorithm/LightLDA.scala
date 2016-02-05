@@ -64,7 +64,7 @@ class LightLDA(numTopics: Int, numThreads: Int)
     val compSamps = new Array[CompositeSampler](numThreads)
     resetDist_aDense(alphaDist, topicCounters, alphaAS, alphaRatio)
     resetDist_bDense(betaDist, topicCounters, beta, betaSum)
-    val CGSCurry = tokenOrigProb(topicCounters, alphaAS, beta, betaSum, alphaRatio)_
+    val CGSCurry = tokenOrigProb(topicCounters, alphaAS, beta, betaSum, alphaRatio) _
 
     implicit val es = initExecutionContext(numThreads)
     val all = Future.traverse(lcSrcIds.indices.by(3).iterator) { lsi => withFuture {

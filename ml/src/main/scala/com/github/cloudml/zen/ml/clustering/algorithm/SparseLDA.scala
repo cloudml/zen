@@ -120,12 +120,11 @@ class SparseLDA(numTopics: Int, numThreads: Int)
     termTopics.synchronized {
       termTopics(topic) += delta
     }
-    val ns = topicCounters(topic)
-    val nds = docTopics(topic)
-    val betaDenom = beta / (ns + betaSum)
-    val alphak = (ns + alphaAS) * alphaRatio
+    val nk = topicCounters(topic)
+    val betaDenom = beta / (nk + betaSum)
+    val alphak = (nk + alphaAS) * alphaRatio
     ab(topic) = alphak * betaDenom
-    db(topic) = nds * betaDenom
+    db(topic) = docTopics(topic) * betaDenom
   }
 
   def resetDist_abDense(ab: FlatDist[Double],
@@ -142,9 +141,7 @@ class SparseLDA(numTopics: Int, numThreads: Int)
       probs(i) = alphak * beta / (nk + betaSum)
       i += 1
     }
-    ab.synchronized {
-      ab.resetDist(probs, null, numTopics)
-    }
+    ab.resetDist(probs, null, numTopics)
   }
 
   def resetDist_dbSparse(db: FlatDist[Double],

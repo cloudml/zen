@@ -20,7 +20,7 @@ package com.github.cloudml.zen.ml.clustering.algorithm
 import java.util.Random
 import java.util.concurrent.ConcurrentLinkedQueue
 
-import breeze.linalg.{DenseVector => BDV}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util.Concurrent._
@@ -46,8 +46,6 @@ class FPlusLDA(numTopics: Int, numThreads: Int)
     val alphaSum = alpha * numTopics
     val betaSum = beta * numTerms
     val alphaRatio = calc_alphaRatio(alphaSum, numTokens, alphaAS)
-    val denoms = calc_denoms(topicCounters, betaSum)
-    val alphak_denoms = calc_alphak_denoms(denoms, alphaAS, betaSum, alphaRatio)
 
     val lcSrcIds = ep.localSrcIds
     val lcDstIds = ep.localDstIds
@@ -58,12 +56,12 @@ class FPlusLDA(numTopics: Int, numThreads: Int)
     val global = new FTree[Double](isSparse=false)
     val thq = new ConcurrentLinkedQueue(1 to numThreads)
     val gens = new Array[XORShiftRandom](numThreads)
-    val termDists = new Array[DiscreteSampler[Double]](numThreads)
+    val termDists = new Array[FTree[Double]](numThreads)
     val cdfDists = new Array[CumulativeDist[Double]](numThreads)
     resetDist_abDense(global, topicCounters, alphaAS, beta, betaSum, alphaRatio)
 
     implicit val es = initExecutionContext(numThreads)
-    val all = Future.traverse(lcSrcIds.indices.by(3).iterator)(lsi => withFuture {
+    val all = Future.traverse(lcSrcIds.indices.by(3).iterator) { lsi => withFuture {
       val thid = thq.poll() - 1
       try {
         var gen = gens(thid)
@@ -81,47 +79,65 @@ class FPlusLDA(numTopics: Int, numThreads: Int)
         val endPos = lcSrcIds(lsi + 2)
         val termTopics = vattrs(si)
         useds(si) = termTopics.activeSize
-        resetDist_waSparse(termDist, alphak_denoms, termTopics)
+        resetDist_waSparse(termDist, topicCounters, termTopics, alphaAS, betaSum, alphaRatio)
+        val updateCurry = updateTopicAssign(global, termDist, topicCounters, alphaAS, beta, betaSum, alphaRatio) _
         val denseTermTopics = toBDV(termTopics)
         var pos = startPos
         while (pos < endPos) {
           val di = lcDstIds(pos)
           val docTopics = vattrs(di).asInstanceOf[Ndk]
           useds(di) = docTopics.activeSize
+          val tokenUpdate = updateCurry(denseTermTopics, docTopics)
           val topic = data(pos)
-          resetDist_dwbSparse_wAdjust(cdfDist, denoms, denseTermTopics, docTopics, topic, beta)
-          val newTopic = tokenSampling(gen, global, termDist, cdfDist, denseTermTopics, topic)
-          if (topic != newTopic) {
-            data(pos) = newTopic
-          }
+          tokenUpdate(topic, -1)
+          resetDist_dwbSparse(cdfDist, topicCounters, denseTermTopics, docTopics, beta, betaSum)
+          val newTopic = tokenSampling(gen, global, termDist, cdfDist)
+          tokenUpdate(newTopic, 1)
+          data(pos) = newTopic
           pos += 1
         }
       } finally {
         thq.add(thid + 1)
       }
-    })
+    }}
     withAwaitReadyAndClose(all)
 
     ep.withVertexAttributes(useds)
   }
 
+  def updateTopicAssign(ab: FTree[Double],
+    wa: FTree[Double],
+    topicCounters: BDV[Count],
+    alphaAS: Double,
+    beta: Double,
+    betaSum: Double,
+    alphaRatio: Double)
+    (denseTermTopics: BDV[Count], docTopics: Ndk)
+    (topic: Int, delta: Int): Unit = {
+    topicCounters(topic) += delta
+    denseTermTopics(topic) += delta
+    docTopics.synchronized {
+      docTopics(topic) += delta
+    }
+    val nk = topicCounters(topic)
+    val denom = 1.0 / (nk + betaSum)
+    val alphak = (nk + alphaAS) * alphaRatio
+    ab(topic) = alphak * beta * denom
+    wa(topic) = docTopics(topic) * alphak * denom
+  }
+
   def tokenSampling(gen: Random,
-    ab: DiscreteSampler[Double],
-    wa: DiscreteSampler[Double],
-    dwb: CumulativeDist[Double],
-    denseTermTopics: BDV[Count],
-    topic: Int): Int = {
+    ab: FTree[Double],
+    wa: FTree[Double],
+    dwb: CumulativeDist[Double]): Int = {
     val dwbSum = dwb.norm
     val sum23 = dwbSum + wa.norm
     val distSum = sum23 + ab.norm
     val genSum = gen.nextDouble() * distSum
     if (genSum < dwbSum) {
       dwb.sampleFrom(genSum, gen)
-    } else if (genSum < sum23) wa match {
-      case wt: AliasTable[Double] =>
-        val rr = 1.0 / denseTermTopics(topic)
-        wt.resampleFrom(genSum - dwbSum, gen, topic, rr)
-      case wf: FTree[Double] => wf.sampleFrom(genSum - dwbSum, gen)
+    } else if (genSum < sum23) {
+      wa.sampleFrom(genSum - dwbSum, gen)
     } else {
       ab.sampleFrom(genSum - sum23, gen)
     }
@@ -141,8 +157,68 @@ class FPlusLDA(numTopics: Int, numThreads: Int)
       probs(i) = alphak * beta / (nk + betaSum)
       i += 1
     }
-    ab.synchronized {
-      ab.resetDist(probs, null, numTopics)
+    ab.resetDist(probs, null, numTopics)
+  }
+
+  def resetDist_waSparse(wa: FTree[Double],
+    topicCounters: BDV[Count],
+    termTopics: Nwk,
+    alphaAS: Double,
+    betaSum: Double,
+    alphaRatio: Double): FTree[Double] = termTopics match {
+    case v: BDV[Count] =>
+      val probs = new Array[Double](numTopics)
+      val space = new Array[Int](numTopics)
+      var psize = 0
+      var i = 0
+      while (i < numTopics) {
+        val cnt = v(i)
+        if (cnt > 0) {
+          val nk = topicCounters(i)
+          val alphak = (nk + alphaAS) * alphaRatio
+          probs(psize) = alphak * cnt / (nk + betaSum)
+          space(psize) = i
+          psize += 1
+        }
+        i += 1
+      }
+      wa.resetDist(probs, space, psize)
+    case v: BSV[Count] =>
+      val used = v.used
+      val index = v.index
+      val data = v.data
+      val probs = new Array[Double](used)
+      var i = 0
+      while (i < used) {
+        val nk = topicCounters(index(i))
+        val alphak = (nk + alphaAS) * alphaRatio
+        probs(i) = alphak * data(i) / (nk + betaSum)
+        i += 1
+      }
+      wa.resetDist(probs, index, used)
+  }
+
+  def resetDist_dwbSparse(dwb: CumulativeDist[Double],
+    topicCounters: BDV[Count],
+    denseTermTopics: BDV[Count],
+    docTopics: Ndk,
+    beta: Double,
+    betaSum: Double): CumulativeDist[Double] = docTopics.synchronized {
+    val used = docTopics.used
+    val index = docTopics.index
+    val data = docTopics.data
+    // DANGER operations for performance
+    dwb._used = used
+    val cdf = dwb._cdf
+    var sum = 0.0
+    var i = 0
+    while (i < used) {
+      val topic = index(i)
+      sum += (denseTermTopics(topic) + beta) * data(i) / (topicCounters(topic) + betaSum)
+      cdf(i) = sum
+      i += 1
     }
+    dwb._space = index
+    dwb
   }
 }

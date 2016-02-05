@@ -19,7 +19,6 @@ package com.github.cloudml.zen.ml.clustering.algorithm
 
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, sum}
 import com.github.cloudml.zen.ml.clustering.LDADefines._
-import com.github.cloudml.zen.ml.sampler._
 import com.github.cloudml.zen.ml.util.Concurrent._
 import org.apache.spark.graphx2.impl.EdgePartition
 
@@ -170,37 +169,6 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     (llhs, wllhs, dllhs)
   }
 
-  def resetDist_waSparse(wa: DiscreteSampler[Double],
-    alphak_denoms: BDV[Double],
-    termTopics: Nwk): DiscreteSampler[Double] = termTopics match {
-    case v: BDV[Count] =>
-      val probs = new Array[Double](numTopics)
-      val space = new Array[Int](numTopics)
-      var psize = 0
-      var i = 0
-      while (i < numTopics) {
-        val cnt = v(i)
-        if (cnt > 0) {
-          probs(psize) = alphak_denoms(i) * cnt
-          space(psize) = i
-          psize += 1
-        }
-        i += 1
-      }
-      wa.resetDist(probs, space, psize)
-    case v: BSV[Count] =>
-      val used = v.used
-      val index = v.index
-      val data = v.data
-      val probs = new Array[Double](used)
-      var i = 0
-      while (i < used) {
-        probs(i) = alphak_denoms(index(i)) * data(i)
-        i += 1
-      }
-      wa.resetDist(probs, index, used)
-  }
-
   def sum_waSparse(alphak_denoms: BDV[Double],
     termTopics: Nwk): Double = termTopics match {
     case v: BDV[Count] =>
@@ -227,60 +195,6 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
       sum
   }
 
-  def resetDist_dwbSparse(dwb: CumulativeDist[Double],
-    denoms: BDV[Double],
-    denseTermTopics: BDV[Count],
-    docTopics: Ndk,
-    beta: Double): CumulativeDist[Double] = {
-    val used = docTopics.used
-    val index = docTopics.index
-    val data = docTopics.data
-    // DANGER operations for performance
-    dwb._used = used
-    val cdf = dwb._cdf
-    var sum = 0.0
-    var i = 0
-    while (i < used) {
-      val topic = index(i)
-      sum += (denseTermTopics(topic) + beta) * data(i) * denoms(topic)
-      cdf(i) = sum
-      i += 1
-    }
-    dwb._space = index
-    dwb
-  }
-
-  def resetDist_dwbSparse_wAdjust(dwb: CumulativeDist[Double],
-    denoms: BDV[Double],
-    denseTermTopics: BDV[Count],
-    docTopics: Ndk,
-    curTopic: Int,
-    beta: Double): CumulativeDist[Double] = {
-    val used = docTopics.used
-    val index = docTopics.index
-    val data = docTopics.data
-    // DANGER operations for performance
-    dwb._used = used
-    val cdf = dwb._cdf
-    var sum = 0.0
-    var i = 0
-    while (i < used) {
-      val topic = index(i)
-      val docCnt = data(i)
-      val termBeta = denseTermTopics(topic) + beta
-      val numer = if (topic == curTopic) {
-        (termBeta - 1.0) * (docCnt - 1)
-      } else {
-        termBeta * docCnt
-      }
-      sum += numer * denoms(topic)
-      cdf(i) = sum
-      i += 1
-    }
-    dwb._space = index
-    dwb
-  }
-
   def sum_dwbSparse(denoms: BDV[Double],
     denseTermTopics: BDV[Count],
     docTopics: Ndk,
@@ -298,56 +212,6 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
     sum
   }
 
-  def resetDist_dwbSparse_wOpt(dwb: CumulativeDist[Double],
-    termBeta_denoms: BDV[Double],
-    docTopics: Ndk): CumulativeDist[Double] = {
-    val used = docTopics.used
-    val index = docTopics.index
-    val data = docTopics.data
-    // DANGER operations for performance
-    dwb._used = used
-    val cdf = dwb._cdf
-    var sum = 0.0
-    var i = 0
-    while (i < used) {
-      sum += termBeta_denoms(index(i)) * data(i)
-      cdf(i) = sum
-      i += 1
-    }
-    dwb._space = index
-    dwb
-  }
-
-  def resetDist_dwbSparse_wOptAdjust(dwb: CumulativeDist[Double],
-    denoms: BDV[Double],
-    termBeta_denoms: BDV[Double],
-    docTopics: Ndk,
-    curTopic: Int): CumulativeDist[Double] = {
-    val used = docTopics.used
-    val index = docTopics.index
-    val data = docTopics.data
-    // DANGER operations for performance
-    dwb._used = used
-    val cdf = dwb._cdf
-    var sum = 0.0
-    var i = 0
-    while (i < used) {
-      val topic = index(i)
-      val docCnt = data(i)
-      val termBeta_denom = termBeta_denoms(topic)
-      val prob = if (topic == curTopic) {
-        (termBeta_denom - denoms(topic)) * (docCnt - 1)
-      } else {
-        termBeta_denom * docCnt
-      }
-      sum += prob
-      cdf(i) = sum
-      i += 1
-    }
-    dwb._space = index
-    dwb
-  }
-
   def sum_dwbSparse_wOpt(termBeta_denoms: BDV[Double],
     docTopics: Ndk): Double = {
     val used = docTopics.used
@@ -360,30 +224,5 @@ abstract class LDATrainerByWord(numTopics: Int, numThreads: Int)
       i += 1
     }
     sum
-  }
-
-  def calc_termBeta_denoms(denoms: BDV[Double],
-    beta_denoms: BDV[Double],
-    termTopics: Nwk): BDV[Double] = {
-    val bdv = beta_denoms.copy
-    termTopics match {
-      case v: BDV[Count] =>
-        var i = 0
-        while (i < numTopics) {
-          bdv(i) += denoms(i) * v(i)
-          i += 1
-        }
-      case v: BSV[Count] =>
-        val used = v.used
-        val index = v.index
-        val data = v.data
-        var i = 0
-        while (i < used) {
-          val topic = index(i)
-          bdv(topic) += denoms(topic) * data(i)
-          i += 1
-        }
-    }
-    bdv
   }
 }

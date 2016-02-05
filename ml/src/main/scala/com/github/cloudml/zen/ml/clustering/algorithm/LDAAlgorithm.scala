@@ -86,7 +86,7 @@ abstract class LDAAlgorithm(numTopics: Int,
     val newEdges = refreshEdgeAssociations(edges, verts)
     val numPartitions = newEdges.partitions.length
     val spf = samplePartition(numPartitions, sampIter, seed, topicCounters,
-      numTokens, numTerms, alpha, alphaAS, beta)_
+      numTokens, numTerms, alpha, alphaAS, beta) _
     val partRDD = newEdges.partitionsRDD.mapPartitions(_.map { case (pid, ep) =>
       val startedAt = System.nanoTime
       val newEp = spf(pid, ep)
@@ -120,7 +120,7 @@ abstract class LDAAlgorithm(numTopics: Int,
     alphaAS: Double,
     beta: Double): LDAPerplexity = {
     val newEdges = refreshEdgeAssociations(edges, verts)
-    val ppf = perplexPartition(topicCounters, numTokens, numTerms, alpha, alphaAS, beta)_
+    val ppf = perplexPartition(topicCounters, numTokens, numTerms, alpha, alphaAS, beta) _
     val sumPart = newEdges.partitionsRDD.mapPartitions(_.map { case (_, ep) =>
       ppf(ep)
     })
@@ -141,7 +141,7 @@ abstract class LDAAlgorithm(numTopics: Int,
     beta: Double): LDALogLikelihood = {
     val alphaSum = alpha * numTopics
     val betaSum = beta * numTerms
-    val lpf = logLikelihoodPartition(topicCounters, numTokens, alpha, beta, alphaAS)_
+    val lpf = logLikelihoodPartition(topicCounters, numTokens, alpha, beta, alphaAS) _
     val sumPart = verts.partitionsRDD.mapPartitions(_.map(lpf))
     val (wllht, dllht) = sumPart.collect().unzip
     val normWord = Range(0, numTopics).par.map(i => lgamma(topicCounters(i) + betaSum)).sum
