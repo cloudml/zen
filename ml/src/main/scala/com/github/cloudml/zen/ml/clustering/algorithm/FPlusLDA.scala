@@ -116,15 +116,14 @@ class FPlusLDA(numTopics: Int, numThreads: Int)
     (topic: Int, delta: Int): Unit = {
     topicCounters(topic) += delta
     denseTermTopics(topic) += delta
-    val ndk = docTopics.synchronized {
+    docTopics.synchronized {
       docTopics(topic) += delta
-      docTopics(topic)
     }
     val nk = topicCounters(topic)
     val denom = 1.0 / (nk + betaSum)
     val alphak = (nk + alphaAS) * alphaRatio
     ab(topic) = alphak * beta * denom
-    wa(topic) = ndk * alphak * denom
+    wa(topic) = denseTermTopics(topic) * alphak * denom
   }
 
   def tokenSampling(gen: Random,

@@ -35,7 +35,7 @@ import scala.util.hashing.MurmurHash3
  *              uses a regular Long. We can forgo thread safety since we use a new instance of the RNG
  *              for each thread.
  */
-private[zen] class XORShiftRandom(init: Long) extends JavaRandom(init) {
+class XORShiftRandom(init: Long) extends JavaRandom(init) {
 
   def this() = this(System.nanoTime)
 
@@ -57,7 +57,7 @@ private[zen] class XORShiftRandom(init: Long) extends JavaRandom(init) {
 }
 
 /** Contains benchmark method and main method to run benchmark of the RNG */
-private[zen] object XORShiftRandom {
+object XORShiftRandom {
 
   /** Hash seeds to have 0/1 bits throughout. */
   private def hashSeed(seed: Long): Long = {

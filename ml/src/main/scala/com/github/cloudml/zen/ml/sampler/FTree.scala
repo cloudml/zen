@@ -18,21 +18,22 @@
 package com.github.cloudml.zen.ml.sampler
 
 import java.util.Random
-import scala.annotation.tailrec
-import scala.reflect.ClassTag
 
-import FTree._
-
-import breeze.linalg.{SparseVector => brSV, DenseVector => brDV, Vector => brV}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
+import com.github.cloudml.zen.ml.sampler.FTree._
 import spire.math.{Numeric => spNum}
+
+import scala.collection.mutable
+import scala.reflect.ClassTag
 
 
 class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Boolean)
-  (implicit ev: spNum[T]) extends DiscreteSampler[T] with Serializable {
-  private var _regLen: Int = _
-  private var _tree: Array[T] = _
-  private var _space: Array[Int] = _
-  private var _used: Int = _
+  (implicit ev: spNum[T]) extends DiscreteSampler[T] {
+  var _tree: Array[T] = _
+  var _space: Array[Int] = _
+  var _index: mutable.HashMap[Int, Int] = _
+  var _regUsed: Int = _
+  var _used: Int = _
 
   protected def numer: spNum[T] = ev
 
@@ -44,80 +45,54 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Bo
 
   def norm: T = _tree(1)
 
-  @inline private def leafOffset = _regLen
-
-  @inline private def getLeaf(i: Int): T = _tree(i + leafOffset)
-
-  @inline private def setLeaf(i: Int, p: T): Unit = {
-    _tree(i + leafOffset) = p
+  private def idx2State(i: Int): Int = {
+    assert(i < _used)
+    if (isSparse) _space(i) else i
   }
 
-  /**
-   * map pos in FTree to distribution state
-   */
-  private def toState(pos: Int): Int = {
-    val i = pos - leafOffset
-    if (!isSparse) {
-      i
-    } else {
-      _space(i)
-    }
-  }
-
-  /**
-   * map distribution state to pos in FTree
-   */
-  private def toTreePos(state: Int): Int = {
-    val i = if (!isSparse) {
-      state
-    } else {
-      binarySearch(_space, state, 0, _used)
-    }
-    i + leafOffset
+  private def state2Idx(state: Int): Int = {
+    if (isSparse) _index.getOrElse(state, -1) else state
   }
 
   def sampleFrom(base: T, gen: Random): Int = {
     // assert(ev.lt(base, _tree(1)))
     if (_used == 1) {
-      toState(1)
+      idx2State(0)
     } else {
       var u = base
-      var cur = 1
-      while (cur < leafOffset) {
-        val lc = cur << 1
+      var pos = 1
+      while (pos < _regUsed) {
+        val lc = pos << 1
         val lcp = _tree(lc)
         if (ev.lt(u, lcp)) {
-          cur = lc
+          pos = lc
         } else {
           u = ev.minus(u, lcp)
-          cur = lc + 1
+          pos = lc + 1
         }
       }
-      toState(cur)
+      idx2State(pos - _regUsed)
     }
   }
 
   def apply(state: Int): T = {
-    if (!isSparse) {
-      getLeaf(state)
+    val i = state2Idx(state)
+    if (i < 0) {
+      ev.zero
     } else {
-      val i = binarySearch(_space, state, 0, _used)
-      if (i < 0 || _space(i) != state) {
-        ev.zero
-      } else {
-        getLeaf(i)
-      }
+      _tree(i + _regUsed)
     }
   }
 
   def update(state: Int, value: => T): Unit = {
-    var pos = toTreePos(state)
-    if (pos < leafOffset) {
-      pos = addState()
+    var i = state2Idx(state)
+    if (i < 0) {
+      i = addState(state)
     }
     if (ev.lteqv(value, ev.zero)) {
-      delState(pos)
+      delState(i)
     } else {
+      val pos = i + _regUsed
       val p = _tree(pos)
       val delta = ev.minus(value, p)
       _tree(pos) = value
@@ -126,14 +101,15 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Bo
   }
 
   def deltaUpdate(state: Int, delta: => T): Unit = {
-    var pos = toTreePos(state)
-    if (pos < leafOffset) {
-      pos = addState()
+    var i = state2Idx(state)
+    if (i < 0) {
+      i = addState(state)
     }
+    val pos = i + _regUsed
     val p = _tree(pos)
     val np = ev.plus(p, delta)
     if (ev.lteqv(np, ev.zero)) {
-      delState(pos)
+      delState(i)
     } else {
       _tree(pos) = np
       updateAncestors(pos, delta)
@@ -148,25 +124,23 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Bo
     }
   }
 
-  private def addState(): Int = {
-    if (_used == _regLen) {
-      val prevRegLen = _regLen
-      val prevTree = _tree
-      val prevSpace = _space
-      val prevUsed = _used
-      reset(_used + 1)
-      Array.copy(prevTree, prevRegLen, _tree, _regLen, prevUsed)
+  private def addState(state: Int): Int = {
+    if (_used == _regUsed) {
+      val newRegUsed = if (_regUsed == 0) 1 else _regUsed << 1
+      Array.copy(_tree, _regUsed, _tree, newRegUsed, _used)
+      _regUsed = newRegUsed
+      zeroUsedPaddings()
       buildFTree()
-      if (isSparse) {
-        Array.copy(prevSpace, 0, _space, 0, prevUsed)
-      }
-    } else {
-      _used += 1
     }
-    _used - 1 + leafOffset
+    val i = _used
+    _space(i) = state
+    _index(state) = i
+    _used += 1
+    i
   }
 
-  private def delState(pos: Int): Unit = {
+  private def delState(i: Int): Unit = {
+    val pos = i + _regUsed
     val p = _tree(pos)
     _tree(pos) = ev.zero
     updateAncestors(pos, ev.negate(p))
@@ -174,16 +148,19 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Bo
 
   def resetDist(probs: Array[T], space: Array[Int], psize: Int): FTree[T] = {
     reset(psize)
+    setUsed(psize)
     var i = 0
     while (i < psize) {
-      setLeaf(i, probs(i))
+      _tree(i + _regUsed) = probs(i)
       if (isSparse) {
-        _space(i) = space(i)
+        val state = space(i)
+        _space(i) = state
+        _index(state) = i
       }
       i += 1
     }
+    zeroUsedPaddings()
     buildFTree()
-    this
   }
 
   def resetDist(distIter: Iterator[(Int, T)], psize: Int): FTree[T] = {
@@ -193,43 +170,64 @@ class FTree[@specialized(Double, Int, Float, Long) T: ClassTag](val isSparse: Bo
   }
 
   private def buildFTree(): FTree[T] = {
-    var i = leafOffset - 1
+    var i = _regUsed - 1
     while (i >= 1) {
-      _tree(i) = ev.plus(_tree(i << 1), _tree((i << 1) + 1))
+      val lpi = i << 1
+      _tree(i) = ev.plus(_tree(lpi), _tree(lpi + 1))
       i -= 1
     }
     this
   }
 
-  def reset(newSize: Int): FTree[T] = {
-    _regLen = regularLen(newSize)
-    if (_tree == null || _regLen > (_tree.length >> 1)) {
-      _tree = new Array[T](_regLen << 1)
-      _space = if (!isSparse) null else new Array[Int](_regLen)
+  def reset(capacity: Int): FTree[T] = {
+    val regCap = regularLen(capacity)
+    val fullLen = regCap << 1
+    if (_tree == null) {
+      _tree = new Array[T](fullLen)
+      if (isSparse) {
+        _space = new Array[Int](regCap)
+        _index = new mutable.HashMap[Int, Int]()
+      }
+    } else {
+      if (fullLen > _tree.length) {
+        _tree = new Array[T](fullLen)
+        if (isSparse) {
+          _space = new Array[Int](regCap)
+        }
+      }
+      _index.clear()
     }
-    _used = newSize
-    var i = 0
-    while (i < _regLen) {
-      setLeaf(i, ev.zero)
-      i += 1
+    setUsed(0)
+  }
+
+  private def zeroUsedPaddings(): Unit = {
+    val usedLen = _regUsed << 1
+    var pos = _regUsed + _used
+    while (pos < usedLen) {
+      _tree(pos) = ev.zero
+      pos += 1
     }
-    _tree(1) = ev.zero
+  }
+
+  private def setUsed(used: Int): FTree[T] = {
+    _used = used
+    _regUsed = regularLen(_used)
     this
   }
 }
 
 object FTree {
   def generateFTree[@specialized(Double, Int, Float, Long) T: ClassTag: spNum]
-  (sv: brV[T]): FTree[T] = {
+  (sv: BV[T]): FTree[T] = {
     val used = sv.activeSize
     val ftree = sv match {
-      case v: brDV[T] => new FTree[T](isSparse=false)
-      case v: brSV[T] => new FTree[T](isSparse=true)
+      case v: BDV[T] => new FTree[T](isSparse=false)
+      case v: BSV[T] => new FTree[T](isSparse=true)
     }
     ftree.resetDist(sv.activeIterator, used)
   }
 
-  private def regularLen(len: Int): Int = {
+  def regularLen(len: Int): Int = {
     require(len < (1<<30))
     // http://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
     var v = len - 1
@@ -240,19 +238,5 @@ object FTree {
     v |= v >> 16
     v += 1
     v
-  }
-
-  def binarySearch[@specialized(Double, Int, Float, Long) T](arr: Array[T],
-    key: T, start: Int, end: Int)(implicit ev: spNum[T]): Int = {
-    @tailrec def seg(s: Int, e: Int): Int = {
-      if (s > e) return -1
-      val mid = (s + e) >> 1
-      mid match {
-        case _ if ev.eqv(arr(mid), key) => mid
-        case _ if ev.lt(arr(mid), key) => seg(mid + 1, e)
-        case _ if ev.gt(arr(mid), key) => seg(s, mid - 1)
-      }
-    }
-    seg(start, end - 1)
   }
 }
