@@ -21,10 +21,9 @@
   <parent>
     <groupId>com.github.cloudml.zen</groupId>
     <artifactId>zen-parent_2.10</artifactId>
-    <version>0.2-SNAPSHOT</version>
+    <version>0.3-SNAPSHOT</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
-  <groupId>com.github.cloudml.zen</groupId>
   <artifactId>zen-examples_2.10</artifactId>
   <name>Zen Project Examples</name>
   <url>https://github.com/cloudml/zen/</url>
@@ -36,10 +35,6 @@
       <groupId>com.github.cloudml.zen</groupId>
       <artifactId>zen-ml_${scala.binary.version}</artifactId>
       <version>${project.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.spark</groupId>
-      <artifactId>spark-graphx_${scala.binary.version}</artifactId>
     </dependency>
     <dependency>
       <groupId>org.apache.spark</groupId>

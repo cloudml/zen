@@ -83,7 +83,7 @@ private[ml] object LoaderUtils {
    * @param header Header line of HDFS file, used for storing some metadata
    * @param mapEle The function mapping each element of RDD to a line of String
    */
-  def RDD2HDFSFile[T](sc: SparkContext,
+  def RDD2HDFSFile[T: ClassTag](sc: SparkContext,
     rdd: RDD[T],
     outPathStr: String,
     header: => String,
@@ -92,7 +92,7 @@ private[ml] object LoaderUtils {
     val fs = FileSystem.get(hdpconf)
     val outPath = new Path(outPathStr)
     if (fs.exists(outPath)) {
-      throw new InvalidPathException("Output path %s already exists.".format(outPathStr))
+      throw new InvalidPathException(s"Output path $outPathStr already exists.")
     }
     val fout = fs.create(outPath)
     fout.write(header.getBytes)
@@ -111,7 +111,7 @@ private[ml] object LoaderUtils {
    * @param init_f The function used for initialization after reading header
    * @param lineParser The function parses each line in HDFS file to an element of RDD
    */
-  def HDFSFile2RDD[T: ClassTag, M](sc: SparkContext,
+  def HDFSFile2RDD[T: ClassTag, M: ClassTag](sc: SparkContext,
     inPathStr: String,
     init_f: String => M,
     lineParser: (M, String) => T): (M, RDD[T]) = {

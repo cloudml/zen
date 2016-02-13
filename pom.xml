@@ -25,7 +25,7 @@
   </parent>
   <groupId>com.github.cloudml.zen</groupId>
   <artifactId>zen-parent_2.10</artifactId>
-  <version>0.2-SNAPSHOT</version>
+  <version>0.3-SNAPSHOT</version>
   <packaging>pom</packaging>
   <name>Zen Project Parent POM</name>
   <url>https://github.com/cloudml/zen/</url>
@@ -58,12 +58,12 @@
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-    <spark.version>1.5.1</spark.version>
+    <spark.version>1.6.0</spark.version>
     <hadoop.version>2.6.0</hadoop.version>
     <scala.macros.version>2.0.1</scala.macros.version>
     <java.version>1.6</java.version>
     <maven.version>3.3.3</maven.version>
-    <scala.version>2.10.4</scala.version>
+    <scala.version>2.10.6</scala.version>
     <scala.binary.version>2.10</scala.binary.version>
     <commons.math3.version>3.4.1</commons.math3.version>
     <PermGen>64m</PermGen>
@@ -112,12 +112,6 @@
       <dependency>
         <groupId>org.apache.spark</groupId>
         <artifactId>spark-core_${scala.binary.version}</artifactId>
-        <version>${spark.version}</version>
-        <scope>provided</scope>
-      </dependency>
-      <dependency>
-        <groupId>org.apache.spark</groupId>
-        <artifactId>spark-graphx_${scala.binary.version}</artifactId>
         <version>${spark.version}</version>
         <scope>provided</scope>
       </dependency>
@@ -203,7 +197,7 @@
         <property><name>!scala-2.11</name></property>
       </activation>
       <properties>
-        <scala.version>2.10.4</scala.version>
+        <scala.version>2.10.6</scala.version>
         <scala.binary.version>2.10</scala.binary.version>
       </properties>
     </profile>
@@ -437,10 +431,10 @@
           <artifactId>scalatest-maven-plugin</artifactId>
           <version>1.0</version>
           <configuration>
-            <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
+            <reportsDirectory>${project.build.directory}/scalatest-reports</reportsDirectory>
             <junitxml>.</junitxml>
-            <filereports>${project.build.directory}/ToonaTestSuite.txt</filereports>
-            <argLine>-Xmx4g -XX:MaxPermSize=${MaxPermGen} -XX:ReservedCodeCacheSize=512m</argLine>
+            <filereports>ToonaTestSuite.txt</filereports>
+            <argLine>-Xmx3g -XX:ReservedCodeCacheSize=512m</argLine>
             <stderr/>
             <environmentVariables>
               <!--

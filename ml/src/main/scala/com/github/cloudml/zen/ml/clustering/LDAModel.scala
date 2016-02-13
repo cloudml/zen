@@ -14,97 +14,95 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.github.cloudml.zen.ml.clustering
 
 import java.io._
 import java.lang.ref.SoftReference
 import java.util.Random
 
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, norm => brzNorm, sum => brzSum}
-import com.github.cloudml.zen.ml.DBHPartitioner
-import com.github.cloudml.zen.ml.clustering.LDAModel.{Count, DocId, ED, VD}
-import com.github.cloudml.zen.ml.clustering.LDAUtils._
-import com.github.cloudml.zen.ml.util.SparkUtils._
-import com.github.cloudml.zen.ml.util.{AliasTable, LoaderUtils}
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV, sum}
+import com.github.cloudml.zen.ml.clustering.LDADefines._
+import com.github.cloudml.zen.ml.clustering.algorithm.ZenLDA
+import com.github.cloudml.zen.ml.sampler._
+import com.github.cloudml.zen.ml.util._
 import com.google.common.base.Charsets
 import com.google.common.io.Files
-import org.apache.hadoop.io.{NullWritable, Text}
-import org.apache.hadoop.mapred.TextOutputFormat
-import org.apache.spark.graphx._
-import org.apache.spark.graphx.impl.GraphImpl
+import org.apache.hadoop.fs.{FileUtil, Path}
+import org.apache.spark.Partitioner._
+import org.apache.spark.SparkContext
+import org.apache.spark.graphx2._
 import org.apache.spark.mllib.util.{Loader, Saveable}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.collection.AppendOnlyMap
-import org.apache.spark.{Logging, SparkContext}
-import org.json4s.DefaultFormats
 import org.json4s.JsonDSL._
+import org.json4s._
 import org.json4s.jackson.JsonMethods._
 
-class LocalLDAModel private[ml](
-  private[ml] val gtc: BDV[Count],
-  private[ml] val ttc: Array[BSV[Count]],
-  val alpha: Float,
-  val beta: Float,
-  val alphaAS: Float) extends Serializable {
-  @transient lazy val numTopics = gtc.length
-  @transient lazy val numTerms = ttc.length
-  @transient private lazy val numTokens = brzSum(gtc)
-  @transient private lazy val betaSum = numTerms * beta
-  @transient private lazy val alphaSum = numTopics * alpha
-  @transient private lazy val termSum = numTokens + alphaAS * numTopics
 
-  @transient private lazy val wordTableCache = new AppendOnlyMap[Int,
-    SoftReference[(Float, AliasTable)]](ttc.length / 2)
-  @transient private lazy val (t, tSum) = {
-    val dv = LDAModel.tDense(gtc, numTokens, numTerms, alpha, alphaAS, beta)
-    (AliasTable.generateAlias(dv._2, dv._1), dv._1)
+class LocalLDAModel(@transient val termTopicsArr: Array[Nwk],
+  val numTopics: Int,
+  val numTerms: Int,
+  val numTokens: Long,
+  val alpha: Double,
+  val beta: Double,
+  val alphaAS: Double) extends Serializable {
+
+  @transient val topicCounters = collectTopicCounters()
+  @transient val numThreads = Runtime.getRuntime.availableProcessors
+  @transient val algo = new ZenLDA(numTopics, numThreads)
+
+  @transient val alphaSum = alpha * numTopics
+  @transient val betaSum = beta * numTerms
+  @transient val alphaRatio = algo.calc_alphaRatio(alphaSum, numTokens, alphaAS)
+  @transient val denoms = algo.calc_denoms(topicCounters, betaSum)
+  @transient val alphak_denoms = algo.calc_alphak_denoms(denoms, alphaAS, betaSum, alphaRatio)
+  @transient val beta_denoms = algo.calc_beta_denoms(denoms, beta)
+
+  @transient lazy val termDistCache = new AppendOnlyMap[Int,
+    SoftReference[AliasTable[Double]]](numTerms / 2)
+  @transient lazy val global = {
+    val table = new AliasTable[Double]
+    algo.resetDist_abDense(table, alphak_denoms, beta)
   }
-  @transient private lazy val rand = new Random()
 
-  def setSeed(seed: Long): Unit = {
-    rand.setSeed(seed)
+  private def collectTopicCounters(): BDV[Count] = {
+    termTopicsArr.foldLeft(BDV.zeros[Count](numTopics))(_ :+= _)
   }
-
-  def globalTopicCounter: BDV[Count] = gtc
-
-  def topicTermCounter: Array[BSV[Count]] = ttc
 
   /**
    * inference interface
-   * @param doc
-   * @param totalIter overall iterations
-   * @param burnIn
+   * @param doc the doc to be inferred
+   * @param runIter overall iterations
+   * @param burnIn burn-in iterations
    */
   def inference(
-    doc: BSV[Int],
-    totalIter: Int = 10,
-    burnIn: Int = 5): BV[Float] = {
-    require(totalIter > burnIn, "totalIter is less than burnInIter")
-    require(totalIter > 0, "totalIter is less than 0")
-    require(burnIn > 0, "burnInIter is less than 0")
-
+    doc: BSV[Count],
+    burnIn: Int = 5,
+    runIter: Int = 5): BSV[Double] = {
+    require(runIter > 0, "totalIter is less than 1")
+    require(burnIn > 0, "burnInIter is less than 1")
+    val gen = new XORShiftRandom
     val topicDist = BSV.zeros[Int](numTopics)
     val tokens = vector2Array(doc)
     val topics = new Array[Int](tokens.length)
-
-    var docTopicCounter = uniformDistSampler(tokens, topics)
-    for (i <- 1 to totalIter) {
-      docTopicCounter = sampleTokens(docTopicCounter, tokens, topics)
-      if (i > burnIn) topicDist :+= docTopicCounter
+    var docTopics = uniformDistSampler(gen, tokens, topics, numTopics)
+    val docCdf = new CumulativeDist[Double].reset(numTopics)
+    for (i <- 1 to burnIn + runIter) {
+      docTopics = sampleDoc(gen, docTopics, tokens, topics, docCdf)
+      if (i > burnIn) topicDist :+= docTopics
     }
-
-    topicDist.compact()
-    val norm = brzNorm(topicDist, 1).toFloat
-    topicDist.map(_ / norm)
+    val pSum = sum(topicDist).toDouble
+    topicDist.mapValues(_ / pSum)
   }
 
-  private[ml] def vector2Array(vec: BV[Int]): Array[Int] = {
-    val docLen = brzSum(vec)
+  private[ml] def vector2Array(bow: BSV[Count]): Array[Int] = {
+    val docLen = sum(bow)
+    val sent = new Array[Int](docLen)
     var offset = 0
-    val sent = new Array[Int](docLen.toInt)
-    vec.activeIterator.filter(_._2 != 0.0).foreach { case (term, cn) =>
-      for (i <- 0 until cn.toInt) {
+    bow.activeIterator.filter(_._2 > 0).foreach { case (term, cnt) =>
+      for (i <- 0 until cnt) {
         sent(offset) = term
         offset += 1
       }
@@ -112,58 +110,43 @@ class LocalLDAModel private[ml](
     sent
   }
 
-  private[ml] def uniformDistSampler(
+  private[ml] def sampleDoc(gen: Random,
+    docTopics: Ndk,
     tokens: Array[Int],
-    topics: Array[Int]): BSV[Count] = {
-    val docTopicCounter = BSV.zeros[Count](numTopics)
-    for (i <- tokens.indices) {
-      val topic = uniformSampler(rand, numTopics)
-      topics(i) = topic
-      docTopicCounter(topic) += 1
-    }
-    docTopicCounter
-  }
-
-  private[ml] def sampleTokens(
-    docTopicCounter: BSV[Count],
-    tokens: Array[Int],
-    topics: Array[Int]): BSV[Count] = {
-    for (i <- topics.indices) {
+    topics: Array[Int],
+    docCdf: CumulativeDist[Double]): Ndk = {
+    var i = 0
+    while (i < topics.length) {
       val termId = tokens(i)
-      val currentTopic = topics(i)
-      val d = LDAModel.dSparse(gtc, ttc(termId), docTopicCounter, currentTopic,
-        numTokens, numTerms, alpha, alphaAS, beta)
-      val (wSum, w) = wordTable(wordTableCache, gtc, ttc(termId), termId, numTokens, numTerms, alpha, alphaAS, beta)
-      val newTopic = LDAModel.tokenSampling(rand, t, tSum, w, wSum, d)
-      if (newTopic != currentTopic) {
-        docTopicCounter(newTopic) += 1
-        docTopicCounter(currentTopic) -= 1
-        topics(i) = newTopic
-        if (docTopicCounter(currentTopic) == 0) {
-          docTopicCounter.compact()
-        }
+      val termTopics = termTopicsArr(termId)
+      val termDist = wSparseCached(termDistCache, termTopics, alphak_denoms, termId)
+      val denseTermTopics = toBDV(termTopics)
+      val termBeta_denoms = algo.calc_termBeta_denoms(denoms, beta_denoms, termTopics)
+      val topic = topics(i)
+      docTopics(topic) -= 1
+      if (docTopics(topic) == 0) {
+        docTopics.compact()
       }
+      algo.resetDist_dwbSparse_wOpt(docCdf, termBeta_denoms, docTopics)
+      val newTopic = algo.tokenSampling(gen, global, termDist, docCdf, denseTermTopics, topic)
+      topics(i) = newTopic
+      docTopics(newTopic) += 1
+      i += 1
     }
-    docTopicCounter
+    docTopics
   }
 
-  private[ml] def wordTable(
-    cacheMap: AppendOnlyMap[Int, SoftReference[(Float, AliasTable)]],
-    totalTopicCounter: BDV[Count],
-    termTopicCounter: BSV[Count],
-    termId: Int,
-    numTokens: Long,
-    numTerms: Int,
-    alpha: Float,
-    alphaAS: Float,
-    beta: Float): (Float, AliasTable) = {
-    if (termTopicCounter.used == 0) return (0f, null)
+  private[ml] def wSparseCached(cacheMap: AppendOnlyMap[Int, SoftReference[AliasTable[Double]]],
+    termTopics: Nwk,
+    alphaK_denoms: BDV[Double],
+    termId: Int): AliasTable[Double] = {
+    if (termTopics.activeSize == 0) return null
     var w = cacheMap(termId)
     if (w == null || w.get() == null) {
-      val t = LDAModel.wSparse(totalTopicCounter, termTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
-      w = new SoftReference((t._1, AliasTable.generateAlias(t._2, t._1)))
+      val table = new AliasTable[Double]
+      algo.resetDist_waSparse(table, alphaK_denoms, termTopics)
+      w = new SoftReference(table)
       cacheMap.update(termId, w)
-
     }
     w.get()
   }
@@ -173,456 +156,217 @@ class LocalLDAModel private[ml](
     require(!file.exists, s"model file $path does exist")
     Files.touch(file)
     val fw = Files.newWriter(file, Charsets.UTF_8)
-    fw.write(s"$numTopics $numTerms $alpha $beta $alphaAS \n")
-    ttc.zipWithIndex.foreach { case (sv, index) =>
-      val line = s"$index ${sv.activeIterator.filter(_._2 != 0.0).map(t => s"${t._1}:${t._2}").mkString(" ")}\n"
-      fw.write(line)
+    fw.write(s"$numTopics $numTerms $numTokens $alpha $beta $alphaAS \n")
+    termTopicsArr.zipWithIndex.foreach {
+      case (sv, index) =>
+        val list = sv.activeIterator.filter(_._2 != 0).map(t => s"${t._1}:${t._2}").mkString(" ")
+        fw.write(s"$index $list\n")
     }
-    fw.flush()
     fw.close()
   }
-
 }
 
-class DistributedLDAModel private[ml](
-  private[ml] val gtc: BDV[Count],
-  private[ml] val ttc: RDD[(VertexId, VD)],
+class DistributedLDAModel(@transient val termTopicsRDD: RDD[NwkPair],
   val numTopics: Int,
   val numTerms: Int,
-  val alpha: Float,
-  val beta: Float,
-  val alphaAS: Float) extends Serializable with Saveable with Logging {
+  val numTokens: Long,
+  val alpha: Double,
+  val beta: Double,
+  val alphaAS: Double,
+  var storageLevel: StorageLevel) extends Serializable with Saveable {
 
-  @transient private lazy val numTokens = brzSum(gtc)
-  @transient private lazy val betaSum = numTerms * beta
-  @transient private lazy val alphaSum = numTopics * alpha
-  @transient private lazy val termSum = numTokens + alphaAS * numTopics
-  @transient private var seed = new Random().nextInt()
-  @transient private var innerIter = 1
-  val storageLevel: StorageLevel = ttc.getStorageLevel
+  @transient lazy val totalTopicCounter = termTopicsRDD.map(_._2)
+    .aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
+  @transient val algo = new ZenLDA(numTopics, 1)
 
   /**
    * inference interface
-   * @param docs tuple pair: (dicId, Vector), in which 'docId' is unique
-   *             recommended storage level: StorageLevel.MEMORY_AND_DISK
-   * @param totalIter overall iterations
-   * @param burnIn previous burnIn iters results will discard
+   * @param bowDocs   tuple pair: (dicId, Vector), in which 'docId' is unique
+   *                  recommended storage level: StorageLevel.MEMORY_AND_DISK
+   * @param runIter   overall iterations
+   * @param burnIn    previous burnIn iters results will discard
    */
-  def inference(
-    docs: RDD[(VertexId, BSV[Int])],
-    totalIter: Int = 25,
-    burnIn: Int = 22): RDD[(VertexId, BSV[Float])] = {
-    require(totalIter > burnIn, "totalIter is less than burnInIter")
-    require(totalIter > 0, "totalIter is less than 0")
-    require(burnIn > 0, "burnIn is less than 0")
-    var corpus: Graph[VD, ED] = initializeInferDataset(docs, numTopics, storageLevel)
-    var docTopicCounter: RDD[(VertexId, VD)] = null
-
-    for (iter <- 1 to totalIter) {
-      logInfo(s"Start Gibbs sampling (Iteration $iter/$totalIter)")
-      val startedAt = System.nanoTime()
-      corpus = gibbsSampling(corpus, iter)
-      val elapsedSeconds = (System.nanoTime() - startedAt) / 1e9
-      logInfo(s"End Gibbs sampling  (Iteration $iter/$totalIter) takes:  $elapsedSeconds")
-
-      if (iter > burnIn) {
-        var previousDocTopicCounter = docTopicCounter
-        val newTermTopicCounter = corpus.vertices.filter(t => t._1 < 0)
-        docTopicCounter = Option(docTopicCounter).map(_.join(newTermTopicCounter).map {
-          case (docId, (a, b)) =>
-            (docId, a :+ b)
-        }).getOrElse(newTermTopicCounter)
-
-        docTopicCounter.persist(storageLevel).count()
-        Option(previousDocTopicCounter).foreach(_.unpersist(blocking = false))
-        previousDocTopicCounter = docTopicCounter
-      }
+  def inference(bowDocs: RDD[BOW],
+    runIter: Int = 25,
+    burnIn: Int = 22): RDD[(VertexId, BSV[Double])] = {
+    require(burnIn > 0, "burnIn is less than 1")
+    require(runIter > 0, "runIter is less than 1")
+    val docs = LDA.initializeCorpusEdges(bowDocs, "bow", numTopics, algo, storageLevel)
+    val lda = LDA(this, docs, algo)
+    for (i <- 1 to burnIn) {
+      lda.gibbsSampling(i)
     }
-    docTopicCounter.map { case (docId, sv) =>
-      sv.compact()
-      val norm = brzNorm(sv, 1).toFloat
-      (toDocId(docId), sv.map(_ / norm))
-    }
+    // val topicDist = lda.runSum(isDocId, runIter)
+    val topicDist = lda.termVertices.mapPartitions(iter => {
+      val decomp = new BVDecompressor(numTopics)
+      iter.map(Function.tupled((vid, counter) =>
+        (vid, decomp.CV2BV(counter))
+      ))
+    }, preservesPartitioning = true)
+    topicDist.mapValues(v => {
+      val dist = v.asInstanceOf[BSV[Count]]
+      val pSum = sum(dist).toDouble
+      dist.mapValues(_ / pSum)
+    })
   }
 
   def toLocalLDAModel: LocalLDAModel = {
-    val ttc1 = Array.fill(numTerms.toInt) {
-      BSV.zeros[Count](numTopics)
-    }
-    ttc.collect().foreach { case (termId, vector) =>
-      ttc1(termId.toInt) :+= vector
-    }
-    new LocalLDAModel(gtc, ttc1, alpha, beta, alphaAS)
+    val ttcs: Array[Nwk] = Array.fill(numTerms.toInt)(BSV.zeros[Count](numTopics))
+    termTopicsRDD.collect().foreach(t => ttcs(t._1.toInt) :+= t._2)
+    new LocalLDAModel(ttcs, numTopics, numTerms, numTokens, alpha, beta, alphaAS)
   }
 
-  private[ml] def initializeInferDataset(docs: RDD[(LDA.DocId, BSV[Int])],
-    numTopics: Int,
-    storageLevel: StorageLevel): Graph[VD, ED] = {
-    val previousCorpus: Graph[VD, ED] = initializeCorpus(docs, numTopics, storageLevel)
-    val corpus = previousCorpus.outerJoinVertices(ttc) { (vid, c, v) =>
-      if (vid >= 0) {
-        assert(v.isDefined)
-      }
-      v.getOrElse(c)
-    }
-    corpus.persist(storageLevel)
-    corpus.vertices.count()
-    corpus.edges.count()
-    previousCorpus.edges.unpersist(blocking = false)
-    previousCorpus.vertices.unpersist(blocking = false)
-    corpus
-  }
-
-  private[ml] def initializeCorpus(
-    docs: RDD[(LDA.DocId, BSV[Int])],
-    numTopics: Int,
-    storageLevel: StorageLevel): Graph[VD, ED] = {
-    val edges = docs.mapPartitionsWithIndex((pid, iter) => {
-      val gen = new Random(pid + 117)
-      iter.flatMap { case (docId, doc) =>
-        initializeEdges(gen, doc, docId, numTopics)
-      }
-    })
-    edges.persist(storageLevel)
-    var corpus: Graph[VD, ED] = Graph.fromEdges(edges, null, storageLevel, storageLevel)
-    corpus.persist(storageLevel)
-    corpus.vertices.count()
-    corpus.edges.count()
-    edges.unpersist(blocking = false)
-    corpus = DBHPartitioner.partitionByDBH[VD, ED](corpus, storageLevel)
-    updateCounter(corpus, numTopics)
-  }
-
-  private def initializeEdges(
-    gen: Random,
-    doc: BSV[Int],
-    docId: DocId,
-    numTopics: Int): Iterator[Edge[ED]] = {
-    assert(docId >= 0)
-    val newDocId: DocId = genNewDocId(docId)
-    doc.activeIterator.filter(_._2 > 0).map { case (termId, counter) =>
-      val topics = new Array[Int](counter)
-      for (i <- 0 until counter) {
-        topics(i) = gen.nextInt(numTopics)
-      }
-      Edge(termId, newDocId, topics)
-    }
-  }
-
-  private def genNewDocId(docId: Long): Long = {
-    -(docId + 1L)
-  }
-
-  private def toDocId(docId: Long): Long = {
-    -1L - docId
-  }
-
-  private def gibbsSampling(_corpus: Graph[VD, ED], iter: Int): Graph[VD, ED] = {
-    var corpus = _corpus
-    val totalTopicCounter = gtc
-    val previousCorpus = corpus
-    val sampledCorpus = sampleTokens(corpus, totalTopicCounter, innerIter + seed,
-      numTokens, numTopics, numTerms, alpha, alphaAS, beta)
-    sampledCorpus.persist(storageLevel)
-    sampledCorpus.edges.setName(s"sampledEdges-$iter")
-    sampledCorpus.vertices.setName(s"sampledVertices-$iter")
-
-    corpus = updateCounter(sampledCorpus, numTopics)
-    checkpoint(corpus)
-    corpus.persist(storageLevel)
-    corpus.edges.setName(s"edges-$iter").count()
-    corpus.vertices.setName(s"vertices-$iter")
-
-    previousCorpus.edges.unpersist(blocking = false)
-    previousCorpus.vertices.unpersist(blocking = false)
-    sampledCorpus.edges.unpersist(blocking = false)
-    sampledCorpus.vertices.unpersist(blocking = false)
-    innerIter += 1
-    corpus
-  }
-
-  private def checkpoint(corpus: Graph[VD, ED]): Unit = {
-    val sc = corpus.edges.sparkContext
-    if (innerIter % 10 == 0 && sc.getCheckpointDir.isDefined) {
-      corpus.checkpoint()
-    }
-  }
-
-  private def sampleTokens(
-    graph: Graph[VD, ED],
-    totalTopicCounter: BDV[Count],
-    innerIter: Long,
-    numTokens: Long,
-    numTopics: Int,
-    numTerms: Int,
-    alpha: Float,
-    alphaAS: Float,
-    beta: Float): Graph[VD, ED] = {
-    val parts = graph.edges.partitions.length
-    val nweGraph = graph.mapTriplets(
-      (pid, iter) => {
-        val gen = new Random(parts * innerIter + pid)
-        // table is a per term data structure
-        // in GraphX, edges in a partition are clustered by source IDs (term id in this case)
-        // so, use below simple cache to avoid calculating table each time
-        val lastWTable = new AliasTable(numTopics.toInt)
-        var lastVid: VertexId = -1
-        var lastWSum = 0.0f
-        val dv = LDAModel.tDense(totalTopicCounter, numTokens, numTerms, alpha, alphaAS, beta)
-        val t = AliasTable.generateAlias(dv._2, dv._1)
-        val tSum = dv._1
-        iter.map {
-          triplet =>
-            val termId = triplet.srcId
-            // val docId = triplet.dstId
-            val termTopicCounter = triplet.srcAttr
-            val docTopicCounter = triplet.dstAttr
-            val topics = triplet.attr
-            for (i <- topics.indices) {
-              val currentTopic = topics(i)
-              val d = docTopicCounter.synchronized {
-                LDAModel.dSparse(gtc, termTopicCounter, docTopicCounter, currentTopic,
-                  numTokens, numTerms, alpha, alphaAS, beta)
-              }
-
-              if (lastVid != termId) {
-                lastWSum = wordTable(lastWTable, totalTopicCounter, termTopicCounter,
-                  termId, numTokens, numTerms, alpha, alphaAS, beta)
-                lastVid = termId
-              }
-              val newTopic = LDAModel.tokenSampling(gen, t, tSum, lastWTable, lastWSum, d)
-
-              if (newTopic != currentTopic) {
-                topics(i) = newTopic
-                docTopicCounter.synchronized {
-                  val cn = docTopicCounter(currentTopic)
-                  docTopicCounter(currentTopic) = cn - 1
-                  docTopicCounter(newTopic) += 1
-                  // if (cn == 1D) docTopicCounter.compact()
-                }
-              }
-            }
-
-            topics
-        }
-      }, TripletFields.All)
-
-    GraphImpl(nweGraph.vertices.mapValues { (vid, cn) =>
-      if (vid < 0) null.asInstanceOf[VD] else cn
-    }, nweGraph.edges)
-  }
-
-  private def wordTable(
-    table: AliasTable,
-    totalTopicCounter: BDV[Count],
-    termTopicCounter: VD,
-    termId: VertexId,
-    numTokens: Long,
-    numTerms: Int,
-    alpha: Float,
-    alphaAS: Float,
-    beta: Float): Float = {
-    val sv = LDAModel.wSparse(totalTopicCounter, termTopicCounter,
-      numTokens, numTerms, alpha, alphaAS, beta)
-    AliasTable.generateAlias(sv._2, sv._1, table)
-    sv._1
-  }
-
-  private def updateCounter(graph: Graph[VD, ED], numTopics: Int): Graph[VD, ED] = {
-    val newCounter = graph.aggregateMessages[VD](ctx => {
-      val topics = ctx.attr
-      val vector = BSV.zeros[Count](numTopics)
-      for (topic <- topics) {
-        vector(topic) += 1
-      }
-      ctx.sendToDst(vector)
-    }, _ + _, TripletFields.EdgeOnly).mapValues(v => {
-      val used = v.used
-      if (v.index.length == used) {
-        v
-      } else {
-        val index = new Array[Int](used)
-        val data = new Array[Count](used)
-        Array.copy(v.index, 0, index, 0, used)
-        Array.copy(v.data, 0, data, 0, used)
-        new BSV[Count](index, data, numTopics)
-      }
-    })
-    graph.joinVertices(newCounter) { case (_, o, n) => n }
-  }
-
-  override def save(sc: SparkContext, path: String): Unit = {
-    save(sc, path, isTransposed = false, saveSolid = false)
-  }
-
-  def save(path: String): Unit = {
-    save(ttc.context, path, isTransposed = false, saveSolid = false)
+  def save(): Unit = {
+    val sc = termTopicsRDD.context
+    val outputPath = sc.getConf.get(cs_outputpath)
+    save(sc, outputPath)
   }
 
   /**
-   * @param sc
-   * @param path
-   * @param isTransposed libsvm when `isTransposed` is false, the format of each line:
-   *                     termId  \grave{topicId}:counter \grave{topicId}:counter...,
-   *                     in which \grave{topicId} = topicId + 1
-   *                     otherwise:
-   *                     topicId \grave{termId}:counter \grave{termId}:counter...,
-   *                     in which \grave{termId}= termId + 1
-   * @param saveSolid save as whether one HDFS file or an directory
-   */
-  def save(sc: SparkContext, path: String, isTransposed: Boolean, saveSolid: Boolean): Unit = {
-    LDAModel.SaveLoadV1_0.save(sc, path, ttc, numTopics, numTerms, alpha, beta, alphaAS,
-      isTransposed, saveSolid)
+    * Save model in libsvm format. When `isTransposed` is false, the format of each line:
+    *   termId  \grave{topicId}:counter \grave{topicId}:counter...,
+    * in which \grave{topicId} = topicId + 1
+    * otherwise:
+    *   topicId \grave{termId}:counter \grave{termId}:counter...,
+    * in which \grave{termId}= termId + 1
+    * @param sc           Spark context to get HDFS env from
+    * @param path         output path
+    */
+  override def save(sc: SparkContext, path: String): Unit = {
+    val isTransposed = sc.getConf.getBoolean(cs_saveTransposed, true)
+    var json = ("class" -> sv_classNameV2_0) ~ ("version" -> sv_formatVersionV2_0) ~
+      ("alpha" -> alpha) ~ ("beta" -> beta) ~ ("alphaAS" -> alphaAS) ~
+      ("numTopics" -> numTopics) ~ ("numTerms" -> numTerms) ~ ("numTokens" -> numTokens) ~
+      ("isTransposed" -> isTransposed)
+    val rdd = if (isTransposed) {
+      val maxTerms = termTopicsRDD.map(_._1).filter(isTermId).max().toInt + 1
+      json = json ~ ("maxTerms" -> maxTerms)
+      val partitioner = defaultPartitioner(termTopicsRDD)
+      termTopicsRDD.flatMap {
+        case (termId, vector) =>
+          val term = termId.toInt
+          vector.activeIterator.map {
+            case (topic, cnt) => (topic.toLong, (term, cnt))
+          }
+      }.aggregateByKey[BV[Count]](BSV.zeros[Count](maxTerms), partitioner)((agg, t) => {
+        agg(t._1) += t._2
+        agg
+      }, _ :+= _)
+    } else {
+      termTopicsRDD
+    }
+    rdd.persist(storageLevel)
+    val metadata = compact(render(json))
+
+    val saveAsSolid = sc.getConf.getBoolean(cs_saveAsSolid, false)
+    val savPath = if (saveAsSolid) new Path(path + ".sav") else new Path(path)
+    val savDir = savPath.toUri.toString
+    val metaDir = LoaderUtils.metadataPath(savDir)
+    val dataDir = LoaderUtils.dataPath(savDir)
+    val fs = SparkUtils.getFileSystem(sc.getConf, savPath)
+
+    fs.delete(savPath, true)
+    sc.parallelize(Seq(metadata), 1).saveAsTextFile(metaDir)
+    // save model with the topic or word-term descending order
+    rdd.map { case (id, vector) =>
+      val list = vector.activeIterator.filter(_._2 > 0).toSeq.sortBy(_._2).reverse
+        .map(t => s"${t._1}:${t._2}").mkString("\t")
+      s"$id\t$list"
+    }.saveAsTextFile(dataDir)
+    if (saveAsSolid) {
+      val cpmgPath = new Path(path + ".cpmg")
+      fs.delete(cpmgPath, true)
+      var suc = fs.rename(new Path(metaDir + "/part-00000"), new Path(dataDir + "/_meta"))
+      if (suc) {
+        suc = FileUtil.copyMerge(fs, new Path(dataDir), fs, cpmgPath, false, sc.hadoopConfiguration, null)
+      }
+      if (suc) {
+        suc = fs.rename(cpmgPath, new Path(path))
+      }
+      fs.delete(savPath, true)
+      fs.delete(cpmgPath, true)
+      if (!suc) {
+        throw new IOException("Save model error!")
+      }
+    }
   }
 
-  override protected def formatVersion: String = LDAModel.SaveLoadV1_0.formatVersionV1_0
+  override protected def formatVersion: String = sv_formatVersionV2_0
 }
 
 object LDAModel extends Loader[DistributedLDAModel] {
-  private[ml] type DocId = VertexId
-  private[ml] type WordId = VertexId
-  private[ml] type Count = Int
-  private[ml] type ED = Array[Int]
-  private[ml] type VD = BSV[Count]
-
-  private[ml] def tokenSampling(
-    gen: Random,
-    t: AliasTable,
-    tSum: Float,
-    w: AliasTable,
-    wSum: Float,
-    d: BSV[Float]): Int = {
-    val index = d.index
-    val data = d.data
-    val used = d.used
-    val dSum = data(d.used - 1)
-    val distSum = tSum + wSum + dSum
-    val genSum = gen.nextFloat() * distSum
-    if (genSum < dSum) {
-      val dGenSum = gen.nextFloat() * dSum
-      val pos = binarySearchInterval[Float](data, dGenSum, 0, used, greater = true)
-      index(pos)
-    } else if (genSum < (dSum + wSum)) {
-      w.sampleAlias(gen)
-    } else {
-      t.sampleAlias(gen)
-    }
-  }
-
-  private[ml] def wSparse(
-    totalTopicCounter: BDV[Count],
-    termTopicCounter: BSV[Count],
-    numTokens: Long,
-    numTerms: Int,
-    alpha: Float,
-    alphaAS: Float,
-    beta: Float): (Float, BSV[Float]) = {
-    val numTopics = totalTopicCounter.length
-    val betaSum = numTerms * beta
-    val alphaSum = numTopics * alpha
-    val termSum = numTokens + alphaAS * numTopics
-
-    val w = BSV.zeros[Float](numTopics)
-    var sum = 0.0f
-    termTopicCounter.activeIterator.foreach { t =>
-      val topic = t._1
-      val count = t._2
-      val last = count * alphaSum * (totalTopicCounter(topic) + alphaAS) /
-        ((totalTopicCounter(topic) + betaSum) * termSum)
-      w(topic) = last
-      sum += last
-    }
-    (sum, w)
-  }
-
-  private[ml] def tDense(
-    totalTopicCounter: BDV[Count],
-    numTokens: Long,
-    numTerms: Int,
-    alpha: Float,
-    alphaAS: Float,
-    beta: Float): (Float, BDV[Float]) = {
-    val numTopics = totalTopicCounter.length
-    val betaSum = numTerms * beta
-    val alphaSum = numTopics * alpha
-    val termSum = numTokens + alphaAS * numTopics
-    val t = BDV.zeros[Float](numTopics)
-    var sum = 0.0f
-    for (topic <- 0 until numTopics) {
-      val last = beta * alphaSum * (totalTopicCounter(topic) + alphaAS) /
-        ((totalTopicCounter(topic) + betaSum) * termSum)
-      t(topic) = last
-      sum += last
-    }
-    (sum, t)
-  }
-
-  private[ml] def dSparse(
-    totalTopicCounter: BDV[Count],
-    termTopicCounter: BSV[Count],
-    docTopicCounter: BSV[Count],
-    currentTopic: Int,
-    numTokens: Long,
-    numTerms: Int,
-    alpha: Float,
-    alphaAS: Float,
-    beta: Float): BSV[Float] = {
-    val numTopics = totalTopicCounter.length
-    // val termSum = numTokens - 1D + alphaAS * numTopics
-    val betaSum = numTerms * beta
-    val d = BSV.zeros[Float](numTopics)
-    var sum = 0F
-    docTopicCounter.activeIterator.filter(_._2 > 0F).foreach { t =>
-      val topic = t._1
-      val count = if (currentTopic == topic && t._2 != 1) t._2 - 1 else t._2
-      // val last = count * termSum * (termTopicCounter(topic) + beta) /
-      //  ((totalTopicCounter(topic) + betaSum) * termSum)
-      val last = count * (termTopicCounter(topic) + beta) /
-        (totalTopicCounter(topic) + betaSum)
-      sum += last
-      d(topic) = sum
-    }
-    d
-  }
+  type MetaT = (Int, Int, Long, Double, Double, Double, Boolean, Option[Int])
 
   override def load(sc: SparkContext, path: String): DistributedLDAModel = {
     val (loadedClassName, version, metadata) = LoaderUtils.loadMetadata(sc, path)
-    val versionV1_0 = SaveLoadV1_0.formatVersionV1_0
-    val classNameV1_0 = SaveLoadV1_0.classNameV1_0
-    if (loadedClassName == classNameV1_0 && version == versionV1_0) {
-      implicit val formats = DefaultFormats
-      val alpha = (metadata \ "alpha").extract[Float]
-      val beta = (metadata \ "beta").extract[Float]
-      val alphaAS = (metadata \ "alphaAS").extract[Float]
-      val numTopics = (metadata \ "numTopics").extract[Int]
-      val numTerms = (metadata \ "numTerms").extract[Int]
-      val isTransposed = (metadata \ "isTransposed").extract[Boolean]
-      val rdd = SaveLoadV1_0.loadData(sc, path, isTransposed, classNameV1_0, numTopics, numTerms)
-
-      val ttc = if (isTransposed) {
-        rdd.flatMap { case (topicId, vector) =>
-          vector.activeIterator.map { case (termId, cn) =>
-            val z = BSV.zeros[Count](numTopics)
-            z(topicId.toInt) = cn
-            (termId.toLong, z)
-          }
-        }.reduceByKey(_ :+ _).map {
-          t => t._2.compact(); t
-        }
-      } else {
-        rdd
+    val dataPath = LoaderUtils.dataPath(path)
+    if (loadedClassName == sv_classNameV2_0 && version == sv_formatVersionV2_0) {
+      val metas = parseMeta(metadata)
+      var rdd = sc.textFile(dataPath).map(line => parseLine(metas, line))
+      rdd = sc.getConf.getOption(cs_numPartitions).map(_.toInt) match {
+        case Some(np) => rdd.coalesce(np, shuffle=true)
+        case None => rdd
       }
-      ttc.persist(StorageLevel.MEMORY_AND_DISK)
-
-      val gtc = ttc.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
-      new DistributedLDAModel(gtc, ttc, numTopics, numTerms, alpha, beta, alphaAS)
+      loadLDAModel(metas, rdd)
     } else {
-      throw new Exception(
-        s"LDAModel.load did not recognize model with (className, format version):" +
-          s"($loadedClassName, $version).  Supported:\n" +
-          s"  ($classNameV1_0, 1.0)")
+      throw new Exception(s"LDAModel.load did not recognize model with (className, format version):" +
+        s"($loadedClassName, $version). Supported: ($sv_classNameV2_0, $sv_formatVersionV2_0)")
     }
+  }
 
+  def loadFromSolid(sc: SparkContext, path: String): DistributedLDAModel = {
+    val (metas, rdd) = LoaderUtils.HDFSFile2RDD(sc, path, header => parseMeta(parse(header)), parseLine)
+    loadLDAModel(metas, rdd)
+  }
+
+  def parseMeta(metadata: JValue): MetaT = {
+    implicit val formats = DefaultFormats
+    val alpha = (metadata \ "alpha").extract[Double]
+    val beta = (metadata \ "beta").extract[Double]
+    val alphaAS = (metadata \ "alphaAS").extract[Double]
+    val numTopics = (metadata \ "numTopics").extract[Int]
+    val numTerms = (metadata \ "numTerms").extract[Int]
+    val numTokens = (metadata \ "numTokens").extract[Int]
+    val isTransposed = (metadata \ "isTransposed").extract[Boolean]
+    val maxTerms = (metadata \ "maxTerms").extractOpt[Int]
+    (numTopics, numTerms, numTokens, alpha, beta, alphaAS, isTransposed, maxTerms)
+  }
+
+  def parseLine(metas: MetaT, line: String): BOW = {
+    val numTopics = metas._1
+    val isTransposed = metas._7
+    val maxTerms = metas._8
+    val numSize = if (isTransposed) maxTerms.get else numTopics
+    val sv = BSV.zeros[Count](numSize)
+    val arr = line.split("\t")
+    arr.tail.foreach(sub => {
+      val Array(index, value) = sub.split(":")
+      sv(index.toInt) = value.toInt
+    })
+    (arr.head.toLong, sv)
+  }
+
+  def loadLDAModel(metas: MetaT, rdd: RDD[BOW]): DistributedLDAModel = {
+    val (numTopics, numTerms, numTokens, alpha, beta, alphaAS, isTransposed, _) = metas
+    val termCnts = if (isTransposed) {
+      val partitioner = defaultPartitioner(rdd)
+      rdd.flatMap {
+        case (topicId, vector) =>
+          val topic = topicId.toInt
+          vector.activeIterator.map {
+            case (term, cnt) => (term.toLong, (topic, cnt))
+          }
+      }.aggregateByKey(BSV.zeros[Count](numTopics), partitioner)((agg, t) => {
+        agg(t._1) += t._2
+        agg
+      }, _ :+= _)
+    } else {
+      rdd
+    }
+    val storageLevel = StorageLevel.MEMORY_AND_DISK
+    termCnts.persist(storageLevel)
+    new DistributedLDAModel(termCnts.asInstanceOf[RDD[(VertexId, Nwk)]], numTopics, numTerms, numTokens,
+      alpha, beta, alphaAS, storageLevel)
   }
 
   def loadLocalLDAModel(filePath: String): LocalLDAModel = {
@@ -630,206 +374,24 @@ object LDAModel extends Loader[DistributedLDAModel] {
     require(file.exists, s"model file $filePath does not exist")
     require(file.isFile, s"model file $filePath is not a normal file")
     val lines = Files.readLines(file, Charsets.UTF_8)
-    val Array(numTopics, numTerms, alpha, beta, alphaAS) = lines.get(0).split(" ")
-    val ttc = Array.fill(numTerms.toInt) {
-      BSV.zeros[Count](numTopics.toInt)
-    }
+    val Array(sNumTopics, sNumTerms, sNumTokens, sAlpha, sBeta, sAlphaAS) = lines.get(0).split(" ")
+    val numTopics = sNumTopics.toInt
+    val numTerms = sNumTerms.toInt
+    val termCnts: Array[Nwk] = Array.fill(numTerms)(BSV.zeros[Count](numTopics))
     val iter = lines.listIterator(1)
     while (iter.hasNext) {
       val line = iter.next.trim
       if (!line.isEmpty && !line.startsWith("#")) {
         val its = line.split(" ")
         val offset = its.head.toInt
-        val sv = ttc(offset)
-        its.tail.foreach { s =>
+        val sv = termCnts(offset)
+        its.tail.foreach(s => {
           val Array(index, value) = s.split(":")
           sv(index.toInt) = value.toInt
-        }
-        sv.compact()
-
+        })
       }
     }
-    val gtc = BDV.zeros[Count](numTopics.toInt)
-    ttc.foreach { tc =>
-      gtc :+= tc
-    }
-    new LocalLDAModel(gtc, ttc, alpha.toFloat, beta.toFloat, alphaAS.toFloat)
-  }
-
-  private[ml] object SaveLoadV1_0 {
-
-    val formatVersionV1_0 = "1.0"
-    val classNameV1_0 = "com.github.cloudml.zen.ml.clustering.DistributedLDAModel"
-
-    def loadData(
-      sc: SparkContext,
-      path: String,
-      isTransposed: Boolean,
-      modelClass: String,
-      numTopics: Int,
-      numTerms: Int): RDD[(VertexId, VD)] = {
-      val dataPath = LoaderUtils.dataPath(path)
-      val numSize = if (isTransposed) numTerms.toInt else numTopics
-      sc.textFile(dataPath).map { line =>
-        val sv = BSV.zeros[Count](numSize)
-        val arr = line.split("\t")
-        arr.tail.foreach { sub =>
-          val Array(index, value) = sub.split(":")
-          sv(index.toInt) = value.toInt
-        }
-        sv.compact()
-        (arr.head.toLong, sv)
-      }
-    }
-
-    def loadDataFromSolidFile(sc: SparkContext,
-      path: String): DistributedLDAModel = {
-      type MT = Tuple6[Int, Int, Float, Float, Float, Boolean]
-      val (metas, rdd) = LoaderUtils.HDFSFile2RDD[(VertexId, VD), MT](sc, path, header => {
-        implicit val formats = DefaultFormats
-        val metadata = parse(header)
-        val alpha = (metadata \ "alpha").extract[Float]
-        val beta = (metadata \ "beta").extract[Float]
-        val alphaAS = (metadata \ "alphaAS").extract[Float]
-        val numTopics = (metadata \ "numTopics").extract[Int]
-        val numTerms = (metadata \ "numTerms").extract[Int]
-        val isTransposed = (metadata \ "isTransposed").extract[Boolean]
-        (numTopics, numTerms, alpha, beta, alphaAS, isTransposed)
-      }, (metas, line) => {
-        val numTopics = metas._1
-        val numTerms = metas._2
-        val isTransposed = metas._6
-        val numSize = if (isTransposed) numTerms.toInt else numTopics
-        val sv = BSV.zeros[Count](numSize)
-        val arr = line.split("\t")
-        arr.tail.foreach { sub =>
-          val Array(index, value) = sub.split(":")
-          sv(index.toInt) = value.toInt
-        }
-        sv.compact()
-        (arr.head.toLong, sv)
-      })
-
-      val (numTopics, numTerms, alpha, beta, alphaAS, isTransposed) = metas
-      val ttc = if (isTransposed) {
-        rdd.flatMap { case (topicId, vector) =>
-          vector.activeIterator.map { case (termId, cn) =>
-            val z = BSV.zeros[Count](numTopics)
-            z(topicId.toInt) = cn
-            (termId.toLong, z)
-          }
-        }.reduceByKey(_ += _).map {
-          t => t._2.compact(); t
-        }
-      } else {
-        rdd
-      }
-      ttc.persist(StorageLevel.MEMORY_AND_DISK)
-
-      val gtc = ttc.map(_._2).aggregate(BDV.zeros[Count](numTopics))(_ :+= _, _ :+= _)
-
-      new DistributedLDAModel(gtc, ttc, numTopics, numTerms, alpha, beta, alphaAS)
-    }
-
-    def save(
-      sc: SparkContext,
-      path: String,
-      ttc: RDD[(VertexId, VD)],
-      numTopics: Int,
-      numTerms: Int,
-      alpha: Float,
-      beta: Float,
-      alphaAS: Float,
-      isTransposed: Boolean,
-      saveSolid: Boolean): Unit = {
-      val metadata = compact(render
-        (("class" -> classNameV1_0) ~ ("version" -> formatVersionV1_0) ~
-          ("alpha" -> alpha) ~ ("beta" -> beta) ~ ("alphaAS" -> alphaAS) ~
-          ("numTopics" -> numTopics) ~ ("numTerms" -> numTerms) ~
-          ("isTransposed" -> isTransposed)))
-
-      val rdd = if (isTransposed) {
-        ttc.flatMap { case (termId, vector) =>
-          vector.activeIterator.map { case (topicId, cn) =>
-            val z = BSV.zeros[Count](numTerms.toInt)
-            z(termId.toInt) = cn
-            (topicId.toLong, z)
-          }
-        }.reduceByKey(_ :+ _)
-      } else {
-        ttc
-      }
-
-      if (saveSolid) {
-        val metadata_line = metadata.replaceAll("\n", "")
-        val rdd_txt = rdd.map { case (id, vector) =>
-          val list = vector.activeIterator.toList.sortWith((a, b) => a._2 > b._2)
-          id.toString + "\t" + list.map(item => item._1 + ":" + item._2).mkString("\t")
-        }
-        LoaderUtils.RDD2HDFSFile[String](sc, rdd_txt, path, metadata_line, t => t)
-      } else {
-        sc.parallelize(Seq(metadata), 1).saveAsTextFile(LoaderUtils.metadataPath(path))
-        // save model with the topic or word-term descending order
-        rdd.map { case (id, vector) =>
-          val list = vector.activeIterator.toList.sortWith((a, b) => a._2 > b._2)
-          (NullWritable.get(), new Text(id + "\t" + list.map(item => item._1 + ":" + item._2).mkString("\t")))
-        }.saveAsHadoopFile[TextOutputFormat[NullWritable, Text]](LoaderUtils.dataPath(path))
-      }
-    }
-  }
-
-}
-
-private[ml] object LDAUtils {
-
-  def uniformSampler(rand: Random, dimension: Int): Int = {
-    rand.nextInt(dimension)
-  }
-
-  def binarySearchInterval[T](
-    index: Array[T],
-    key: T,
-    begin: Int,
-    end: Int,
-    greater: Boolean)(implicit num: Numeric[T]): Int = {
-    if (begin == end) {
-      return if (greater) end else begin - 1
-    }
-    var b = begin
-    var e = end - 1
-
-    var mid: Int = (e + b) >> 1
-    while (b <= e) {
-      mid = (e + b) >> 1
-      val v = index(mid)
-      if (num.lt(v, key)) {
-        b = mid + 1
-      }
-      else if (num.gt(v, key)) {
-        e = mid - 1
-      }
-      else {
-        return mid
-      }
-    }
-    val v = index(mid)
-    mid = if ((greater && num.gteq(v, key)) || (!greater && num.lteq(v, key))) {
-      mid
-    }
-    else if (greater) {
-      mid + 1
-    }
-    else {
-      mid - 1
-    }
-
-    if (greater) {
-      if (mid < end) assert(num.gteq(index(mid), key))
-      if (mid > 0) assert(num.lteq(index(mid - 1), key))
-    } else {
-      if (mid > 0) assert(num.lteq(index(mid), key))
-      if (mid < end - 1) assert(num.gteq(index(mid + 1), key))
-    }
-    mid
+    new LocalLDAModel(termCnts, numTopics, numTerms, sNumTokens.toLong,
+      sAlpha.toDouble, sBeta.toDouble, sAlphaAS.toDouble)
   }
 }

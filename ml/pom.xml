@@ -21,10 +21,9 @@
   <parent>
     <groupId>com.github.cloudml.zen</groupId>
     <artifactId>zen-parent_2.10</artifactId>
-    <version>0.2-SNAPSHOT</version>
+    <version>0.3-SNAPSHOT</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
-  <groupId>com.github.cloudml.zen</groupId>
   <artifactId>zen-ml_2.10</artifactId>
   <name>Zen Project ML Library</name>
   <url>https://github.com/cloudml/zen/</url>
@@ -34,15 +33,26 @@
   <dependencies>
     <dependency>
       <groupId>org.apache.spark</groupId>
-      <artifactId>spark-graphx_${scala.binary.version}</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.spark</groupId>
       <artifactId>spark-mllib_${scala.binary.version}</artifactId>
     </dependency>
     <dependency>
       <groupId>org.scalanlp</groupId>
       <artifactId>breeze_${scala.binary.version}</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.github.fommil.netlib</groupId>
+      <artifactId>native_system-java</artifactId>
+      <version>1.1</version>
+    </dependency>
+    <dependency>
+      <groupId>com.github.fommil.netlib</groupId>
+      <artifactId>native_ref-java</artifactId>
+      <version>1.1</version>
+    </dependency>
+    <dependency>
+      <groupId>me.lemire.integercompression</groupId>
+      <artifactId>JavaFastPFOR</artifactId>
+      <version>0.1.6</version>
     </dependency>
     <dependency>
       <groupId>org.apache.commons</groupId>

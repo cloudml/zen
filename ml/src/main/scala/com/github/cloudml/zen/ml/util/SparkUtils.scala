@@ -19,9 +19,13 @@ package com.github.cloudml.zen.ml.util
 
 import breeze.linalg.{Vector => BV, SparseVector => BSV, DenseVector => BDV}
 import breeze.storage.Zero
+import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.spark.SparkConf
+import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.mllib.linalg.{DenseVector => SDV, Vector => SV, SparseVector => SSV}
 import scala.language.implicitConversions
 import scala.reflect.ClassTag
+
 
 private[zen] object SparkUtils {
   implicit def toBreeze(sv: SV): BV[Double] = {
@@ -90,5 +94,25 @@ private[zen] object SparkUtils {
       case v: BV[T] =>
         sys.error("Unsupported Breeze vector type: " + v.getClass.getName)
     }
+  }
+
+  def getFileSystem(conf: SparkConf, path: Path): FileSystem = {
+    val hadoopConf = SparkHadoopUtil.get.newConfiguration(conf)
+    if (sys.env.contains("HADOOP_CONF_DIR") || sys.env.contains("YARN_CONF_DIR")) {
+      val hdfsConfPath = if (sys.env.get("HADOOP_CONF_DIR").isDefined) {
+        sys.env.get("HADOOP_CONF_DIR").get + "/core-site.xml"
+      } else {
+        sys.env.get("YARN_CONF_DIR").get + "/core-site.xml"
+      }
+      hadoopConf.addResource(new Path(hdfsConfPath))
+    }
+    path.getFileSystem(hadoopConf)
+  }
+
+  def deleteChkptDirs(conf: SparkConf, dirs: Array[String]): Unit = {
+    val fs = getFileSystem(conf, new Path(dirs(0)))
+    dirs.foreach(dir => {
+      fs.delete(new Path(dir), true)
+    })
   }
 }
