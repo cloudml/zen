@@ -22,10 +22,10 @@ import java.util.{Random => JavaRandom}
 import com.github.cloudml.zen.ml.partitioner._
 import com.github.cloudml.zen.ml.recommendation.FM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
-import com.github.cloudml.zen.ml.util.Utils
-import org.apache.spark.Logging
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.{EdgeRDDImpl, GraphImpl}
+import com.github.cloudml.zen.ml.util.{XORShiftRandom, Utils}
+import org.apache.spark.{SparkContext, Logging}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
@@ -551,12 +551,12 @@ object FM {
     sampleId: Long,
     iter: Int,
     mod: Int): Boolean = {
-    random.setSeed(seed * sampleId)
+    random.setSeed((iter + 117) / mod + sampleId)
     random.nextInt(mod) == iter % mod
   }
 
   @inline private[ml] def genRandom(mod: Int, iter: Int): JavaRandom = {
-    val random: JavaRandom = new JavaRandom()
+    val random: JavaRandom = new XORShiftRandom()
     random.setSeed(17425170 - iter / mod)
     random
   }

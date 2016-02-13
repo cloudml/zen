@@ -78,6 +78,18 @@ private[ml] trait Layer extends Serializable {
   def computeNeuronPrimitive(temp: BDM[Double], output: BDM[Double]): Unit
 
   protected[ml] def sample(out: BDM[Double]): BDM[Double] = out
+
+  override def equals(other: Any): Boolean = other match {
+    case l: Layer =>
+      layerType == l.layerType && weight == l.weight && bias == l.bias
+    case _ =>
+      false
+  }
+
+  override def hashCode: Int = {
+    import com.google.common.base.Objects
+    Objects.hashCode(layerType, weight, bias)
+  }
 }
 
 private[ml] class SigmoidLayer(

@@ -16,11 +16,11 @@
  */
 package com.github.cloudml.zen.examples.ml
 
-import com.github.cloudml.zen.ml.recommendation.{MVMRegression, MVMModel, MVMClassification, MVM}
+import com.github.cloudml.zen.ml.recommendation.{MVMModel, MVMRegression}
 import com.github.cloudml.zen.ml.util.SparkHacker
-import org.apache.spark.{Logging, SparkConf, SparkContext}
 import org.apache.spark.graphx2.GraphXUtils
 import org.apache.spark.storage.StorageLevel
+import org.apache.spark.{Logging, SparkConf, SparkContext}
 import scopt.OptionParser
 
 object MovieLensMVM extends Logging {
@@ -58,8 +58,7 @@ object MovieLensMVM extends Logging {
         .text(s"stepSize, default: ${defaultParams.stepSize}")
         .action((x, c) => c.copy(stepSize = x))
       opt[Double]("regular")
-        .text(
-          s"L2 regularization, default: ${defaultParams.regular}")
+        .text(s"L2 regularization, default: ${defaultParams.regular}")
         .action((x, c) => c.copy(regular = x))
       opt[Unit]("adagrad")
         .text("use AdaGrad")
@@ -112,8 +111,7 @@ object MovieLensMVM extends Logging {
     SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensMVM")
     val (trainSet, testSet, views) = if (useSVDPlusPlus) {
       MovieLensUtils.genSamplesSVDPlusPlus(sc, input, numPartitions, storageLevel)
-    }
-    else {
+    } else {
       MovieLensUtils.genSamplesWithTime(sc, input, numPartitions, storageLevel)
     }
     val lfm = new MVMRegression(trainSet, stepSize, views, regular, 0.0, rank,

@@ -62,6 +62,7 @@
     <hadoop.version>2.6.0</hadoop.version>
     <scala.macros.version>2.0.1</scala.macros.version>
     <java.version>1.6</java.version>
+    <maven.version>3.3.3</maven.version>
     <scala.version>2.10.6</scala.version>
     <scala.binary.version>2.10</scala.binary.version>
     <commons.math3.version>3.4.1</commons.math3.version>
@@ -70,6 +71,10 @@
     <CodeCacheSize>512m</CodeCacheSize>
     <zen.test.home>${session.executionRootDirectory}</zen.test.home>
   </properties>
+  <prerequisites>
+    <maven>${maven.version}</maven>
+  </prerequisites>
+
   <dependencyManagement>
     <dependencies>
       <dependency>
@@ -285,7 +290,7 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-enforcer-plugin</artifactId>
-          <version>1.1.1</version>
+          <version>1.4</version>
           <executions>
             <execution>
               <id>enforce-versions</id>
@@ -295,7 +300,7 @@
               <configuration>
                 <rules>
                   <requireMavenVersion>
-                    <version>3.0.0</version>
+                    <version>${maven.version}</version>
                   </requireMavenVersion>
                   <requireJavaVersion>
                     <version>${java.version}</version>
@@ -313,7 +318,7 @@
         <plugin>
           <groupId>net.alchim31.maven</groupId>
           <artifactId>scala-maven-plugin</artifactId>
-          <version>3.2.0</version>
+          <version>3.2.2</version>
           <executions>
             <execution>
               <id>eclipse-add-source</id>
@@ -391,7 +396,7 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
-          <version>2.18</version>
+          <version>2.18.1</version>
           <!-- Note config is repeated in scalatest config -->
           <configuration>
             <includes>
@@ -401,7 +406,7 @@
               <include>**/*Suite.java</include>
             </includes>
             <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
-            <argLine>-Xmx3g -XX:MaxPermSize=${MaxPermGen} -XX:ReservedCodeCacheSize=512m</argLine>
+            <argLine>-Xmx4g -XX:MaxPermSize=${MaxPermGen} -XX:ReservedCodeCacheSize=512m</argLine>
             <environmentVariables>
               <!--
                 Setting SPARK_DIST_CLASSPATH is a simple way to make sure any child processes

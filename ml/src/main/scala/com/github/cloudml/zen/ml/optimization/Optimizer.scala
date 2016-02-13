@@ -15,20 +15,23 @@
  * limitations under the License.
  */
 
-package com.github.cloudml.zen.ml.neuralNetwork
+package com.github.cloudml.zen.ml.optimization
 
-import com.github.cloudml.zen.ml.util.MnistDatasetSuite
-import org.scalatest.{FunSuite, Matchers}
 
-class DBNSuite extends FunSuite with MnistDatasetSuite with Matchers {
+import org.apache.spark.rdd.RDD
 
-  ignore("DBN") {
-    val (data, numVisible) = mnistTrainDataset(2500)
-    val dbn = new DBN(Array(numVisible, 500, 10))
-    DBN.pretrain(data, 100, 1000, dbn, 0.1, 0.05, 0.0)
-    DBN.finetune(data, 100, 1000, dbn, 0.02, 0.05, 0.0)
-    val (dataTest, _) = mnistTrainDataset(5000, 2500)
-    println("Error: " + MLP.error(dataTest, dbn.mlp, 100))
-  }
+import org.apache.spark.annotation.DeveloperApi
+import org.apache.spark.mllib.linalg.Vector
 
+/**
+ * :: DeveloperApi ::
+ * Trait for optimization problem solvers.
+ */
+@DeveloperApi
+trait Optimizer extends Serializable {
+
+  /**
+   * Solve the provided convex optimization problem.
+   */
+  def optimize(data: RDD[(Double, Vector)], initialWeights: Vector): Vector
 }
