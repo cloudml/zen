@@ -18,10 +18,10 @@
 package com.github.cloudml.zen.ml.tree
 
 import breeze.linalg.SparseVector
+import com.github.cloudml.zen.ml.util.TimeTracker
 import org.apache.spark.Logging
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.mllib.tree.configuration.Strategy
-import org.apache.spark.mllib.tree.impl._
 import org.apache.spark.mllib.tree.model._
 import org.apache.spark.rdd.RDD
 
@@ -53,8 +53,9 @@ class LambdaMARTDecisionTree(val strategy: Strategy,
     implicit val nodeOrd = Ordering.by[Node, Double](_.impurity).reverse
     // val highQ = MinMaxPriorityQueue.orderedBy(nodeOrd).maximumSize(numLeaves).create[Node]()
     val nodeQueue = new mutable.PriorityQueue[(Node, NodeInfoStats)]()(Ordering.by(x => x._1))
-    val topNode = Node.emptyNode(nodeIndex = 1)
-    val topInfo = new NodeInfoStats(numSamples, lambdasBc.value.sum, lambdasBc.value.map(x => x * x).sum, weightsBc.value.sum)
+    val topNode = Node.emptyNode(nodeIndex=1)
+    val topInfo = new NodeInfoStats(numSamples, lambdasBc.value.sum, lambdasBc.value.map(x => x * x).sum,
+      weightsBc.value.sum)
     nodeQueue.enqueue((topNode, topInfo))
     curLeaves = 1
 
@@ -303,7 +304,8 @@ object LambdaMARTDecisionTree extends Serializable with Logging {
     // val eps = 1e-10
     val gainShift = getLeafSplitGain(nodeInfo.sumCount, nodeInfo.sumScores)
     // val gainConfidenceLevel = 0.95
-    // var gainConfidenceInSquaredStandardDeviations = ProbabilityFunctions.Probit(1.0 - (1.0 - gainConfidenceLevel) * 0.5)
+    // var gainConfidenceInSquaredStandardDeviations =
+    // ProbabilityFunctions.Probit(1.0 - (1.0 - gainConfidenceLevel) * 0.5)
     // gainConfidenceInSquaredStandardDeviations *= gainConfidenceInSquaredStandardDeviations
 
     val entropyCoefficient = 0.1 * 1.0e-6 // an outer tuning parameters
@@ -350,15 +352,20 @@ object LambdaMARTDecisionTree extends Serializable with Logging {
     //    val gtSquares = sumSquares - bestLteSquaredTarget
     //    val gtTarget = sumTargets - bestLteTarget
     //    val gtCount = totalDocInNode - bestLteCount
-    val bestLeftInfo = new NodeInfoStats(nodeInfo.sumCount - bestRtInfo.sumCount, nodeInfo.sumScores - bestRtInfo.sumScores,
-      nodeInfo.sumSquares - bestRtInfo.sumSquares, nodeInfo.sumScoreWeights - bestRtInfo.sumScoreWeights)
+    val bestLeftInfo = new NodeInfoStats(nodeInfo.sumCount - bestRtInfo.sumCount,
+      nodeInfo.sumScores - bestRtInfo.sumScores, nodeInfo.sumSquares - bestRtInfo.sumSquares,
+      nodeInfo.sumScoreWeights - bestRtInfo.sumScoreWeights)
 
-    val lteImpurity = (bestLeftInfo.sumSquares - bestLeftInfo.sumScores * bestLeftInfo.sumScores / bestLeftInfo.sumCount) / bestLeftInfo.sumCount
-    val gtImpurity = (bestRtInfo.sumSquares - bestRtInfo.sumScores * bestRtInfo.sumScores / bestRtInfo.sumCount) / bestRtInfo.sumCount
-    val tolImpurity = (nodeInfo.sumSquares - nodeInfo.sumScores * nodeInfo.sumScores / nodeInfo.sumCount) / nodeInfo.sumCount
+    val lteImpurity = (bestLeftInfo.sumSquares - bestLeftInfo.sumScores * bestLeftInfo.sumScores /
+      bestLeftInfo.sumCount) / bestLeftInfo.sumCount
+    val gtImpurity = (bestRtInfo.sumSquares - bestRtInfo.sumScores * bestRtInfo.sumScores /
+      bestRtInfo.sumCount) / bestRtInfo.sumCount
+    val tolImpurity = (nodeInfo.sumSquares - nodeInfo.sumScores * nodeInfo.sumScores /
+      nodeInfo.sumCount) / nodeInfo.sumCount
 
     val bestSplitInfo = new SplitInfo(feature, bestThreshold)
-    val lteOutput = CalculateSplittedLeafOutput(bestLeftInfo.sumCount, bestLeftInfo.sumScores, bestLeftInfo.sumScoreWeights)
+    val lteOutput = CalculateSplittedLeafOutput(bestLeftInfo.sumCount, bestLeftInfo.sumScores,
+      bestLeftInfo.sumScoreWeights)
     val gtOutput = CalculateSplittedLeafOutput(bestRtInfo.sumCount, bestRtInfo.sumScores, bestRtInfo.sumScoreWeights)
     val ltePredict = new Predict(lteOutput)
     val gtPredict = new Predict(gtOutput)
@@ -368,7 +375,8 @@ object LambdaMARTDecisionTree extends Serializable with Logging {
     // println(s"bestShiftedGain: $bestShiftedGain, gainShift: $gainShift")
     val splitGain = (bestShiftedGain - gainShift) * trust // - usePenalty // TODO introduce trust and usePenalty
     val inforGainStat = new InformationGainStats(splitGain, tolImpurity, lteImpurity, gtImpurity, ltePredict, gtPredict)
-    val erfcArg = math.sqrt((bestShiftedGain - gainShift) * (nodeInfo.sumCount - 1) / (2 * varianceTargets * nodeInfo.sumCount))
+    val erfcArg = math.sqrt((bestShiftedGain - gainShift) * (nodeInfo.sumCount - 1) /
+      (2 * varianceTargets * nodeInfo.sumCount))
     val gainPValue = ProbabilityFunctions.erfc(erfcArg)
     (bestSplitInfo, inforGainStat, gainPValue, bestLeftInfo, bestRtInfo)
   }

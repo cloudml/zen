@@ -18,18 +18,15 @@
 package com.github.cloudml.zen.ml.tree
 
 import breeze.linalg.SparseVector
+import com.github.cloudml.zen.ml.util.TimeTracker
 import org.apache.spark.Logging
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.mllib.tree.configuration.Algo._
 import org.apache.spark.mllib.tree.configuration.BoostingStrategy
-import org.apache.spark.mllib.tree.impl.TimeTracker
 import org.apache.spark.mllib.tree.impurity.Variance
-import com.github.cloudml.zen.ml.tree.SplitInfo
-import org.apache.spark.mllib.tree.model.GradientBoostedTreesModel
-import org.apache.spark.mllib.tree.model.DecisionTreeModel
+import org.apache.spark.mllib.tree.model.{DecisionTreeModel, GradientBoostedTreesModel}
 import org.apache.spark.rdd.RDD
 
-import java.io.{File, FileOutputStream, PrintWriter}
 
 class LambdaMART(val boostingStrategy: BoostingStrategy,
   val numLeaves: Int,

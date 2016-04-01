@@ -23,28 +23,29 @@ class Histogram(val numBins: Int) {
   private val _squares = new Array[Double](numBins)
   private val _scoreWeights = new Array[Double](numBins)
 
-  @inline def counts = _counts
+  @inline def counts: Array[Double] = _counts
 
-  @inline def scores = _scores
+  @inline def scores: Array[Double] = _scores
 
-  @inline def squares = _squares
+  @inline def squares: Array[Double] = _squares
 
-  @inline def scoreWeights = _scoreWeights
+  @inline def scoreWeights: Array[Double] = _scoreWeights
 
-  def weightedUpdate(bin: Int, score: Double, scoreWeight: Double, weight: Double = 1.0) = {
+  def weightedUpdate(bin: Int, score: Double, scoreWeight: Double, weight: Double = 1.0): Unit = {
     _counts(bin) += weight
     _scores(bin) += score * weight
     _squares(bin) += score * score * weight
     _scoreWeights(bin) += scoreWeight
   }
-  def update(bin: Int, score: Double, scoreWeight: Double) = {
+
+  def update(bin: Int, score: Double, scoreWeight: Double): Unit = {
     _counts(bin) += 1
     _scores(bin) += score
     _squares(bin) += score * score
     _scoreWeights(bin) += scoreWeight
   }
 
-  def cumulateLeft() = {
+  def cumulateLeft(): Histogram = {
     var bin = 1
     while (bin < numBins) {
       _counts(bin) += _counts(bin-1)
@@ -56,11 +57,11 @@ class Histogram(val numBins: Int) {
     this
   }
 
-  def cumulate(info: NodeInfoStats)={
+  def cumulate(info: NodeInfoStats): Histogram = {
     // cumulate from right to left
     var bin = numBins-2
     while (bin >0) {
-      val binRight = bin+1
+      val binRight = bin + 1
       _counts(bin) += _counts(binRight)
       _scores(bin) += _scores(binRight)
       _squares(bin) += _squares(binRight)
@@ -75,7 +76,6 @@ class Histogram(val numBins: Int) {
     _scoreWeights(0)=info.sumScoreWeights
 
     this
-
   }
 }
 
@@ -84,7 +84,7 @@ class NodeInfoStats(var sumCount: Int,
   var sumSquares: Double,
   var sumScoreWeights: Double)extends Serializable {
 
-  override def toString = s"NodeInfoStats($sumCount, $sumScores, $sumSquares, $sumScoreWeights)"
+  override def toString: String = s"NodeInfoStats($sumCount, $sumScores, $sumSquares, $sumScoreWeights)"
 
   def canEqual(other: Any): Boolean = other.isInstanceOf[NodeInfoStats]
 
