@@ -28,7 +28,7 @@ class LogisticRegressionSuite extends FunSuite with SharedSparkContext with Matc
 
   test("LogisticRegression MIS") {
     val zenHome = sys.props.getOrElse("zen.test.home", fail("zen.test.home is not set!"))
-    val dataSetFile = s"$zenHome/data/binary_classification_data.txt"
+    val dataSetFile = classOf[LogisticRegressionSuite].getClassLoader().getResource("binary_classification_data.txt").toString()
     val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile)
     val max = dataSet.map(_.features.activeValuesIterator.map(_.abs).sum + 1L).max
 
@@ -58,7 +58,7 @@ class LogisticRegressionSuite extends FunSuite with SharedSparkContext with Matc
 
   test("LogisticRegression SGD") {
     val zenHome = sys.props.getOrElse("zen.test.home", fail("zen.test.home is not set!"))
-    val dataSetFile = s"$zenHome/data/binary_classification_data.txt"
+    val dataSetFile = classOf[LogisticRegressionSuite].getClassLoader().getResource("binary_classification_data.txt").toString()
     val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile)
     val maxIter = 10
     val stepSize = 1
