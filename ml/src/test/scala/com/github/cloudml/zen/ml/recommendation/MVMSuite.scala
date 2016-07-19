@@ -28,7 +28,7 @@ import org.scalatest.{FunSuite, Matchers}
 class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
   test("binary classification") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-    val dataSetFile = s"$sparkHome/data/binary_classification_data.txt"
+    val dataSetFile = classOf[MVMSuite].getClassLoader().getResource("binary_classification_data.txt").toString()
     val checkpoint = s"$sparkHome/target/tmp"
     sc.setCheckpointDir(checkpoint)
     val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile).zipWithIndex().map {
@@ -73,7 +73,7 @@ class MVMSuite extends FunSuite with SharedSparkContext with Matchers {
 
   ignore("url_combined classification") {
     val sparkHome = sys.props.getOrElse("spark.test.home", fail("spark.test.home is not set!"))
-    val dataSetFile = s"$sparkHome/data/binary_classification_data.txt"
+    val dataSetFile = classOf[MVMSuite].getClassLoader().getResource("binary_classification_data.txt").toString()
     val checkpointDir = s"$sparkHome/target/tmp"
     sc.setCheckpointDir(checkpointDir)
     val dataSet = MLUtils.loadLibSVMFile(sc, dataSetFile).zipWithIndex().map {
