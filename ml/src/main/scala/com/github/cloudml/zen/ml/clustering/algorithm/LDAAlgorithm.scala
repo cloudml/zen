@@ -25,6 +25,7 @@ import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.clustering.{LDALogLikelihood, LDAPerplexity}
 import com.github.cloudml.zen.ml.util.BVDecompressor
 import com.github.cloudml.zen.ml.util.Concurrent._
+import org.apache.spark.graphx2.VertexRDD
 import org.apache.spark.graphx2.impl.{ShippableVertexPartition => VertPartition, _}
 
 import scala.collection.JavaConversions._
@@ -74,7 +75,7 @@ abstract class LDAAlgorithm(numTopics: Int,
   }
 
   def sampleGraph(edges: EdgeRDDImpl[TA, _],
-    verts: VertexRDDImpl[TC],
+    verts: VertexRDD[TC],
     topicCounters: BDV[Count],
     seed: Int,
     sampIter: Int,
@@ -98,7 +99,7 @@ abstract class LDAAlgorithm(numTopics: Int,
   }
 
   def updateVertexCounters(edges: EdgeRDDImpl[TA, Int],
-    verts: VertexRDDImpl[TC]): VertexRDDImpl[TC] = {
+    verts: VertexRDD[TC]): VertexRDD[TC] = {
     val shippedCounters = edges.partitionsRDD.mapPartitions(_.flatMap { case (_, ep) =>
       countPartition(ep)
     }).partitionBy(verts.partitioner.get)
@@ -112,7 +113,7 @@ abstract class LDAAlgorithm(numTopics: Int,
   }
 
   def calcPerplexity(edges: EdgeRDDImpl[TA, _],
-    verts: VertexRDDImpl[TC],
+    verts: VertexRDD[TC],
     topicCounters: BDV[Count],
     numTokens: Long,
     numTerms: Int,
@@ -131,7 +132,7 @@ abstract class LDAAlgorithm(numTopics: Int,
     new LDAPerplexity(pplx, wpplx, dpplx)
   }
 
-  def calcLogLikelihood(verts: VertexRDDImpl[TC],
+  def calcLogLikelihood(verts: VertexRDD[TC],
     topicCounters: BDV[Count],
     numTokens: Long,
     numDocs: Long,
@@ -151,7 +152,7 @@ abstract class LDAAlgorithm(numTopics: Int,
   }
 
   def refreshEdgeAssociations(edges: EdgeRDDImpl[TA, _],
-    verts: VertexRDDImpl[TC]): EdgeRDDImpl[TA, Nvk] = {
+    verts: VertexRDD[TC]): EdgeRDDImpl[TA, Nvk] = {
     val shippedVerts = verts.partitionsRDD.mapPartitions(_.flatMap { vp =>
       val rt = vp.routingTable
       val index = vp.index
@@ -201,7 +202,7 @@ abstract class LDAAlgorithm(numTopics: Int,
     edges.withPartitionsRDD(partRDD)
   }
 
-  def collectTopicCounters(verts: VertexRDDImpl[TC]): BDV[Count] = {
+  def collectTopicCounters(verts: VertexRDD[TC]): BDV[Count] = {
     verts.partitionsRDD.mapPartitions(_.map { vp =>
       val totalSize = vp.capacity
       val index = vp.index
