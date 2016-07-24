@@ -622,13 +622,5 @@ object FM {
     m
   }
 
-  private[ml] def sumInterval(rank: Int, arr: Array[Double]): VD = {
-    val result = new Array[Double](rank + 1)
-    var i = 1
-    while (i <= rank) {
-      result(i) = arr(i)
-      i += 1
-    }
-    result
-  }
+  private[ml] def sumInterval(rank: Int, arr: Array[Double]): VD = arr.slice(0, rank + 1)
 }
