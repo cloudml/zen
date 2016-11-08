@@ -17,15 +17,11 @@
 
 package com.github.cloudml.zen.ml.optimization
 
-import com.github.cloudml.zen.ml.util.SparkUtils
+import com.github.cloudml.zen.ml.util.{Logging, SparkUtils}
 
 import scala.collection.mutable
-import scala.collection.mutable.ArrayBuffer
-
 import breeze.linalg.{DenseVector => BDV}
 import breeze.optimize.{CachedDiffFunction, DiffFunction, LBFGS => BreezeLBFGS}
-
-import org.apache.spark.Logging
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.mllib.linalg.{Vector, Vectors}
 import com.github.cloudml.zen.ml.linalg.BLAS.axpy

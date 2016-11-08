@@ -16,20 +16,12 @@
  */
 package com.github.cloudml.zen.examples.ml
 
-import java.text.SimpleDateFormat
-import java.util.{TimeZone, Locale}
-
-import breeze.linalg.{SparseVector => BSV}
 import com.github.cloudml.zen.ml.recommendation._
-import com.github.cloudml.zen.ml.util.SparkHacker
+import com.github.cloudml.zen.ml.util.Logging
 import org.apache.spark.graphx2.GraphXUtils
-import org.apache.spark.mllib.linalg.{SparseVector => SSV}
-import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.storage.StorageLevel
-import org.apache.spark.{Logging, SparkConf, SparkContext}
+import org.apache.spark.{SparkConf, SparkContext}
 import scopt.OptionParser
-
-import scala.collection.mutable.ArrayBuffer
 
 object NetflixPrizeMVM extends Logging {
 
@@ -112,7 +104,6 @@ object NetflixPrizeMVM extends Logging {
     }
     val sc = new SparkContext(conf)
     sc.setCheckpointDir(checkpointDir)
-    SparkHacker.gcCleaner(60 * 10, 60 * 10, "NetflixPrizeMVM")
     val (trainSet, testSet, views) = NetflixPrizeUtils.genSamplesWithTime(sc, input, numPartitions)
     val fm = new MVMRegression(trainSet, stepSize, views, regular, 0.0, rank,
       useAdaGrad, useWeightedLambda, 1.0, StorageLevel.MEMORY_AND_DISK)

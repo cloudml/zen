@@ -23,7 +23,7 @@ import breeze.linalg.{Axis => BrzAxis, DenseMatrix => BDM, DenseVector => BDV, s
 import com.github.cloudml.zen.ml.util._
 import org.apache.commons.math3.random.JDKRandomGenerator
 import org.apache.spark.mllib.util.Saveable
-import org.apache.spark.{SparkContext, Logging}
+import org.apache.spark.SparkContext
 import org.apache.spark.annotation.Experimental
 
 @Experimental
@@ -38,11 +38,17 @@ class RBMModel(
   def this(
     numIn: Int,
     numOut: Int,
-    dropout: Double = 0.5D) {
+    dropout: Double) {
     this(NNUtil.initUniformDistWeight(numIn, numOut, math.sqrt(6D / (numIn + numOut))),
       NNUtil.initializeBias(numIn),
       NNUtil.initializeBias(numOut),
       dropout)
+  }
+
+  def this(
+    numIn: Int,
+    numOut: Int) {
+    this(numIn, numOut, 0.5D)
   }
 
   require(dropoutRate >= 0 && dropoutRate < 1)

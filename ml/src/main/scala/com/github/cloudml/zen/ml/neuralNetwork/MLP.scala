@@ -17,18 +17,14 @@
 
 package com.github.cloudml.zen.ml.neuralNetwork
 
-import java.util.Random
-
-import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, SparseVector => BSV, argmax => brzArgMax,
-axpy => brzAxpy, max => brzMax, norm => brzNorm, sum => brzSum}
-import breeze.numerics.signum
+import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, SparseVector => BSV, argmax => brzArgMax, axpy => brzAxpy}
 import com.github.cloudml.zen.ml.linalg.BLAS
-import com.github.cloudml.zen.ml.util.{LoaderUtils, SparkUtils}
+import com.github.cloudml.zen.ml.util.{LoaderUtils, Logging, SparkUtils}
 import com.github.cloudml.zen.ml.optimization._
-import org.apache.spark.{SparkContext, Logging}
+import org.apache.spark.SparkContext
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.mllib.linalg.{DenseVector => SDV, SparseVector => SSV, Vector => SV}
-import org.apache.spark.mllib.util.{Loader, Saveable}
+import org.apache.spark.mllib.util.Loader
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.json4s.DefaultFormats

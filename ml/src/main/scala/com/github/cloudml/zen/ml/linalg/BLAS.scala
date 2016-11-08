@@ -17,10 +17,9 @@
 
 package com.github.cloudml.zen.ml.linalg
 
-import com.github.fommil.netlib.{BLAS => NetlibBLAS, F2jBLAS}
+import com.github.cloudml.zen.ml.util.Logging
+import com.github.fommil.netlib.{F2jBLAS, BLAS => NetlibBLAS}
 import com.github.fommil.netlib.BLAS.{getInstance => NativeBLAS}
-
-import org.apache.spark.Logging
 import org.apache.spark.mllib.linalg.{DenseVector, SparseVector, Vector}
 
 /**

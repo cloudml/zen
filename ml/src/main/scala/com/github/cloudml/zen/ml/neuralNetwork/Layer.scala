@@ -19,9 +19,9 @@ package com.github.cloudml.zen.ml.neuralNetwork
 
 import java.util.Random
 
-import breeze.linalg.{DenseVector => BDV, DenseMatrix => BDM, Axis => brzAxis, sum => brzSum, max => brzMax}
-import org.apache.spark.Logging
+import breeze.linalg.{Axis => brzAxis, DenseMatrix => BDM, DenseVector => BDV, max => brzMax, sum => brzSum}
 import NNUtil._
+import com.github.cloudml.zen.ml.util.Logging
 
 private[ml] trait Layer extends Serializable {
 

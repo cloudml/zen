@@ -18,8 +18,7 @@
 package com.github.cloudml.zen.ml.tree
 
 import breeze.linalg.SparseVector
-import com.github.cloudml.zen.ml.util.TimeTracker
-import org.apache.spark.Logging
+import com.github.cloudml.zen.ml.util.{Logging, TimeTracker}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.mllib.tree.configuration.Strategy
 import org.apache.spark.mllib.tree.model._

@@ -21,9 +21,10 @@ import java.util.Random
 
 import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV}
 import breeze.numerics.signum
+import com.github.cloudml.zen.ml.util.Logging
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.mllib.util.Saveable
-import org.apache.spark.{Logging, SparkContext}
+import org.apache.spark.SparkContext
 
 @Experimental
 class MLPModel(

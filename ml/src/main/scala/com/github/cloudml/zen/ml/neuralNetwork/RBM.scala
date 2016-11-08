@@ -17,12 +17,12 @@
 
 package com.github.cloudml.zen.ml.neuralNetwork
 
-import breeze.linalg.{Axis => BrzAxis, DenseMatrix => BDM, DenseVector => BDV, axpy => brzAxpy, sum => brzSum}
+import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, axpy => brzAxpy}
 import com.github.cloudml.zen.ml.linalg.BLAS
 import com.github.cloudml.zen.ml.util._
 import com.github.cloudml.zen.ml.optimization._
 import org.apache.spark.mllib.util.Loader
-import org.apache.spark.{SparkContext, Logging}
+import org.apache.spark.SparkContext
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.mllib.linalg.{DenseVector => SDV, Vector => SV}
 import org.apache.spark.rdd.RDD
@@ -30,7 +30,6 @@ import org.apache.spark.storage.StorageLevel
 import org.json4s.DefaultFormats
 import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods._
-
 
 @Experimental
 object RBM extends Logging with Loader[RBMModel] {

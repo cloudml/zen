@@ -17,12 +17,12 @@
 
 package com.github.cloudml.zen.ml.neuralNetwork
 
-import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, sum => brzSum}
+import breeze.linalg.{DenseMatrix => BDM}
+import com.github.cloudml.zen.ml.util.Logging
 import com.github.cloudml.zen.ml.util.SparkUtils._
-import org.apache.spark.Logging
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.broadcast.Broadcast
-import org.apache.spark.mllib.linalg.{DenseMatrix => SDM, DenseVector => SDV, Matrix => SM, SparseMatrix => SSM, SparseVector => SSV, Vector => SV}
+import org.apache.spark.mllib.linalg.{Vector => SV}
 import org.apache.spark.rdd.RDD
 
 @Experimental

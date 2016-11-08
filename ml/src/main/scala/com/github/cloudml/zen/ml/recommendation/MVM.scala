@@ -24,8 +24,8 @@ import com.github.cloudml.zen.ml.recommendation.MVM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.{EdgeRDDImpl, GraphImpl}
-import com.github.cloudml.zen.ml.util.{XORShiftRandom, Utils}
-import org.apache.spark.{SparkContext, Logging}
+import com.github.cloudml.zen.ml.util.{Logging, Utils, XORShiftRandom}
+import org.apache.spark.SparkContext
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel

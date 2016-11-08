@@ -17,9 +17,11 @@
 
 package com.github.cloudml.zen.ml.regression
 
+import scala.math._
+
 import com.github.cloudml.zen.ml.partitioner.DBHPartitioner
 import com.github.cloudml.zen.ml.util.SparkUtils._
-import com.github.cloudml.zen.ml.util.Utils
+import com.github.cloudml.zen.ml.util.{Logging, Utils}
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.{EdgeRDDImpl, GraphImpl}
@@ -28,9 +30,7 @@ import org.apache.spark.mllib.linalg.{DenseVector => SDV}
 import org.apache.spark.mllib.regression.{GeneralizedLinearModel, LabeledPoint}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
-import org.apache.spark.{HashPartitioner, Logging}
 
-import scala.math._
 import LogisticRegression._
 
 abstract class LogisticRegression(
