@@ -24,8 +24,8 @@
     <version>9</version>
   </parent>
   <groupId>com.github.cloudml.zen</groupId>
-  <artifactId>zen-parent_2.10</artifactId>
-  <version>0.3-SNAPSHOT</version>
+  <artifactId>zen-parent_2.11</artifactId>
+  <version>0.4-SNAPSHOT</version>
   <packaging>pom</packaging>
   <name>Zen Project Parent POM</name>
   <url>https://github.com/cloudml/zen/</url>
@@ -45,7 +45,7 @@
   <developers>
     <developer>
       <id>witgo</id>
-      <name>GuoQiang Li</name>
+      <name>Guoqiang Li</name>
       <email>witgo@foxmail.com</email>
       <url>https://github.com/witgo</url>
     </developer>
@@ -58,13 +58,13 @@
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-    <spark.version>1.6.1</spark.version>
-    <hadoop.version>2.6.0</hadoop.version>
-    <scala.macros.version>2.0.1</scala.macros.version>
+    <spark.version>2.1.0</spark.version>
+    <hadoop.version>2.7.3</hadoop.version>
+    <scala.macros.version>2.11.8</scala.macros.version>
     <java.version>1.6</java.version>
     <maven.version>3.3.3</maven.version>
-    <scala.version>2.10.6</scala.version>
-    <scala.binary.version>2.10</scala.binary.version>
+    <scala.version>2.11.8</scala.version>
+    <scala.binary.version>2.11</scala.binary.version>
     <commons.math3.version>3.4.1</commons.math3.version>
     <PermGen>64m</PermGen>
     <MaxPermGen>512m</MaxPermGen>
@@ -194,7 +194,7 @@
     <profile>
       <id>scala-2.10</id>
       <activation>
-        <property><name>!scala-2.11</name></property>
+        <property><name>scala-2.10</name></property>
       </activation>
       <properties>
         <scala.version>2.10.6</scala.version>
@@ -205,11 +205,11 @@
       <id>scala-2.11</id>
       <activation>
         <property>
-          <name>scala-2.11</name>
+          <name>!scala-2.10</name>
         </property>
       </activation>
       <properties>
-        <scala.version>2.11.7</scala.version>
+        <scala.version>2.11.8</scala.version>
         <scala.binary.version>2.11</scala.binary.version>
       </properties>
     </profile>
@@ -370,15 +370,6 @@
               <javacArg>-target</javacArg>
               <javacArg>${java.version}</javacArg>
             </javacArgs>
-            <!-- The following plugin is required to use quasiquotes in Scala 2.10 and is used
-                 by Spark SQL for code generation. -->
-            <compilerPlugins>
-              <compilerPlugin>
-                <groupId>org.scalamacros</groupId>
-                <artifactId>paradise_${scala.version}</artifactId>
-                <version>${scala.macros.version}</version>
-              </compilerPlugin>
-            </compilerPlugins>
           </configuration>
         </plugin>
         <plugin>

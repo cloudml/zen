@@ -18,12 +18,11 @@
 package com.github.cloudml.zen.ml.optimization
 
 import scala.collection.mutable.ArrayBuffer
-
 import com.github.cloudml.zen.ml.linalg.BLAS
-import org.apache.spark.annotation.{Experimental, DeveloperApi}
-import org.apache.spark.Logging
+import com.github.cloudml.zen.ml.util.Logging
+import org.apache.spark.annotation.{DeveloperApi, Experimental}
 import org.apache.spark.rdd.RDD
-import org.apache.spark.mllib.linalg.{Vectors, Vector}
+import org.apache.spark.mllib.linalg.{Vector, Vectors}
 
 /**
  * Class used to solve an optimization problem using Gradient Descent.

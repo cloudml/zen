@@ -17,10 +17,10 @@
 package com.github.cloudml.zen.examples.ml
 
 import com.github.cloudml.zen.ml.recommendation.{BSFMModel, BSFMRegression}
-import com.github.cloudml.zen.ml.util.SparkHacker
+import com.github.cloudml.zen.ml.util.Logging
 import org.apache.spark.graphx2.GraphXUtils
 import org.apache.spark.storage.StorageLevel
-import org.apache.spark.{Logging, SparkConf, SparkContext}
+import org.apache.spark.{SparkConf, SparkContext}
 import scopt.OptionParser
 
 object MovieLensBSFM extends Logging {
@@ -114,7 +114,6 @@ object MovieLensBSFM extends Logging {
     val sc = new SparkContext(conf)
     val checkpointDir = s"$out/checkpoint"
     sc.setCheckpointDir(checkpointDir)
-    SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensBSFM")
     val (trainSet, testSet, views) = if (useSVDPlusPlus) {
       MovieLensUtils.genSamplesSVDPlusPlus(sc, input, numPartitions, storageLevel)
     }

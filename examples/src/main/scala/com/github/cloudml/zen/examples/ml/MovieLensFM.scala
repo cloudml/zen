@@ -16,9 +16,9 @@
  */
 package com.github.cloudml.zen.examples.ml
 
-import com.github.cloudml.zen.ml.recommendation.{FMRegression, FMModel, FMClassification, FM}
-import com.github.cloudml.zen.ml.util.SparkHacker
-import org.apache.spark.{Logging, SparkConf, SparkContext}
+import com.github.cloudml.zen.ml.recommendation.{FMModel, FMRegression}
+import com.github.cloudml.zen.ml.util.Logging
+import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.graphx2.GraphXUtils
 import org.apache.spark.storage.StorageLevel
 import scopt.OptionParser
@@ -110,7 +110,6 @@ object MovieLensFM extends Logging {
     val sc = new SparkContext(conf)
     val checkpointDir = s"$out/checkpoint"
     sc.setCheckpointDir(checkpointDir)
-    SparkHacker.gcCleaner(60 * 10, 60 * 10, "MovieLensFM")
     val (trainSet, testSet, _) = if (useSVDPlusPlus) {
       MovieLensUtils.genSamplesSVDPlusPlus(sc, input, numPartitions, storageLevel)
     }

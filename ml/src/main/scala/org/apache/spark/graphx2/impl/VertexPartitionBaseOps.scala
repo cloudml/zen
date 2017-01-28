@@ -17,13 +17,12 @@
 
 package org.apache.spark.graphx2.impl
 
+import com.github.cloudml.zen.ml.util.Logging
+
 import scala.language.higherKinds
 import scala.language.implicitConversions
 import scala.reflect.ClassTag
-
-import org.apache.spark.Logging
 import org.apache.spark.util.collection.BitSet
-
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.util.collection.GraphXPrimitiveKeyOpenHashMap
 

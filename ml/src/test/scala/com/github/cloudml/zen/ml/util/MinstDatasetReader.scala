@@ -20,7 +20,6 @@ package com.github.cloudml.zen.ml.util
 import java.io.{Closeable, DataInputStream, FileInputStream, IOException}
 import java.util.zip.GZIPInputStream
 
-import org.apache.spark.Logging
 import org.apache.spark.mllib.linalg.{DenseVector => SDV, Vector => SV}
 
 case class MinstItem(label: Int, data: Array[Int]) {

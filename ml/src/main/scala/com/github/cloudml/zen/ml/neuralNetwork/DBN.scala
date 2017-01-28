@@ -17,7 +17,7 @@
 
 package com.github.cloudml.zen.ml.neuralNetwork
 
-import org.apache.spark.Logging
+import com.github.cloudml.zen.ml.util.Logging
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.mllib.linalg.{Vector => SV}
 import org.apache.spark.rdd.RDD

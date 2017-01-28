@@ -20,11 +20,11 @@
   <modelVersion>4.0.0</modelVersion>
   <parent>
     <groupId>com.github.cloudml.zen</groupId>
-    <artifactId>zen-parent_2.10</artifactId>
-    <version>0.3-SNAPSHOT</version>
+    <artifactId>zen-parent_2.11</artifactId>
+    <version>0.4-SNAPSHOT</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
-  <artifactId>zen-examples_2.10</artifactId>
+  <artifactId>zen-examples_2.11</artifactId>
   <name>Zen Project Examples</name>
   <url>https://github.com/cloudml/zen/</url>
   <properties>

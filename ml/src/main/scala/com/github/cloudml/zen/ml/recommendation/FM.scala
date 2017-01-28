@@ -19,18 +19,17 @@ package com.github.cloudml.zen.ml.recommendation
 
 import java.util.{Random => JavaRandom}
 
+import scala.math._
+
 import com.github.cloudml.zen.ml.partitioner.DBHPartitioner
 import com.github.cloudml.zen.ml.recommendation.FM._
 import com.github.cloudml.zen.ml.util.SparkUtils._
-import com.github.cloudml.zen.ml.util.{XORShiftRandom, Utils}
+import com.github.cloudml.zen.ml.util.{Logging, Utils, XORShiftRandom}
 import org.apache.spark.graphx2._
 import org.apache.spark.graphx2.impl.{EdgeRDDImpl, GraphImpl}
-import org.apache.spark.{SparkContext, Logging}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
-
-import scala.math._
 
 /**
  * Factorization Machines 公式定义:

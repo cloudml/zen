@@ -17,10 +17,9 @@
 
 package com.github.cloudml.zen.examples.ml
 
-import java.util.{Timer, TimerTask}
-import java.lang.ref.WeakReference
 import breeze.linalg.{SparseVector => BSV}
-import org.apache.spark.{Logging, SparkContext}
+import com.github.cloudml.zen.ml.util.Logging
+import org.apache.spark.SparkContext
 import org.apache.spark.mllib.linalg.{SparseVector => SSV}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD

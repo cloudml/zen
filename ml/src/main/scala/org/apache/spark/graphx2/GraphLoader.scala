@@ -17,8 +17,9 @@
 
 package org.apache.spark.graphx2
 
+import com.github.cloudml.zen.ml.util.Logging
 import org.apache.spark.storage.StorageLevel
-import org.apache.spark.{Logging, SparkContext}
+import org.apache.spark.SparkContext
 import org.apache.spark.graphx2.impl.{EdgePartitionBuilder, GraphImpl}
 
 /**

@@ -22,7 +22,6 @@ import scala.annotation.tailrec
 import com.github.cloudml.zen.ml.clustering.LDA
 import com.github.cloudml.zen.ml.clustering.LDADefines._
 import com.github.cloudml.zen.ml.clustering.algorithm.LDATrainer
-import com.github.cloudml.zen.ml.util.SparkHacker
 import com.github.cloudml.zen.ml.util.SparkUtils
 
 import org.apache.hadoop.fs.Path
@@ -131,7 +130,6 @@ object LDADriver {
     alphaAS: Double,
     algo: LDATrainer,
     storageLevel: StorageLevel): Double = {
-    SparkHacker.gcCleaner(30 * 60, 30 * 60, "LDA_gcCleaner")
     val trainingStartedTime = System.nanoTime()
     val termModel = LDA.train(docs, totalIter, numTopics, alpha, beta, alphaAS, algo, storageLevel)
     val trainingEndedTime = System.nanoTime()
