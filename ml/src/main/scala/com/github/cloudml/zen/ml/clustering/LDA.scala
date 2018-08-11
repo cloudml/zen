@@ -32,7 +32,7 @@ import org.apache.spark.storage.StorageLevel
 
 
 class LDA(@transient var edges: EdgeRDDImpl[TA, _],
-  @transient var verts: VertexRDDImpl[TC],
+  @transient var verts: VertexRDD[TC],
   val numTopics: Int,
   val numTerms: Int,
   val numDocs: Long,

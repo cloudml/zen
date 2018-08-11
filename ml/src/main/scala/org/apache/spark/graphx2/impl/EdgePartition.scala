@@ -109,11 +109,11 @@ class EdgePartition[
       activeSet)
   }
 
-  @inline def srcIds(pos: Int): VertexId = local2global(localSrcIds(pos))
+  @inline private def srcIds(pos: Int): VertexId = local2global(localSrcIds(pos))
 
-  @inline def dstIds(pos: Int): VertexId = local2global(localDstIds(pos))
+  @inline private def dstIds(pos: Int): VertexId = local2global(localDstIds(pos))
 
-  @inline def attrs(pos: Int): ED = data(pos)
+  @inline private def attrs(pos: Int): ED = data(pos)
 
   /** Look up vid in activeSet, throwing an exception if it is None. */
   def isActive(vid: VertexId): Boolean = {
