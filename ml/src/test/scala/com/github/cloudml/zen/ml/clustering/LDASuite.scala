@@ -111,8 +111,8 @@ class LDASuite extends FunSuite with SharedSparkContext {
 
     val ldaModel = lda.toLDAModel.toLocalLDAModel
     data.collect().foreach { case (_, sv) =>
-      val a = ldaModel.inference(sv)
-      val b = ldaModel.inference(sv)
+      val a = ldaModel.inference(sv, 100, 80)
+      val b = ldaModel.inference(sv, 100, 80)
       val sim: Double = euclideanDistance(a, b)
       assert(sim < 0.1)
     }
@@ -145,8 +145,8 @@ class LDASuite extends FunSuite with SharedSparkContext {
 
     val ldaModel = lda.toLDAModel.toLocalLDAModel
     data.collect().foreach { case (_, sv) =>
-      val a = ldaModel.inference(sv)
-      val b = ldaModel.inference(sv)
+      val a = ldaModel.inference(sv, 100, 80)
+      val b = ldaModel.inference(sv, 100, 80)
       val sim: Double = euclideanDistance(a, b)
       assert(sim < 0.1)
     }
@@ -179,8 +179,8 @@ class LDASuite extends FunSuite with SharedSparkContext {
 
     val ldaModel = lda.toLDAModel.toLocalLDAModel
     data.collect().foreach { case (_, sv) =>
-      val a = ldaModel.inference(sv)
-      val b = ldaModel.inference(sv)
+      val a = ldaModel.inference(sv, 100, 80)
+      val b = ldaModel.inference(sv, 100, 80)
       val sim: Double = euclideanDistance(a, b)
       assert(sim < 0.1)
     }
@@ -213,8 +213,8 @@ class LDASuite extends FunSuite with SharedSparkContext {
 
     val ldaModel = lda.toLDAModel.toLocalLDAModel
     data.collect().foreach { case (_, sv) =>
-      val a = ldaModel.inference(sv)
-      val b = ldaModel.inference(sv)
+      val a = ldaModel.inference(sv, 100, 80)
+      val b = ldaModel.inference(sv, 100, 80)
       val sim: Double = euclideanDistance(a, b)
       assert(sim < 0.1)
     }
