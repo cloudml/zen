@@ -56,9 +56,9 @@ class LDASuite extends FunSuite with SharedSparkContext {
     println((System.currentTimeMillis() - startedAt) / 1e3)
     pps.foreach(println)
 
-    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
+    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => rhs - lhs }
     assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
-    assert(pps.head - pps.last > 0)
+    assert(pps.last - pps.head > 0)
 
     val ldaModel = lda.toLDAModel
     val tempDir = Files.createTempDir()
@@ -105,9 +105,9 @@ class LDASuite extends FunSuite with SharedSparkContext {
     println((System.currentTimeMillis() - startedAt) / 1e3)
     pps.foreach(println)
 
-    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
+    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => rhs - lhs }
     assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
-    assert(pps.head - pps.last > 0)
+    assert(pps.last - pps.head > 0)
 
     val ldaModel = lda.toLDAModel.toLocalLDAModel
     data.collect().foreach { case (_, sv) =>
@@ -139,9 +139,9 @@ class LDASuite extends FunSuite with SharedSparkContext {
     println((System.currentTimeMillis() - startedAt) / 1e3)
     pps.foreach(println)
 
-    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
+    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => rhs - lhs }
     assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
-    assert(pps.head - pps.last > 0)
+    assert(pps.last - pps.head > 0)
 
     val ldaModel = lda.toLDAModel.toLocalLDAModel
     data.collect().foreach { case (_, sv) =>
@@ -173,9 +173,9 @@ class LDASuite extends FunSuite with SharedSparkContext {
     println((System.currentTimeMillis() - startedAt) / 1e3)
     pps.foreach(println)
 
-    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
+    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => rhs - lhs }
     assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
-    assert(pps.head - pps.last > 0)
+    assert(pps.last - pps.head > 0)
 
     val ldaModel = lda.toLDAModel.toLocalLDAModel
     data.collect().foreach { case (_, sv) =>
@@ -207,9 +207,9 @@ class LDASuite extends FunSuite with SharedSparkContext {
     println((System.currentTimeMillis() - startedAt) / 1e3)
     pps.foreach(println)
 
-    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => lhs - rhs }
+    val ppsDiff = pps.init.zip(pps.tail).map { case (lhs, rhs) => rhs - lhs }
     assert(ppsDiff.count(_ > 0).toDouble / ppsDiff.length > 0.6)
-    assert(pps.head - pps.last > 0)
+    assert(pps.last - pps.head > 0)
 
     val ldaModel = lda.toLDAModel.toLocalLDAModel
     data.collect().foreach { case (_, sv) =>
